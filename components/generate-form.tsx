@@ -82,6 +82,22 @@ function wait(ms: number, signal: AbortSignal) {
   });
 }
 
+function ImageIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4 shrink-0 text-cyan-200" fill="none" aria-hidden>
+      <rect x="2" y="3" width="12" height="10" rx="1.6" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="6" cy="6.5" r="1" fill="currentColor" />
+      <path d="M3.5 11.5 6.2 8.8l1.8 1.7 2-2.2L12.5 11" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10_240 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
@@ -94,6 +110,8 @@ export function GenerateForm() {
   const [engine, setEngine] = useState<VisualEngineId>("stock");
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
   const [referenceName, setReferenceName] = useState<string | null>(null);
+  const [referenceBytes, setReferenceBytes] = useState<number | null>(null);
+  const [draggingImage, setDraggingImage] = useState(false);
   const [steps, setSteps] = useState<StepView[]>(INITIAL_STEPS);
   const [result, setResult] = useState<GenerateResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -101,6 +119,7 @@ export function GenerateForm() {
   const [statusMessage, setStatusMessage] = useState("Waiting for a topic.");
   const [running, setRunning] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const referenceInputRef = useRef<HTMLInputElement>(null);
   const outcomeRef = useRef<"idle" | "complete" | "error">("idle");
   const fallbackRef = useRef(false);
   const voice = voiceOverride ?? storedVoice;
@@ -381,10 +400,7 @@ export function GenerateForm() {
     abortRef.current?.abort();
   }
 
-  function onReferenceImage(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
+  function acceptReference(file: File) {
     if (!/^image\/(jpeg|png|webp)$/.test(file.type)) {
       setError("Use a JPEG, PNG, or WebP reference image.");
       return;
@@ -399,6 +415,7 @@ export function GenerateForm() {
       if (!value.startsWith("data:image/")) return;
       setReferenceImage(value);
       setReferenceName(file.name);
+      setReferenceBytes(file.size);
       setError((current) =>
         current === "Use a JPEG, PNG, or WebP reference image." ||
         current === "Keep the reference image under 1.2 MB."
@@ -407,6 +424,18 @@ export function GenerateForm() {
       );
     };
     reader.readAsDataURL(file);
+  }
+
+  function clearReference() {
+    setReferenceImage(null);
+    setReferenceName(null);
+    setReferenceBytes(null);
+  }
+
+  function onReferenceImage(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (file) acceptReference(file);
   }
 
   const activeStep = steps.find((step) => step.status === "started");
@@ -421,17 +450,88 @@ export function GenerateForm() {
             </label>
             <span className="font-mono text-[11px] text-muted">{topic.trim().length}/120</span>
           </div>
-          <textarea
-            id="topic"
-            name="topic"
-            rows={4}
-            maxLength={120}
-            value={topic}
-            disabled={running}
-            placeholder="Why night markets stay cheap"
-            onChange={(event) => setTopic(event.target.value)}
-            className="gen-field mt-3 w-full resize-y rounded-2xl px-4 py-3 text-base leading-7 text-foreground outline-none placeholder:text-muted/60"
-          />
+          <div
+            className={cn("gen-prompt mt-3", draggingImage && "gen-prompt-hot")}
+            onDragOver={(event) => {
+              event.preventDefault();
+              if (!running) setDraggingImage(true);
+            }}
+            onDragLeave={(event) => {
+              if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+              setDraggingImage(false);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDraggingImage(false);
+              if (running) return;
+              const file = event.dataTransfer.files?.[0];
+              if (file) acceptReference(file);
+            }}
+          >
+            <textarea
+              id="topic"
+              name="topic"
+              rows={4}
+              maxLength={120}
+              value={topic}
+              disabled={running}
+              placeholder="Why night markets stay cheap"
+              onChange={(event) => setTopic(event.target.value)}
+              className="w-full resize-y bg-transparent px-4 py-3 text-base leading-7 text-foreground outline-none placeholder:text-muted/60"
+            />
+            <input
+              ref={referenceInputRef}
+              id="reference-image"
+              name="reference-image"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              disabled={running}
+              onChange={onReferenceImage}
+              className="sr-only"
+            />
+            {referenceImage ? (
+              <div className="flex items-center gap-3 border-t border-white/10 px-3 py-2.5">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={referenceImage}
+                  alt=""
+                  className="h-14 w-11 rounded-xl object-cover shadow-[0_0_18px_rgba(70,220,255,0.18)] ring-1 ring-cyan-300/40"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium tracking-tight">{referenceName}</p>
+                  <p className="mt-0.5 font-mono text-[11px] text-muted">
+                    {referenceBytes == null ? "Reference image" : formatFileSize(referenceBytes)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={clearReference}
+                  disabled={running}
+                  aria-label="Remove reference image"
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/15 text-sm text-foreground transition hover:border-cyan-300/70 hover:text-cyan-100"
+                >
+                  ×
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={running}
+                onClick={() => referenceInputRef.current?.click()}
+                className="gen-attach"
+              >
+                <ImageIcon />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium tracking-tight text-foreground">
+                    Upload Reference Image / Character
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted">
+                    Drop a JPEG, PNG, or WebP · used by Budget and Ultra
+                  </span>
+                </span>
+              </button>
+            )}
+          </div>
         </div>
 
         <fieldset disabled={running} className="space-y-3">
@@ -500,48 +600,6 @@ export function GenerateForm() {
             </p>
           ) : null}
         </fieldset>
-
-        <div>
-          <label htmlFor="reference-image" className="text-sm font-medium tracking-tight">
-            Image input / character reference
-          </label>
-          <p className="mt-1 text-sm leading-6 text-muted">
-            Optional. A JPEG, PNG, or WebP under 1.2 MB is sent to Fal.ai when you generate with
-            Budget or Ultra.
-          </p>
-          <input
-            id="reference-image"
-            name="reference-image"
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            disabled={running}
-            onChange={onReferenceImage}
-            className="gen-field mt-3 block w-full cursor-pointer rounded-2xl px-4 py-3 text-sm text-foreground file:mr-3 file:rounded-full file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-sm file:text-foreground"
-          />
-          {referenceImage ? (
-            <div className="mt-3 flex items-center gap-3">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={referenceImage}
-                alt=""
-                className="h-16 w-12 rounded-lg object-cover"
-              />
-              <div className="min-w-0">
-                <p className="truncate text-sm text-foreground">{referenceName}</p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setReferenceImage(null);
-                    setReferenceName(null);
-                  }}
-                  className="gen-ghost mt-2"
-                >
-                  Remove image
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </div>
 
         {error ? (
           <p role="alert" className="gen-alert">

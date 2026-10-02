@@ -259,6 +259,49 @@ body {
   box-shadow: 0 0 0 4px rgba(70, 220, 255, 0.12), 0 0 24px rgba(214, 122, 60, 0.12);
 }
 
+.gen-prompt {
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 1.15rem;
+  background:
+    linear-gradient(180deg, rgba(10, 14, 18, 0.78), rgba(16, 12, 10, 0.62)) padding-box,
+    linear-gradient(145deg, rgba(70, 220, 255, 0.42), rgba(255, 255, 255, 0.08) 46%, rgba(214, 122, 60, 0.48)) border-box;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(18px);
+  transition: box-shadow 180ms ease;
+}
+
+.gen-prompt:focus-within,
+.gen-prompt-hot {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 0 1px rgba(70, 220, 255, 0.22),
+    0 0 28px rgba(70, 220, 255, 0.16),
+    0 0 26px rgba(214, 122, 60, 0.14);
+}
+
+.gen-attach {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0.75rem 0.95rem;
+  text-align: left;
+  color: var(--muted);
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.gen-attach:hover {
+  background: rgba(70, 220, 255, 0.07);
+  color: var(--foreground);
+}
+
+.gen-attach:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .gen-pick {
   display: flex;
   cursor: pointer;
