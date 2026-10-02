@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   FRAME_COUNT,
   GENERATE_STEPS,
@@ -137,6 +137,7 @@ export function GenerateForm() {
   const [voiceOverride, setVoiceOverride] = useState<VoiceId | null>(null);
   const [engine, setEngine] = useState<VisualEngineId>("stock");
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
+  const [referencePreview, setReferencePreview] = useState<string | null>(null);
   const [referenceName, setReferenceName] = useState<string | null>(null);
   const [referenceBytes, setReferenceBytes] = useState<number | null>(null);
   const [draggingImage, setDraggingImage] = useState(false);
@@ -150,6 +151,7 @@ export function GenerateForm() {
   const [running, setRunning] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const imageRunRef = useRef(false);
+  const previewRef = useRef<string | null>(null);
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const outcomeRef = useRef<"idle" | "complete" | "error">("idle");
   const fallbackRef = useRef(false);
@@ -348,8 +350,12 @@ export function GenerateForm() {
 
   async function submitImage() {
     const trimmed = topic.trim();
-    if (!referenceImage) {
+    if (!referencePreview && !referenceImage) {
       setError("Upload an input image.");
+      return;
+    }
+    if (!referenceImage) {
+      setError("The input image is still loading.");
       return;
     }
     if (trimmed.length < 3 && !imageStyle) {
@@ -570,6 +576,18 @@ export function GenerateForm() {
     abortRef.current?.abort();
   }
 
+  function replacePreview(next: string | null) {
+    if (previewRef.current) URL.revokeObjectURL(previewRef.current);
+    previewRef.current = next;
+    setReferencePreview(next);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (previewRef.current) URL.revokeObjectURL(previewRef.current);
+    };
+  }, []);
+
   function acceptReference(file: File) {
     if (!/^image\/(jpeg|png|webp)$/.test(file.type)) {
       setError("Use a JPEG, PNG, or WebP reference image.");
@@ -579,25 +597,27 @@ export function GenerateForm() {
       setError("Keep the reference image under 1.2 MB.");
       return;
     }
+    replacePreview(URL.createObjectURL(file));
+    setReferenceName(file.name);
+    setReferenceBytes(file.size);
+    setEngine("budget");
+    setError((current) =>
+      current === "Use a JPEG, PNG, or WebP reference image." ||
+      current === "Keep the reference image under 1.2 MB."
+        ? null
+        : current,
+    );
     const reader = new FileReader();
     reader.onload = () => {
       const value = typeof reader.result === "string" ? reader.result : "";
       if (!value.startsWith("data:image/")) return;
       setReferenceImage(value);
-      setReferenceName(file.name);
-      setReferenceBytes(file.size);
-      setEngine("budget");
-      setError((current) =>
-        current === "Use a JPEG, PNG, or WebP reference image." ||
-        current === "Keep the reference image under 1.2 MB."
-          ? null
-          : current,
-      );
     };
     reader.readAsDataURL(file);
   }
 
   function clearReference() {
+    replacePreview(null);
     setReferenceImage(null);
     setReferenceName(null);
     setReferenceBytes(null);
@@ -634,7 +654,8 @@ export function GenerateForm() {
 
   const activeStep = steps.find((step) => step.status === "started");
   const imageMode = mode === "image";
-  const imageReady = Boolean(referenceImage) && (topic.trim().length >= 3 || Boolean(imageStyle));
+  const previewSrc = referencePreview ?? referenceImage;
+  const imageReady = Boolean(previewSrc) && (topic.trim().length >= 3 || Boolean(imageStyle));
   const imageToVideo = !imageMode && Boolean(referenceImage);
   const runCost = generationCreditCost(engine, imageToVideo && engine !== "stock");
   const engineChoices = imageToVideo
@@ -738,11 +759,46 @@ export function GenerateForm() {
               onChange={onReferenceImage}
               className="sr-only"
             />
-            {referenceImage ? (
+            {previewSrc && imageMode ? (
+              <div className="border-t border-white/10 px-3 py-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={previewSrc}
+                  alt=""
+                  className="max-h-64 w-full rounded-2xl bg-black object-contain ring-1 ring-cyan-300/40"
+                />
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium tracking-tight">{referenceName}</p>
+                    <p className="mt-0.5 font-mono text-[11px] text-muted">
+                      {referenceBytes == null ? "Input image" : formatFileSize(referenceBytes)}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => referenceInputRef.current?.click()}
+                      disabled={running}
+                      className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-foreground transition hover:border-cyan-300/70 hover:text-cyan-100"
+                    >
+                      Change Image
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearReference}
+                      disabled={running}
+                      className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-foreground transition hover:border-cyan-300/70 hover:text-cyan-100"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : previewSrc ? (
               <div className="flex items-center gap-3 border-t border-white/10 px-3 py-2.5">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={referenceImage}
+                  src={previewSrc}
                   alt=""
                   className="h-14 w-11 rounded-xl object-cover shadow-[0_0_18px_rgba(70,220,255,0.18)] ring-1 ring-cyan-300/40"
                 />
@@ -767,6 +823,7 @@ export function GenerateForm() {
                 type="button"
                 disabled={running}
                 onClick={() => referenceInputRef.current?.click()}
+                title="Best stills are sharp 9:16 or 3:4, at least 720×1280, with the subject fully in frame and evenly lit."
                 className="gen-attach"
               >
                 <ImageIcon />
@@ -776,15 +833,17 @@ export function GenerateForm() {
                   </span>
                   <span className="mt-0.5 block text-xs text-muted">
                     {imageMode
-                      ? "Drop a JPEG, PNG, or WebP · required"
+                      ? "Drop a JPEG, PNG, or WebP · sharp 9:16 or 3:4"
                       : "Drop a JPEG, PNG, or WebP · used by Budget and Ultra"}
                   </span>
                 </span>
               </button>
             )}
-            <p className="gen-tip">
-              Best stills are sharp 9:16 or 3:4, at least 720×1280, with the subject fully in frame and evenly lit.
-            </p>
+            {imageMode ? null : (
+              <p className="gen-tip">
+                Best stills are sharp 9:16 or 3:4, at least 720×1280, with the subject fully in frame and evenly lit.
+              </p>
+            )}
           </div>
         </div>
 
@@ -954,10 +1013,12 @@ export function GenerateForm() {
       {imageMode ? (
         <ImageResultPanel
           running={running}
-          source={referenceImage}
+          source={previewSrc}
           result={imageResult}
           statusMessage={statusMessage}
           downloadError={downloadError}
+          onChange={() => referenceInputRef.current?.click()}
+          onRemove={clearReference}
           onDownload={(imageUrl) => {
             void downloadImage(imageUrl).catch(() => {
               setDownloadError("Could not download that image.");
@@ -1063,6 +1124,8 @@ function ImageResultPanel({
   result,
   statusMessage,
   downloadError,
+  onChange,
+  onRemove,
   onDownload,
 }: {
   running: boolean;
@@ -1070,8 +1133,15 @@ function ImageResultPanel({
   result: { id: string; imageUrl: string; prompt: string } | null;
   statusMessage: string;
   downloadError: string | null;
+  onChange: () => void;
+  onRemove: () => void;
   onDownload: (imageUrl: string) => void;
 }) {
+  const [outputReady, setOutputReady] = useState(false);
+  useEffect(() => {
+    setOutputReady(false);
+  }, [result?.imageUrl]);
+
   return (
     <section className="gen-glass rounded-3xl p-5 sm:p-6">
       <p className="sr-only" aria-live="polite">
@@ -1090,28 +1160,66 @@ function ImageResultPanel({
         <figure>
           <figcaption className="mb-2 text-xs uppercase tracking-[0.16em] text-muted">Input</figcaption>
           {source ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={source} alt="" className="aspect-square w-full rounded-2xl object-cover ring-1 ring-white/10" />
+            <div className="overflow-hidden rounded-2xl bg-black ring-1 ring-white/10">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={source} alt="" className="aspect-square w-full object-contain" />
+              <div className="flex gap-2 border-t border-white/10 p-2">
+                <button
+                  type="button"
+                  onClick={onChange}
+                  disabled={running}
+                  className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-foreground transition hover:border-cyan-300/70 hover:text-cyan-100"
+                >
+                  Change Image
+                </button>
+                <button
+                  type="button"
+                  onClick={onRemove}
+                  disabled={running}
+                  className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-foreground transition hover:border-cyan-300/70 hover:text-cyan-100"
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
           ) : (
-            <div className="grid aspect-square place-items-center rounded-2xl border border-dashed border-white/15 text-sm text-muted">
+            <div className="grid aspect-square place-items-center rounded-2xl border border-dashed border-white/15 px-4 text-center text-sm text-muted">
               Upload an image
             </div>
           )}
         </figure>
         <figure>
           <figcaption className="mb-2 text-xs uppercase tracking-[0.16em] text-muted">Output</figcaption>
-          {result ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={result.imageUrl}
-              alt={result.prompt}
-              className="aspect-square w-full rounded-2xl object-cover ring-1 ring-cyan-300/30"
-            />
-          ) : (
-            <div className={cn("grid aspect-square place-items-center rounded-2xl border border-white/10 text-sm text-muted", running && "gen-skeleton-live")}>
-              {running ? "Rendering…" : "The styled image appears here"}
-            </div>
-          )}
+          <div className="relative aspect-square overflow-hidden rounded-2xl bg-black ring-1 ring-cyan-300/20">
+            {result ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={result.imageUrl}
+                alt={result.prompt}
+                onLoad={() => setOutputReady(true)}
+                className={cn(
+                  "h-full w-full object-contain transition-opacity duration-300",
+                  outputReady ? "opacity-100" : "opacity-0",
+                )}
+              />
+            ) : null}
+            {running || (result && !outputReady) ? (
+              <div
+                role="status"
+                aria-label="Rendering image"
+                className="gen-skeleton gen-skeleton-live absolute inset-0 grid place-items-center"
+              >
+                <span className="grid h-12 w-12 place-items-center rounded-full border border-white/15 bg-black/50 text-cyan-100">
+                  <Spinner />
+                </span>
+              </div>
+            ) : null}
+            {!running && !result ? (
+              <div className="grid h-full place-items-center px-4 text-center text-sm text-muted">
+                The styled image appears here
+              </div>
+            ) : null}
+          </div>
         </figure>
       </div>
       {result ? (
