@@ -143,7 +143,13 @@ export function planForPaymentLinkUrl(raw: string | null | undefined): BillingPl
   return null;
 }
 
-function priceIdFromSession(session: Stripe.Checkout.Session) {
+function priceFromLineItem(item: Stripe.LineItem) {
+  const price = item.price;
+  if (!price || typeof price === "string") return null;
+  return price;
+}
+
+export function lineItemPriceId(session: Stripe.Checkout.Session) {
   for (const item of session.line_items?.data ?? []) {
     const price = item.price;
     if (typeof price === "string") return price;
@@ -152,19 +158,38 @@ function priceIdFromSession(session: Stripe.Checkout.Session) {
   return null;
 }
 
+function planForCatalogAmount(unitAmount: number | null | undefined, currency: string | null | undefined) {
+  if (currency && currency.toLowerCase() !== "usd") return null;
+  if (unitAmount === 1500) return "starter" as const;
+  if (unitAmount === 4000) return "pro" as const;
+  if (unitAmount === 1000) return "topup" as const;
+  return null;
+}
+
 export async function checkoutPlan(stripe: Stripe, session: Stripe.Checkout.Session) {
   const fromMetadata = session.metadata?.plan?.trim() ?? "";
   if (isBillingPlanId(fromMetadata)) return fromMetadata;
 
-  const fromPrice = planForPriceId(priceIdFromSession(session));
+  const fromPrice = planForPriceId(lineItemPriceId(session));
   if (fromPrice) return fromPrice;
+
+  for (const item of session.line_items?.data ?? []) {
+    const price = priceFromLineItem(item);
+    const fromAmount = planForCatalogAmount(price?.unit_amount, price?.currency);
+    if (fromAmount) return fromAmount;
+  }
 
   if (session.id && stripeSecretKey()) {
     const expanded = await stripe.checkout.sessions.retrieve(session.id, {
       expand: ["line_items.data.price"],
     });
-    const fromExpanded = planForPriceId(priceIdFromSession(expanded));
+    const fromExpanded = planForPriceId(lineItemPriceId(expanded));
     if (fromExpanded) return fromExpanded;
+    for (const item of expanded.line_items?.data ?? []) {
+      const price = priceFromLineItem(item);
+      const fromAmount = planForCatalogAmount(price?.unit_amount, price?.currency);
+      if (fromAmount) return fromAmount;
+    }
   }
 
   const paymentLink = session.payment_link;

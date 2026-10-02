@@ -49,6 +49,75 @@ export async function findAuthUserId(email: string) {
   return match?.id ?? null;
 }
 
+export async function grantProfileCredits(input: {
+  eventId: string;
+  userId: string;
+  plan: "starter" | "pro" | "topup";
+  credits: number;
+}) {
+  const admin = createSupabaseAdminClient();
+  const claim = await admin
+    .from("stripe_events")
+    .insert({
+      id: input.eventId,
+      user_id: input.userId,
+      plan: input.plan,
+      credits: input.credits,
+    })
+    .select("*")
+    .maybeSingle();
+  console.log("supabase stripe_events insert", JSON.stringify({ data: claim.data, error: claim.error }));
+
+  if (claim.error?.code === "23505") return { alreadyApplied: true as const };
+  const missingEvents = Boolean(
+    claim.error && /stripe_events|schema cache|relation/i.test(claim.error.message),
+  );
+  if (claim.error && !missingEvents) throw new Error(claim.error.message);
+
+  const current = await admin.from(PROFILES_TABLE).select("*").eq("id", input.userId).maybeSingle();
+  console.log("supabase profiles select", JSON.stringify({ data: current.data, error: current.error }));
+  if (current.error) throw new Error(current.error.message);
+  if (!current.data) throw new Error("Profile not found.");
+
+  const row = current.data as Record<string, unknown>;
+  const currentCredits =
+    "credits" in row && row.credits != null && row.credits !== ""
+      ? Number(row.credits)
+      : Number(row.tokens);
+  const next = (Number.isFinite(currentCredits) ? currentCredits : 0) + input.credits;
+  const patch: Record<string, number> = { credits: next };
+  if ("tokens" in row) patch.tokens = next;
+
+  let updated = await admin.from(PROFILES_TABLE).update(patch).eq("id", input.userId).select("*").maybeSingle();
+  console.log(
+    "supabase profiles credits update",
+    JSON.stringify({ patch, data: updated.data, error: updated.error }),
+  );
+
+  if (updated.error && /credits|schema cache|column/i.test(updated.error.message)) {
+    updated = await admin
+      .from(PROFILES_TABLE)
+      .update({ tokens: next })
+      .eq("id", input.userId)
+      .select("*")
+      .maybeSingle();
+    console.log("supabase profiles tokens update", JSON.stringify({ data: updated.data, error: updated.error }));
+  }
+  if (updated.error) {
+    if (!missingEvents) {
+      const removed = await admin.from("stripe_events").delete().eq("id", input.eventId);
+      console.log("supabase stripe_events delete", JSON.stringify({ data: removed.data, error: removed.error }));
+    }
+    throw new Error(updated.error.message);
+  }
+  if (!updated.data) throw new Error("Profile not found.");
+
+  const saved = updated.data as Record<string, unknown>;
+  const credits =
+    "credits" in saved && saved.credits != null && saved.credits !== "" ? Number(saved.credits) : next;
+  return { credits };
+}
+
 export async function grantCheckoutCredits(input: {
   eventId: string;
   userId: string;
