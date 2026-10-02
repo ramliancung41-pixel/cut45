@@ -16,8 +16,8 @@ export default function GeneratorPage() {
         </h1>
         <p className="mt-4 max-w-xl text-base leading-7 text-muted">
           Shape a 45-second faceless short, or restyle a still in Avatar Studio. Video stays
-          on the server. Free stock costs 0 credits. Budget AI motion costs 45. Ultra cinematic
-          costs 180. Image-to-image costs 10 credits.
+          on the server. Instant Stock Engine is a free preview. Studio Fast Motion is 45
+          credits, or 60 with a reference image. Image-to-image costs 10 credits.
         </p>
       </header>
       <GenerateForm />

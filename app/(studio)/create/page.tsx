@@ -13,7 +13,7 @@ export default function CreatePage() {
       <PageHeader
         eyebrow="Workspace"
         title="Create Video"
-        description="Enter a topic, a voice style, and a visual engine. Free stock costs 0 credits. Budget AI motion costs 45 credits. Ultra cinematic costs 180 credits."
+        description="Enter a topic, a voice style, and a visual engine. Instant Stock Engine is a free preview. Studio Fast Motion costs 45 credits."
       />
       <GenerateForm />
     </div>

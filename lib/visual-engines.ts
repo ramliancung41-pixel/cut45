@@ -10,15 +10,15 @@ export type VisualEngine = {
 export const VISUAL_ENGINES: VisualEngine[] = [
   {
     id: "stock",
-    name: "Free Stock Assets",
+    name: "Instant Stock Engine",
     rate: "0 credits",
-    description: "Wikimedia and Pexels stock clips.",
+    description: "Free preview",
   },
   {
     id: "budget",
-    name: "Budget AI Motion",
+    name: "Studio Fast Motion",
     rate: "45 credits",
-    description: "Fal.ai fast open-source video models.",
+    description: "High quality render",
   },
   {
     id: "ultra",

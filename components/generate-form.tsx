@@ -52,9 +52,9 @@ const VOICE_NOTE: Record<VoiceId, string> = {
 };
 
 const ENGINE_NOTE: Record<VisualEngineId, string> = {
-  stock: "Wikimedia and Pexels stock clips",
-  budget: "Fal.ai fast open-source motion",
-  ultra: "Fal.ai cinematic motion",
+  stock: "Free preview",
+  budget: "High quality render",
+  ultra: "Cinematic motion",
 };
 
 const FALLBACK_NOTICE =
@@ -103,16 +103,16 @@ function formatFileSize(bytes: number) {
 function engineOffer(id: VisualEngineId, imageToVideo: boolean) {
   if (imageToVideo && id === "budget") {
     return {
-      name: "Budget AI Motion (Fal.ai Image-to-Video)",
+      name: "Studio Fast Motion",
       rate: "60 credits",
-      note: "Fal.ai image-to-video motion",
+      note: "High quality render",
     };
   }
   if (imageToVideo && id === "ultra") {
     return {
       name: "Ultra Cinematic AI",
       rate: "200 credits",
-      note: "Fal.ai cinematic image-to-video",
+      note: "Cinematic motion",
     };
   }
   const option = VISUAL_ENGINES.find((item) => item.id === id);
@@ -667,9 +667,10 @@ export function GenerateForm() {
   const imageReady = Boolean(previewSrc) && (topic.trim().length >= 3 || Boolean(imageStyle));
   const imageToVideo = !imageMode && Boolean(referenceImage);
   const runCost = generationCreditCost(engine, imageToVideo && engine !== "stock");
-  const engineChoices = imageToVideo
+  const engineChoices = (imageToVideo
     ? VISUAL_ENGINES.filter((option) => option.id !== "stock")
-    : VISUAL_ENGINES;
+    : VISUAL_ENGINES
+  ).filter((option) => option.id !== "ultra");
 
   return (
     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
@@ -843,7 +844,7 @@ export function GenerateForm() {
                   <span className="mt-0.5 block text-xs text-muted">
                     {imageMode
                       ? "Drop a JPEG, PNG, or WebP · sharp 9:16 or 3:4"
-                      : "Drop a JPEG, PNG, or WebP · used by Budget and Ultra"}
+                      : "Drop a JPEG, PNG, or WebP · used by Studio Fast Motion"}
                   </span>
                 </span>
               </button>
@@ -908,7 +909,7 @@ export function GenerateForm() {
             ))}
           </select>
           <p className="mt-2 text-xs leading-5 text-muted">
-            Added to the prompt sent to Fal.ai. Leave it optional for the model default.
+            Added to the motion prompt. Leave it optional for the default look.
           </p>
         </div>
         )}
@@ -1013,7 +1014,7 @@ export function GenerateForm() {
             {imageMode
               ? "10 credits per image"
               : runCost === 0
-                ? "Free stock · 0 credits"
+                ? "Free preview · 0 credits"
                 : `${runCost} credits when the preview is ready`}
           </p>
         </div>
