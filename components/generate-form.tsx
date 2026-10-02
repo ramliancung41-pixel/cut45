@@ -487,6 +487,11 @@ export function GenerateForm() {
       return;
     }
 
+    if (referencePreview && !referenceImage) {
+      setError("The reference image is still preparing.");
+      return;
+    }
+
     const imageToVideo = Boolean(referenceImage) && engine !== "stock";
     imageRunRef.current = imageToVideo;
     const cost = generationCreditCost(engine, imageToVideo);
@@ -605,13 +610,7 @@ export function GenerateForm() {
     setReferenceImage(null);
     setEngine("budget");
     const acceptId = ++acceptIdRef.current;
-    setError((current) =>
-      current === "Use a JPEG, PNG, or WebP reference image." ||
-      current === "Use an image under 25 MB." ||
-      current === "Could not prepare that image."
-        ? null
-        : current,
-    );
+    setError(null);
     try {
       const dataUrl = await prepareReferenceImage(file);
       if (acceptIdRef.current !== acceptId) return;
@@ -665,12 +664,19 @@ export function GenerateForm() {
   const imageMode = mode === "image";
   const previewSrc = referencePreview ?? referenceImage;
   const imageReady = Boolean(previewSrc) && (topic.trim().length >= 3 || Boolean(imageStyle));
-  const imageToVideo = !imageMode && Boolean(referenceImage);
-  const runCost = generationCreditCost(engine, imageToVideo && engine !== "stock");
-  const engineChoices = (imageToVideo
+  const referenceAttached = !imageMode && Boolean(previewSrc);
+  const referencePreparing = referenceAttached && !referenceImage;
+  const imageToVideo = referenceAttached && engine !== "stock";
+  const runCost = generationCreditCost(engine, imageToVideo);
+  const engineChoices = (referenceAttached
     ? VISUAL_ENGINES.filter((option) => option.id !== "stock")
     : VISUAL_ENGINES
   ).filter((option) => option.id !== "ultra");
+  const videoCostLabel = referenceAttached
+    ? `Reference image · ${runCost} credits`
+    : runCost === 0
+      ? "Free preview · 0 credits"
+      : `Text-only · ${runCost} credits`;
 
   return (
     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
@@ -769,7 +775,7 @@ export function GenerateForm() {
               onChange={onReferenceImage}
               className="sr-only"
             />
-            {previewSrc && imageMode ? (
+            {imageMode && previewSrc ? (
               <div className="border-t border-white/10 px-3 py-3">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
@@ -804,31 +810,7 @@ export function GenerateForm() {
                   </div>
                 </div>
               </div>
-            ) : previewSrc ? (
-              <div className="flex items-center gap-3 border-t border-white/10 px-3 py-2.5">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={previewSrc}
-                  alt=""
-                  className="h-14 w-11 rounded-xl object-cover shadow-[0_0_18px_rgba(70,220,255,0.18)] ring-1 ring-cyan-300/40"
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium tracking-tight">{referenceName}</p>
-                  <p className="mt-0.5 font-mono text-[11px] text-muted">
-                    {referenceBytes == null ? "Reference image" : formatFileSize(referenceBytes)}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={clearReference}
-                  disabled={running}
-                  aria-label="Remove reference image"
-                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/15 text-sm text-foreground transition hover:border-cyan-300/70 hover:text-cyan-100"
-                >
-                  ×
-                </button>
-              </div>
-            ) : (
+            ) : imageMode ? (
               <button
                 type="button"
                 disabled={running}
@@ -839,23 +821,99 @@ export function GenerateForm() {
                 <ImageIcon />
                 <span className="min-w-0">
                   <span className="block text-sm font-medium tracking-tight text-foreground">
-                    {imageMode ? "Upload Input Image" : "Upload Reference Image / Character"}
+                    Upload Input Image
                   </span>
                   <span className="mt-0.5 block text-xs text-muted">
-                    {imageMode
-                      ? "Drop a JPEG, PNG, or WebP · sharp 9:16 or 3:4"
-                      : "Drop a JPEG, PNG, or WebP · used by Studio Fast Motion"}
+                    Drop a JPEG, PNG, or WebP · sharp 9:16 or 3:4
                   </span>
                 </span>
               </button>
-            )}
-            {imageMode ? null : (
-              <p className="gen-tip">
-                Best stills are sharp 9:16 or 3:4, at least 720×1280, with the subject fully in frame and evenly lit.
-              </p>
-            )}
+            ) : null}
           </div>
         </div>
+
+        {imageMode ? null : (
+          <div>
+            <div className="flex flex-wrap items-end justify-between gap-2">
+              <p className="text-sm font-medium tracking-tight">Reference image</p>
+              <p className="font-mono text-[11px] tracking-wide text-accent">{videoCostLabel}</p>
+            </div>
+            <div
+              className={cn("gen-reference mt-3", draggingImage && "gen-prompt-hot")}
+              onDragOver={(event) => {
+                event.preventDefault();
+                if (!running) setDraggingImage(true);
+              }}
+              onDragLeave={(event) => {
+                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                setDraggingImage(false);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                setDraggingImage(false);
+                if (running) return;
+                const file = event.dataTransfer.files?.[0];
+                if (file) acceptReference(file);
+              }}
+            >
+              {previewSrc ? (
+                <div className="flex flex-col gap-4 p-3 sm:flex-row sm:items-center">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={previewSrc}
+                    alt=""
+                    className="h-40 w-full rounded-2xl bg-black object-cover ring-1 ring-cyan-300/40 sm:h-28 sm:w-24"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium tracking-tight">{referenceName}</p>
+                    <p className="mt-1 font-mono text-[11px] text-muted">
+                      {referenceBytes == null ? "Reference image" : formatFileSize(referenceBytes)}
+                      {referencePreparing ? " · Preparing" : " · Ready"}
+                    </p>
+                    <p className="mt-2 text-xs leading-5 text-muted">
+                      Studio Fast Motion keeps this still as the subject.
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => referenceInputRef.current?.click()}
+                        disabled={running}
+                        className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-foreground transition hover:border-cyan-300/70 hover:text-cyan-100"
+                      >
+                        Change Image
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearReference}
+                        disabled={running}
+                        className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-foreground transition hover:border-cyan-300/70 hover:text-cyan-100"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={running}
+                  onClick={() => referenceInputRef.current?.click()}
+                  className="gen-reference-empty"
+                >
+                  <ImageIcon />
+                  <span className="min-w-0 text-left">
+                    <span className="block text-sm font-medium tracking-tight text-foreground">
+                      Upload Reference Image / Character
+                    </span>
+                    <span className="mt-1 block text-xs leading-5 text-muted">
+                      Drop a JPEG, PNG, or WebP. A sharp 9:16 or 3:4 still, subject fully in frame.
+                    </span>
+                  </span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {imageMode ? (
           <div>
@@ -1000,7 +1058,7 @@ export function GenerateForm() {
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="submit"
-            disabled={running || (imageMode ? !imageReady || credits < IMAGE_GENERATION_COST : topic.trim().length < 3 || credits < runCost)}
+            disabled={running || referencePreparing || (imageMode ? !imageReady || credits < IMAGE_GENERATION_COST : topic.trim().length < 3 || credits < runCost)}
             className="gen-cta"
           >
             {running ? "Generating…" : imageMode ? "Generate image" : "Generate Video"}
@@ -1013,9 +1071,9 @@ export function GenerateForm() {
           <p className="text-xs text-muted">
             {imageMode
               ? "10 credits per image"
-              : runCost === 0
-                ? "Free preview · 0 credits"
-                : `${runCost} credits when the preview is ready`}
+              : referencePreparing
+                ? "Preparing the reference image"
+                : videoCostLabel}
           </p>
         </div>
       </form>

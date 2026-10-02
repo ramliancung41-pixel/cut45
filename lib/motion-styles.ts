@@ -42,3 +42,21 @@ export function videoMotionPrompt(topic: string, style: string | null | undefine
   const guidance = motionGuidance(style);
   return [topic.trim(), "Vertical 9:16 cinematic motion.", guidance].filter(Boolean).join(" ");
 }
+
+export function imageLockedMotionPrompt(
+  topic: string,
+  style: string | null | undefined,
+  lock: string,
+) {
+  const guidance = motionGuidance(style);
+  return [
+    topic.trim(),
+    "Vertical 9:16 cinematic motion.",
+    `Match the reference image exactly. ${lock.trim()}`,
+    guidance,
+    "Do not change the face, clothing, colors, or art style.",
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 1200);
+}

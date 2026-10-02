@@ -11,7 +11,8 @@ import {
 import { generationCreditCost } from "@/lib/credits";
 import { falApiKey } from "@/lib/fal-key";
 import { parseReferenceImage, renderFalClip, type ReferenceImage } from "@/lib/fal-video";
-import { isMotionStyleId, PROMPT_MAX, videoMotionPrompt } from "@/lib/motion-styles";
+import { imageLockedMotionPrompt, isMotionStyleId, PROMPT_MAX, videoMotionPrompt } from "@/lib/motion-styles";
+import { alignReferenceContext } from "@/lib/reference-context";
 import { getVoice, isVoiceId } from "@/lib/voices";
 import { isVisualEngineId, type VisualEngineId } from "@/lib/visual-engines";
 
@@ -255,6 +256,12 @@ async function* runWorkflow(
   motionStyle: string | null,
   signal: AbortSignal,
 ) {
+  const lockPromise =
+    referenceImage && engine !== "stock"
+      ? alignReferenceContext({ topic, image: referenceImage, signal })
+      : Promise.resolve("");
+  void lockPromise.catch(() => undefined);
+
   yield encode({
     type: "progress",
     step: "script",
@@ -350,9 +357,12 @@ async function* runWorkflow(
     await sleep(FRAME_STEP_MS, signal);
   } else {
     try {
+      const lock = await lockPromise;
       const rendered = await renderFalClip({
         engine,
-        prompt: videoMotionPrompt(topic, motionStyle),
+        prompt: referenceImage
+          ? imageLockedMotionPrompt(topic, motionStyle, lock)
+          : videoMotionPrompt(topic, motionStyle),
         image: referenceImage,
         signal,
       });

@@ -165,6 +165,32 @@ function safeJson(value: string) {
   }
 }
 
+function referenceDataUri(image: ReferenceImage) {
+  return `data:${image.contentType};base64,${image.bytes.toString("base64")}`;
+}
+
+async function submitVideo(input: {
+  key: string;
+  model: string;
+  prompt: string;
+  imageUrl: string | null;
+  signal: AbortSignal;
+}) {
+  return fetch(`https://queue.fal.run/${input.model}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Key ${input.key}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      prompt: input.prompt,
+      ...(input.imageUrl ? { image_url: input.imageUrl } : {}),
+    }),
+    signal: input.signal,
+  });
+}
+
 function readVideoUrl(payload: unknown) {
   if (!payload || typeof payload !== "object") return null;
   const record = payload as {
@@ -187,31 +213,51 @@ export async function renderFalClip(input: {
 
   const model = input.image ? MODELS[input.engine].image : MODELS[input.engine].text;
   let imageUrl: string | null = null;
+  let storageUrl: string | null = null;
   if (input.image) {
     const uploaded = await uploadReference(key, input.image, input.signal);
-    if ("error" in uploaded) return uploaded;
-    imageUrl = uploaded.fileUrl;
+    if ("fileUrl" in uploaded) {
+      storageUrl = uploaded.fileUrl;
+      imageUrl = storageUrl;
+    } else {
+      console.error("Fal video upload failed", uploaded.error);
+      imageUrl = referenceDataUri(input.image);
+    }
   }
 
   let submitted: Response;
   try {
-    submitted = await fetch(`https://queue.fal.run/${model}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Key ${key}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        prompt: input.prompt,
-        ...(imageUrl ? { image_url: imageUrl } : {}),
-      }),
+    submitted = await submitVideo({
+      key,
+      model,
+      prompt: input.prompt,
+      imageUrl,
       signal: input.signal,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Fal.ai could not be reached.";
-    console.error("Fal video submit failed", message);
-    return { error: message };
+    if (input.signal.aborted) throw error;
+    if (!input.image || imageUrl !== storageUrl) {
+      const message = error instanceof Error ? error.message : "Fal.ai could not be reached.";
+      console.error("Fal video submit failed", message);
+      return { error: message };
+    }
+    submitted = new Response(null, { status: 599 });
+  }
+  if (!submitted.ok && input.image && storageUrl && imageUrl === storageUrl) {
+    try {
+      submitted = await submitVideo({
+        key,
+        model,
+        prompt: input.prompt,
+        imageUrl: referenceDataUri(input.image),
+        signal: input.signal,
+      });
+    } catch (error) {
+      if (input.signal.aborted) throw error;
+      const message = error instanceof Error ? error.message : "Fal.ai could not be reached.";
+      console.error("Fal video submit failed", message);
+      return { error: message };
+    }
   }
   if (!submitted.ok) {
     const message = await falResponseError(submitted);
