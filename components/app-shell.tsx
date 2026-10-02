@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { CreditTag } from "@/components/credit-provider";
-import { ProfileCreditBar } from "@/components/profile-credit-bar";
+import { ProfileCreditBar, SidebarAccount, useStudioAccount } from "@/components/profile-credit-bar";
 
 const NAV = [
   { href: "/generator", label: "Dashboard" },
@@ -22,6 +22,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [menuPath, setMenuPath] = useState<string | null>(null);
   const open = menuPath === pathname;
+  const { account, ready, signOut } = useStudioAccount();
+  const displayName = account?.name ?? null;
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
@@ -80,6 +82,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div className="mt-6 space-y-3 border-t border-line px-2 pt-4">
+            <SidebarAccount
+              name={displayName}
+              ready={ready}
+              onNavigate={() => setMenuPath(null)}
+              onSignOut={() => {
+                setMenuPath(null);
+                void signOut();
+              }}
+            />
             <CreditTag onNavigate={() => setMenuPath(null)} />
             <p className="text-xs leading-5 text-muted">
               Mock studio. Each run previews a 45-second timeline and does not
@@ -100,7 +111,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               {open ? "Close" : "Menu"}
             </button>
             <span className="text-sm font-semibold tracking-tight md:hidden">Cut45</span>
-            <ProfileCreditBar />
+            <ProfileCreditBar name={displayName} ready={ready} />
           </header>
           <main className="flex-1 px-4 py-6 sm:px-6 md:px-10 md:py-10">
             <div className="mx-auto w-full max-w-6xl">{children}</div>

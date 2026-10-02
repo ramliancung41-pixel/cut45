@@ -6,23 +6,28 @@ import { useEffect, useState } from "react";
 import { CreditBar } from "@/components/credit-provider";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
-export function ProfileCreditBar() {
+type StudioAccount = {
+  name: string;
+};
+
+export function useStudioAccount() {
   const router = useRouter();
-  const [email, setEmail] = useState<string | null>(null);
+  const [account, setAccount] = useState<StudioAccount | null>(null);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let ignore = false;
     fetch("/api/auth/session")
       .then((response) => response.json())
-      .then((payload: { user?: { email?: string } | null }) => {
+      .then((payload: { user?: { name?: string; email?: string } | null }) => {
         if (ignore) return;
-        setEmail(payload.user?.email ?? null);
+        const name = payload.user?.name?.trim();
+        setAccount(payload.user && name ? { name } : null);
         setReady(true);
       })
       .catch(() => {
         if (ignore) return;
-        setEmail(null);
+        setAccount(null);
         setReady(true);
       });
     return () => {
@@ -37,23 +42,25 @@ export function ProfileCreditBar() {
       // The server cookie is cleared next, even if the browser client is unavailable.
     }
     await fetch("/api/auth/logout", { method: "POST" });
-    setEmail(null);
+    setAccount(null);
+    router.push("/login");
     router.refresh();
   }
 
+  return { account, ready, signOut };
+}
+
+export function ProfileCreditBar({
+  name,
+  ready,
+}: {
+  name: string | null;
+  ready: boolean;
+}) {
   return (
     <div className="ml-auto flex items-center gap-3 rounded-2xl border border-line bg-panel px-3 py-2">
-      {ready && email ? (
-        <div className="min-w-0">
-          <p className="truncate text-xs font-medium">{email}</p>
-          <button
-            type="button"
-            onClick={() => void signOut()}
-            className="text-[11px] text-muted hover:text-foreground"
-          >
-            Sign out
-          </button>
-        </div>
+      {ready && name ? (
+        <p className="max-w-[9rem] truncate text-sm font-medium tracking-tight">{name}</p>
       ) : (
         <Link href="/login" className="text-sm font-medium text-foreground hover:text-accent">
           {ready ? "Sign in" : "Account"}
@@ -61,6 +68,53 @@ export function ProfileCreditBar() {
       )}
       <span aria-hidden className="h-8 w-px bg-line" />
       <CreditBar />
+    </div>
+  );
+}
+
+export function SidebarAccount({
+  name,
+  ready,
+  onSignOut,
+  onNavigate,
+}: {
+  name: string | null;
+  ready: boolean;
+  onSignOut: () => void;
+  onNavigate: () => void;
+}) {
+  if (!ready) return null;
+
+  if (!name) {
+    return (
+      <Link
+        href="/login"
+        onClick={onNavigate}
+        className="block rounded-lg px-2 py-2 text-sm font-medium text-foreground hover:bg-panel-raised"
+      >
+        Sign in
+      </Link>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2.5 rounded-xl border border-line bg-background/40 px-2 py-2">
+      <span
+        aria-hidden
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-accent/40 bg-accent/15 text-xs font-semibold text-accent"
+      >
+        {name.slice(0, 1).toUpperCase()}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium tracking-tight">{name}</p>
+        <button
+          type="button"
+          onClick={onSignOut}
+          className="text-xs text-muted hover:text-foreground"
+        >
+          Sign out
+        </button>
+      </div>
     </div>
   );
 }

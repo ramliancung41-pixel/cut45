@@ -1,17 +1,27 @@
 import { NextResponse, type NextRequest } from "next/server";
+import type { User } from "@supabase/supabase-js";
 import {
   SUPABASE_ACCESS_COOKIE,
   SUPABASE_REFRESH_COOKIE,
   withSupabaseCookies,
 } from "@/lib/auth-cookie";
-import { readProfileTokens } from "@/lib/profiles";
+import { accountDisplayName } from "@/lib/display-name";
+import { readProfileLabel, readProfileTokens } from "@/lib/profiles";
 import { refreshSupabaseSession, userFromAccessToken } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
-async function accountPayload(userId: string, email: string) {
-  const tokens = await readProfileTokens(userId);
-  return { email, tokens };
+async function accountPayload(user: User) {
+  const email = user.email ?? "";
+  const [tokens, profileLabel] = await Promise.all([
+    readProfileTokens(user.id),
+    readProfileLabel(user.id),
+  ]);
+  return {
+    email,
+    tokens,
+    name: accountDisplayName({ email, user_metadata: user.user_metadata }, profileLabel),
+  };
 }
 
 export async function GET(request: NextRequest) {
@@ -25,7 +35,7 @@ export async function GET(request: NextRequest) {
     if (accessToken) {
       const user = await userFromAccessToken(accessToken);
       if (user?.email) {
-        return NextResponse.json({ user: await accountPayload(user.id, user.email) });
+        return NextResponse.json({ user: await accountPayload(user) });
       }
     }
 
@@ -39,7 +49,7 @@ export async function GET(request: NextRequest) {
     }
 
     const response = NextResponse.json({
-      user: await accountPayload(refreshed.user.id, refreshed.user.email),
+      user: await accountPayload(refreshed.user),
     });
     return withSupabaseCookies(
       response,
@@ -68,7 +78,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Could not save the session." }, { status: 401 });
     }
     const response = NextResponse.json({
-      user: await accountPayload(user.id, user.email),
+      user: await accountPayload(user),
     });
     return withSupabaseCookies(response, accessToken, refreshToken);
   } catch {

@@ -108,6 +108,24 @@ export async function grantCheckoutCredits(input: {
   return { tokens: Number(updated.data.tokens) };
 }
 
+export async function readProfileLabel(userId: string) {
+  try {
+    const admin = createSupabaseAdminClient();
+    const result = await admin.from(PROFILES_TABLE).select("*").eq("id", userId).maybeSingle();
+    if (result.error || !result.data) return null;
+    const row = result.data as Record<string, unknown>;
+    for (const key of ["full_name", "display_name", "first_name", "name"]) {
+      const value = row[key];
+      if (typeof value === "string" && value.trim() && !value.includes("@")) {
+        return value.trim();
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function readProfileTokens(userId: string) {
   try {
     const admin = createSupabaseAdminClient();
