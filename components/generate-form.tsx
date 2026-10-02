@@ -206,7 +206,9 @@ export function GenerateForm() {
 
     if (event.type === "complete") {
       outcomeRef.current = "complete";
-      deductForEngine(event.result.engine);
+      if (!(event.result.preview && event.result.creditsCharged === 0)) {
+        deductForEngine(event.result.engine);
+      }
       archiveProject({
         id: event.result.id,
         prompt: event.result.topic,

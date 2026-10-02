@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { BillingPlans } from "@/components/billing-plans";
-import { CreditFigure } from "@/components/credit-provider";
+import { CreditFigure, CreditLedger } from "@/components/credit-provider";
 import { PageHeader } from "@/components/page-header";
 import { ResumeCheckout } from "@/components/resume-checkout";
 
@@ -9,12 +9,6 @@ export const metadata: Metadata = {
   title: "Credits & Billing",
   description: "Credit balance and plans for 45-second faceless shorts.",
 };
-
-const LEDGER = [
-  { when: "Today", item: "Why night markets stay cheap", change: "−8", balance: "48" },
-  { when: "Yesterday", item: "How to read a train map", change: "−8", balance: "56" },
-  { when: "Monday", item: "Monthly grant", change: "+40", balance: "64" },
-];
 
 export default function CreditsPage() {
   return (
@@ -26,7 +20,7 @@ export default function CreditsPage() {
       />
 
       <div className="gen-glass rounded-3xl px-5 py-6">
-        <p className="text-sm text-muted">Available</p>
+        <p className="text-sm text-muted">Available balance</p>
         <p className="mt-1 text-4xl font-semibold tracking-tight">
           <CreditFigure />
         </p>
@@ -61,14 +55,7 @@ export default function CreditsPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-white/10">
-            {LEDGER.map((row) => (
-              <tr key={row.item}>
-                <td className="px-4 py-3">{row.when}</td>
-                <td className="px-4 py-3">{row.item}</td>
-                <td className="px-4 py-3 font-mono">{row.change}</td>
-                <td className="px-4 py-3 font-mono">{row.balance}</td>
-              </tr>
-            ))}
+            <CreditLedger />
           </tbody>
         </table>
       </div>

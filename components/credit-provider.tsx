@@ -16,6 +16,7 @@ import {
   STRIPE_CONNECTING_MESSAGE,
   deductGenerationCredits,
   formatCreditTotal,
+  generationCreditCost,
   paymentApprovedMessage,
 } from "@/lib/credits";
 import type { VisualEngineId } from "@/lib/visual-engines";
@@ -33,8 +34,17 @@ export type ArchiveProject = {
   createdAt: string;
 };
 
+export type CreditLedgerEntry = {
+  id: string;
+  when: string;
+  item: string;
+  change: string;
+  balance: number;
+};
+
 type CreditContextValue = {
   credits: number;
+  ledger: CreditLedgerEntry[];
   projects: ArchiveProject[];
   connecting: boolean;
   startCheckout: (credits: number) => Promise<void>;
@@ -47,10 +57,13 @@ const CreditContext = createContext<CreditContextValue | null>(null);
 
 export function CreditProvider({ children }: { children: React.ReactNode }) {
   const [credits, setCredits] = useState(INITIAL_CREDITS);
+  const [ledger, setLedger] = useState<CreditLedgerEntry[]>([]);
   const [projects, setProjects] = useState<ArchiveProject[]>([]);
   const [connecting, setConnecting] = useState(false);
   const [approval, setApproval] = useState<string | null>(null);
   const timerRef = useRef<number | null>(null);
+  const hydratedRef = useRef(false);
+  const creditsRef = useRef(INITIAL_CREDITS);
 
   useEffect(() => {
     return () => {
@@ -63,6 +76,7 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<CreditContextValue>(
     () => ({
       credits,
+      ledger,
       projects,
       connecting,
       async startCheckout(amount) {
@@ -80,7 +94,38 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
         }, CHECKOUT_CONNECTING_MS);
       },
       deductForEngine(engine) {
-        setCredits((current) => deductGenerationCredits(current, engine));
+        hydratedRef.current = true;
+        const cost = generationCreditCost(engine);
+        const next = deductGenerationCredits(creditsRef.current, engine);
+        creditsRef.current = next;
+        setCredits(next);
+        setLedger((rows) => [
+          {
+            id: `spend_${Date.now().toString(36)}`,
+            when: "Now",
+            item: engine === "premium" ? "Premium AI video" : "Free stock assets",
+            change: cost === 0 ? "0" : `−${cost}`,
+            balance: next,
+          },
+          ...rows,
+        ]);
+        if (cost === 0) return;
+        void fetch("/api/credits/spend", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ engine }),
+        })
+          .then((response) => response.json())
+          .then((payload: { credits?: number }) => {
+            if (typeof payload.credits !== "number") return;
+            creditsRef.current = payload.credits;
+            hydratedRef.current = true;
+            setCredits(payload.credits);
+            setLedger((rows) =>
+              rows.map((row, index) => (index === 0 ? { ...row, balance: payload.credits as number } : row)),
+            );
+          })
+          .catch(() => undefined);
       },
       archiveProject(project) {
         setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)]);
@@ -88,21 +133,43 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
       setAccountBalance(amount) {
         const next = Math.round(amount);
         if (!Number.isFinite(next) || next < 0) return;
+        creditsRef.current = next;
+        hydratedRef.current = true;
         setCredits(next);
+        setLedger([
+          {
+            id: "available",
+            when: "Now",
+            item: "Available balance",
+            change: "—",
+            balance: next,
+          },
+        ]);
       },
     }),
-    [connecting, credits, projects],
+    [connecting, credits, ledger, projects],
   );
 
   useEffect(() => {
     let ignore = false;
     fetch("/api/auth/session")
       .then((response) => response.json())
-      .then((payload: { user?: { tokens?: number } | null }) => {
-        if (ignore) return;
-        const tokens = payload.user?.tokens;
-        if (typeof tokens !== "number") return;
-        setCredits((current) => (current === 0 ? tokens : current));
+      .then((payload: { user?: { credits?: number; tokens?: number } | null }) => {
+        if (ignore || hydratedRef.current) return;
+        const amount = payload.user?.credits ?? payload.user?.tokens;
+        if (typeof amount !== "number") return;
+        hydratedRef.current = true;
+        creditsRef.current = amount;
+        setCredits(amount);
+        setLedger([
+          {
+            id: "available",
+            when: "Now",
+            item: "Available balance",
+            change: "—",
+            balance: amount,
+          },
+        ]);
       })
       .catch(() => undefined);
     return () => {
@@ -194,6 +261,35 @@ export function CreditTag({
 export function CreditFigure({ className }: { className?: string }) {
   const { credits } = useCredits();
   return <span className={className}>{credits.toLocaleString("en-US")}</span>;
+}
+
+export function CreditLedger() {
+  const { credits, ledger } = useCredits();
+  const rows =
+    ledger.length > 0
+      ? ledger
+      : [
+          {
+            id: "available",
+            when: "Now",
+            item: "Available balance",
+            change: "—",
+            balance: credits,
+          },
+        ];
+
+  return (
+    <>
+      {rows.map((row) => (
+        <tr key={row.id}>
+          <td className="px-4 py-3">{row.when}</td>
+          <td className="px-4 py-3">{row.item}</td>
+          <td className="px-4 py-3 font-mono">{row.change}</td>
+          <td className="px-4 py-3 font-mono">{row.balance.toLocaleString("en-US")}</td>
+        </tr>
+      ))}
+    </>
+  );
 }
 
 export function CreditBar() {

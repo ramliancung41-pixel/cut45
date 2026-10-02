@@ -6,20 +6,22 @@ import {
   withSupabaseCookies,
 } from "@/lib/auth-cookie";
 import { accountDisplayName } from "@/lib/display-name";
-import { readProfileLabel, readProfileTokens } from "@/lib/profiles";
+import { ensureProfile, readProfileBalance, readProfileLabel } from "@/lib/profiles";
 import { refreshSupabaseSession, userFromAccessToken } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
 async function accountPayload(user: User) {
   const email = user.email ?? "";
-  const [tokens, profileLabel] = await Promise.all([
-    readProfileTokens(user.id),
+  const [stored, profileLabel] = await Promise.all([
+    readProfileBalance(user.id),
     readProfileLabel(user.id),
   ]);
+  const balance = stored ?? (await ensureProfile(user.id, email));
   return {
     email,
-    tokens,
+    tokens: balance,
+    credits: balance,
     name: accountDisplayName({ email, user_metadata: user.user_metadata }, profileLabel),
   };
 }

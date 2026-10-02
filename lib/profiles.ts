@@ -126,16 +126,65 @@ export async function readProfileLabel(userId: string) {
   }
 }
 
-export async function readProfileTokens(userId: string) {
+function balanceFromRow(row: Record<string, unknown> | null) {
+  if (!row) return null;
+  if ("credits" in row && row.credits != null && row.credits !== "") {
+    const credits = Number(row.credits);
+    if (Number.isFinite(credits)) return credits;
+  }
+  if ("tokens" in row && row.tokens != null && row.tokens !== "") {
+    return tokenCount(row.tokens);
+  }
+  return null;
+}
+
+async function profileRow(userId: string) {
+  const admin = createSupabaseAdminClient();
+  const result = await admin.from(PROFILES_TABLE).select("*").eq("id", userId).maybeSingle();
+  if (result.error || !result.data) return null;
+  return result.data as Record<string, unknown>;
+}
+
+export async function readProfileBalance(userId: string) {
   try {
+    return balanceFromRow(await profileRow(userId));
+  } catch {
+    return null;
+  }
+}
+
+export async function readProfileTokens(userId: string) {
+  return readProfileBalance(userId);
+}
+
+export async function spendProfileCredits(userId: string, email: string, cost: number) {
+  const safeCost = Math.max(0, Math.round(cost));
+  try {
+    let row = await profileRow(userId);
+    if (!row) {
+      await ensureProfile(userId, email);
+      row = await profileRow(userId);
+    }
+    const current = balanceFromRow(row) ?? STARTING_TOKENS;
+    const next = Math.max(0, current - safeCost);
+    if (!row || safeCost === 0) return current;
+
+    const patch: Record<string, number> = {};
+    if ("credits" in row) patch.credits = next;
+    if ("tokens" in row || !("credits" in row)) patch.tokens = next;
+
     const admin = createSupabaseAdminClient();
-    const result = await admin
-      .from(PROFILES_TABLE)
-      .select("tokens")
-      .eq("id", userId)
-      .maybeSingle();
-    if (result.error || !result.data) return null;
-    return tokenCount(result.data.tokens);
+    const updated = await admin.from(PROFILES_TABLE).update(patch).eq("id", userId).select("*").maybeSingle();
+    if (updated.error && "credits" in patch) {
+      const tokensOnly = await admin
+        .from(PROFILES_TABLE)
+        .update({ tokens: next })
+        .eq("id", userId)
+        .select("*")
+        .maybeSingle();
+      return balanceFromRow((tokensOnly.data as Record<string, unknown> | null) ?? null) ?? next;
+    }
+    return balanceFromRow((updated.data as Record<string, unknown> | null) ?? null) ?? next;
   } catch {
     return null;
   }
