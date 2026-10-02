@@ -624,6 +624,115 @@ async function* runExtend(input: {
   });
 }
 
+async function* runScene(input: {
+  topic: string;
+  voiceId: string;
+  voiceName: string;
+  narration: string;
+  visualPrompt: string;
+  referenceImage: ReferenceImage | null;
+  priorVideoUrls: string[];
+  motionStyle: string | null;
+  signal: AbortSignal;
+}) {
+  const script = cleanScript(input.narration);
+  if (!script) {
+    yield encode({ type: "error", message: "That scene needs a narration." });
+    return;
+  }
+
+  yield encode({
+    type: "progress",
+    step: "script",
+    status: "completed",
+    message: "Scene narration ready",
+    detail: `${countWords(script)} words`,
+  });
+  yield encode({
+    type: "progress",
+    step: "audio",
+    status: "completed",
+    message: "Audio ready",
+    detail: `${input.voiceName} · browser voice · no speaker on screen`,
+  });
+  yield encode({
+    type: "progress",
+    step: "frames",
+    status: "started",
+    message: input.priorVideoUrls.length > 0 ? "Continuing from the last frame" : "Rendering this scene",
+  });
+
+  let startFrameUrl: string | null = null;
+  if (input.priorVideoUrls.length > 0) {
+    const lastVideo = input.priorVideoUrls[input.priorVideoUrls.length - 1];
+    if (!lastVideo) {
+      yield encode({ type: "error", message: "The previous scene cannot be continued." });
+      return;
+    }
+    const frame = await extractLastFrame(lastVideo, input.signal);
+    if ("error" in frame) {
+      yield encode({ type: "error", message: frame.error || "Could not read the last frame." });
+      return;
+    }
+    startFrameUrl = frame.imageUrl;
+  }
+
+  const rendered = await renderFalClip({
+    engine: "budget",
+    prompt: imageLockedMotionPrompt(
+      input.visualPrompt,
+      input.motionStyle,
+      startFrameUrl
+        ? "Continue from this exact frame. Keep the same character, face, clothing, colors, and setting."
+        : "Match the reference still when one is attached. Keep the subject consistent.",
+    ),
+    image: startFrameUrl ? null : input.referenceImage,
+    startFrameUrl,
+    pollBudgetMs: startFrameUrl ? 25000 : 40000,
+    signal: input.signal,
+  });
+  if ("error" in rendered) {
+    yield encode({ type: "error", message: rendered.error });
+    return;
+  }
+
+  const joined =
+    input.priorVideoUrls.length > 0
+      ? await mergeFalVideos([...input.priorVideoUrls, rendered.videoUrl], input.signal)
+      : null;
+  const videoUrl = joined && "videoUrl" in joined ? joined.videoUrl : undefined;
+  if (joined && !videoUrl && "error" in joined) console.error("Fal scene merge failed", joined.error);
+
+  const creditsCharged = startFrameUrl
+    ? EXTEND_VIDEO_COST
+    : generationCreditCost("budget", Boolean(input.referenceImage));
+  const frames = buildStoryboard(script).map((frame) => ({ ...frame, src: rendered.videoUrl }));
+
+  yield encode({
+    type: "progress",
+    step: "frames",
+    status: "completed",
+    message: videoUrl ? "Scene joined to the short" : "Scene ready",
+  });
+  yield encode({
+    type: "complete",
+    result: {
+      id: `c45_${Date.now().toString(36)}`,
+      topic: input.topic,
+      voiceId: input.voiceId,
+      voiceName: input.voiceName,
+      durationSec: VIDEO_DURATION_SEC,
+      script,
+      wordCount: countWords(script),
+      audioLabel: `${input.voiceName} · browser voice · no speaker on screen`,
+      frames,
+      engine: "budget",
+      creditsCharged,
+      videoUrl,
+    },
+  });
+}
+
 export async function POST(request: Request) {
   if (!process.env.GEMINI_API_KEY) {
     return Response.json(
@@ -650,10 +759,16 @@ export async function POST(request: Request) {
           extend?: unknown;
           priorScript?: unknown;
           priorVideoUrls?: unknown;
+          scene?: unknown;
+          narration?: unknown;
+          visualPrompt?: unknown;
         })
       : {};
   const topic = typeof record.topic === "string" ? record.topic.trim() : "";
   const extend = record.extend === true;
+  const scene = record.scene === true;
+  const narration = typeof record.narration === "string" ? record.narration.trim() : "";
+  const visualPrompt = typeof record.visualPrompt === "string" ? record.visualPrompt.trim() : "";
   const priorScript = typeof record.priorScript === "string" ? record.priorScript.trim() : "";
   const priorVideoUrls = Array.isArray(record.priorVideoUrls)
     ? record.priorVideoUrls.filter((item): item is string => typeof item === "string").slice(0, 6)
@@ -710,8 +825,29 @@ export async function POST(request: Request) {
     }
   }
 
+  if (scene) {
+    if (narration.length < 20 || visualPrompt.length < 12) {
+      return Response.json({ error: "Each scene needs narration and a visual prompt." }, { status: 400 });
+    }
+    if (priorVideoUrls.some((url) => !falMediaUrl(url))) {
+      return Response.json({ error: "The previous scene cannot be continued." }, { status: 400 });
+    }
+  }
+
   const stream = iteratorToStream(
-    extend
+    scene
+      ? runScene({
+          topic,
+          voiceId: voiceStyle.id,
+          voiceName: voiceStyle.name,
+          narration,
+          visualPrompt,
+          referenceImage: priorVideoUrls.length > 0 ? null : referenceImage,
+          priorVideoUrls,
+          motionStyle: motionStyle || null,
+          signal: request.signal,
+        })
+      : extend
       ? runExtend({
           topic,
           voiceId: voiceStyle.id,

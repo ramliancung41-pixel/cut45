@@ -27,6 +27,8 @@ import { EXTEND_VIDEO_COST, IMAGE_GENERATION_COST, generationCreditCost } from "
 import { IMAGE_STYLES, imageStyleName, isImageStyleId, type ImageStyleId } from "@/lib/image-styles";
 import { isMotionStyleId, MOTION_STYLES, PROMPT_MAX, type MotionStyleId } from "@/lib/motion-styles";
 import { prepareReferenceImage } from "@/lib/prepare-reference-image";
+import { CopilotPanel } from "@/components/copilot-panel";
+import { movieCreditCost, type MovieScene } from "@/lib/scenes";
 
 type StepStatus = "pending" | "started" | "completed";
 
@@ -155,6 +157,12 @@ export function GenerateForm() {
   const abortRef = useRef<AbortController | null>(null);
   const imageRunRef = useRef(false);
   const extendRunRef = useRef(false);
+  const filmRunRef = useRef(false);
+  const filmRef = useRef<GenerateResult | null>(null);
+  const [scenes, setScenes] = useState<MovieScene[]>([]);
+  const [copilotOpen, setCopilotOpen] = useState(false);
+  const [planning, setPlanning] = useState(false);
+  const plannedTopicRef = useRef("");
   const previewRef = useRef<string | null>(null);
   const acceptIdRef = useRef(0);
   const referenceInputRef = useRef<HTMLInputElement>(null);
@@ -199,6 +207,10 @@ export function GenerateForm() {
 
     if (event.type === "complete") {
       outcomeRef.current = "complete";
+      if (filmRunRef.current) {
+        filmRef.current = event.result;
+        return;
+      }
       if (extendRunRef.current) {
         extendRunRef.current = false;
         const stitched = result ? stitchExtension(result, event.result) : event.result;
@@ -504,6 +516,160 @@ export function GenerateForm() {
     link.download = "cut45-image.png";
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function planScenes(nextTopic = topic) {
+    const trimmed = nextTopic.trim();
+    if (trimmed.length < 3 || planning || running || mode === "image") return;
+    if (plannedTopicRef.current === trimmed && scenes.length > 0) return;
+    setPlanning(true);
+    setError(null);
+    setStatusMessage("Breaking the topic into scenes.");
+    try {
+      const response = await fetch("/api/copilot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "plan", topic: trimmed, scenes }),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        scenes?: MovieScene[];
+        error?: string;
+      } | null;
+      if (!response.ok || !payload?.scenes) {
+        throw new Error(payload?.error ?? "Could not break that topic into scenes.");
+      }
+      plannedTopicRef.current = trimmed;
+      setScenes(payload.scenes);
+      setCopilotOpen(true);
+      setStatusMessage("Three scenes are ready.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not break that topic into scenes.");
+    } finally {
+      setPlanning(false);
+    }
+  }
+
+  async function renderFilm() {
+    if (running || imageMode || scenes.length === 0) return;
+    if (!isVoiceId(voice)) {
+      setError("Select a voice style.");
+      return;
+    }
+    if (engine !== "budget") {
+      setError("Switch to Studio Fast Motion to render the scene chain.");
+      return;
+    }
+    const firstHasImage = Boolean(referenceImage);
+    const cost = movieCreditCost(scenes.length, firstHasImage);
+    if (credits < cost) {
+      setError(`This short costs ${cost} credits.`);
+      return;
+    }
+    if (referencePreview && !referenceImage) {
+      setError("The reference image is still preparing.");
+      return;
+    }
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    imageRunRef.current = false;
+    extendRunRef.current = false;
+    filmRunRef.current = true;
+    setRunning(true);
+    setError(null);
+    setNotice(null);
+    setResult(null);
+    setSteps(INITIAL_STEPS.map((step) => ({ ...step })));
+
+    let accumulated: GenerateResult | null = null;
+    try {
+      for (let index = 0; index < scenes.length; index += 1) {
+        const scene = scenes[index];
+        const priorVideoUrls = accumulated ? chainVideoUrls(accumulated.frames) : [];
+        setStatusMessage(`Scene ${index + 1} of ${scenes.length}.`);
+        outcomeRef.current = "idle";
+        filmRef.current = null;
+        const response = await fetch("/api/generate", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+          },
+          body: JSON.stringify({
+            scene: true,
+            topic: topic.trim(),
+            voice,
+            engine: "budget",
+            narration: scene.narration,
+            visualPrompt: `${scene.visualPrompt} ${scene.referenceNote}`.trim(),
+            ...(index === 0 && referenceImage ? { referenceImage } : {}),
+            ...(priorVideoUrls.length > 0 ? { priorVideoUrls } : {}),
+            ...(motionStyle ? { motionStyle } : {}),
+          }),
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(payload?.error ?? `Scene ${index + 1} could not start.`);
+        }
+        await readProgress(response, controller.signal);
+        const piece = (filmRef as { current: GenerateResult | null }).current;
+        const sceneStatus = outcomeRef.current as "idle" | "complete" | "error";
+        if (!piece || sceneStatus !== "complete") {
+          throw new Error(`Scene ${index + 1} stopped before a clip was ready.`);
+        }
+        accumulated = accumulated ? stitchExtension(accumulated, piece) : piece;
+        setResult(accumulated);
+        if (piece.creditsCharged > EXTEND_VIDEO_COST) deductForEngine("budget", true);
+        else deductForEngine("budget", false);
+      }
+      if (accumulated) {
+        const urls = chainVideoUrls(accumulated.frames);
+        const videoSrc = accumulated.videoUrl || urls[urls.length - 1];
+        archiveProject({
+          id: accumulated.id,
+          prompt: topic.trim(),
+          durationSec: accumulated.durationSec,
+          engine: "budget",
+          engineLabel: "Short film",
+          voiceName: accumulated.voiceName,
+          voiceId: accumulated.voiceId,
+          script: accumulated.script,
+          videoSrc,
+          creditsCharged: movieCreditCost(scenes.length, firstHasImage),
+          createdAt: new Date().toISOString(),
+        });
+        if (videoSrc) {
+          void fetch("/api/gallery", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: accumulated.id,
+              prompt: topic.trim(),
+              script: accumulated.script,
+              engine: "budget",
+              voiceName: accumulated.voiceName,
+              videoUrl: videoSrc,
+              credits: movieCreditCost(scenes.length, firstHasImage),
+            }),
+          }).catch(() => undefined);
+        }
+        setStatusMessage(`Short ready. ${accumulated.durationSec}s.`);
+      }
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") {
+        setStatusMessage("Stopped.");
+        return;
+      }
+      const message = caught instanceof Error ? caught.message : "Could not finish the short.";
+      setError(message);
+      setStatusMessage(message);
+    } finally {
+      filmRunRef.current = false;
+      if (abortRef.current === controller) abortRef.current = null;
+      setRunning(false);
+    }
   }
 
   async function extendVideo() {
@@ -826,9 +992,19 @@ export function GenerateForm() {
         <div>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <label htmlFor="topic" className="text-sm font-medium tracking-tight">
-              {imageMode ? "Style prompt" : "Video topic"}
+              {imageMode ? "Style prompt" : "Movie topic"}
             </label>
             <div className="flex items-center gap-2">
+              {imageMode ? null : (
+              <button
+                type="button"
+                onClick={() => setCopilotOpen(true)}
+                disabled={running}
+                className="gen-enhance"
+              >
+                AI Co-Pilot
+              </button>
+              )}
               {imageMode ? null : (
               <button
                 type="button"
@@ -870,7 +1046,16 @@ export function GenerateForm() {
               value={topic}
               disabled={running}
               placeholder={imageMode ? "Transform into a 3D Pixar character" : "Why night markets stay cheap"}
-              onChange={(event) => setTopic(event.target.value)}
+              onChange={(event) => {
+                setTopic(event.target.value);
+                if (event.target.value.trim() !== plannedTopicRef.current) {
+                  plannedTopicRef.current = "";
+                }
+              }}
+              onBlur={(event) => {
+                const value = event.currentTarget.value;
+                if (!imageMode && value.trim().length >= 12) void planScenes(value);
+              }}
               className="w-full resize-y bg-transparent px-4 py-3 text-base leading-7 text-foreground outline-none placeholder:text-muted/60"
             />
             <input
@@ -1171,6 +1356,16 @@ export function GenerateForm() {
           >
             {running ? "Generating…" : imageMode ? "Generate image" : "Generate Video"}
           </button>
+          {!imageMode && scenes.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => void renderFilm()}
+              disabled={running || planning || engine !== "budget" || credits < movieCreditCost(scenes.length, Boolean(referenceImage))}
+              className="gen-ghost"
+            >
+              {planning ? "Planning scenes…" : `Generate short film · ${movieCreditCost(scenes.length, Boolean(referenceImage))} credits`}
+            </button>
+          ) : null}
           {running ? (
             <button type="button" onClick={stop} className="gen-ghost">
               Stop
@@ -1304,6 +1499,17 @@ export function GenerateForm() {
         </div>
       </section>
       )}
+      <CopilotPanel
+        open={copilotOpen && !imageMode}
+        topic={topic}
+        scenes={scenes}
+        busy={running || planning}
+        onClose={() => setCopilotOpen(false)}
+        onScenes={(next) => {
+          plannedTopicRef.current = topic.trim();
+          setScenes(next);
+        }}
+      />
     </div>
   );
 }
