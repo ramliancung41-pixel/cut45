@@ -5,6 +5,7 @@ import {
   VIDEO_DURATION_SEC,
   buildStoryboard,
   countWords,
+  previewScript,
   type GenerateEvent,
 } from "@/lib/generate";
 import { generationCreditCost } from "@/lib/credits";
@@ -51,6 +52,23 @@ function sleep(ms: number, signal: AbortSignal) {
 
 function isAbortError(error: unknown) {
   return error instanceof Error && error.name === "AbortError";
+}
+
+class QuotaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QuotaError";
+  }
+}
+
+function isQuotaSignal(status: number, apiStatus: string, message: string) {
+  return (
+    status === 429 ||
+    apiStatus === "RESOURCE_EXHAUSTED" ||
+    /quota|rate.?limit|resource.?exhausted|too many requests|exceeded your/i.test(
+      `${apiStatus} ${message}`,
+    )
+  );
 }
 
 function encode(event: GenerateEvent) {
@@ -161,8 +179,10 @@ async function writeScript(topic: string, signal: AbortSignal) {
     ) {
       throw new Error("Gemini rejected the API key.");
     }
-    if (status === "RESOURCE_EXHAUSTED" || response.status === 429) {
-      throw new Error("Gemini rate limit reached. Wait a moment and try again.");
+    if (isQuotaSignal(response.status, status, message)) {
+      throw new QuotaError(
+        "Gemini's free tier is rate limited. A local preview script is ready so you can still play this cut.",
+      );
     }
     throw new Error(`Gemini could not write the script (${response.status}).`);
   }
@@ -203,11 +223,14 @@ async function synthesizeSpeech(script: string, voiceId: string, signal: AbortSi
   }
 
   if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    if (isQuotaSignal(response.status, "", detail) || response.status === 402) {
+      throw new QuotaError(
+        "ElevenLabs hit its free-tier limit. Narration uses the browser voice so the preview can still play.",
+      );
+    }
     if (response.status === 401 || response.status === 403) {
       throw new Error("ElevenLabs rejected the API key.");
-    }
-    if (response.status === 402) {
-      throw new Error("ElevenLabs is out of character quota.");
     }
     throw new Error(`ElevenLabs could not render the voice (${response.status}).`);
   }
@@ -235,15 +258,22 @@ async function* runWorkflow(
   });
 
   let script: string;
+  let preview = false;
   try {
     script = await writeScript(topic, signal);
   } catch (error) {
     if (isAbortError(error)) throw error;
-    yield encode({
-      type: "error",
-      message: error instanceof Error ? error.message : "Could not write the script.",
-    });
-    return;
+    if (error instanceof QuotaError) {
+      script = previewScript(topic);
+      preview = true;
+      yield encode({ type: "notice", message: error.message });
+    } else {
+      yield encode({
+        type: "error",
+        message: error instanceof Error ? error.message : "Could not write the script.",
+      });
+      return;
+    }
   }
 
   const wordCount = countWords(script);
@@ -251,8 +281,10 @@ async function* runWorkflow(
     type: "progress",
     step: "script",
     status: "completed",
-    message: "Script ready",
-    detail: `${wordCount} words, paced for a ${VIDEO_DURATION_SEC}-second narration`,
+    message: preview ? "Preview script ready" : "Script ready",
+    detail: preview
+      ? "Local preview while the Gemini free tier is limited"
+      : `${wordCount} words, paced for a ${VIDEO_DURATION_SEC}-second narration`,
   });
 
   yield encode({
@@ -266,8 +298,17 @@ async function* runWorkflow(
   let audioSrc: string | undefined;
   try {
     if (USE_PAID_VOICE) {
-      audioSrc = await synthesizeSpeech(script, elevenLabsVoiceId, signal);
-      audioLabel = `${voiceName} · ElevenLabs`;
+      try {
+        audioSrc = await synthesizeSpeech(script, elevenLabsVoiceId, signal);
+        audioLabel = `${voiceName} · ElevenLabs`;
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        if (!(error instanceof QuotaError)) throw error;
+        preview = true;
+        await sleep(AUDIO_STEP_MS, signal);
+        audioLabel = `${voiceName} · browser voice · free-tier preview`;
+        yield encode({ type: "notice", message: error.message });
+      }
     } else {
       await sleep(AUDIO_STEP_MS, signal);
       audioLabel = `${voiceName} · browser voice · no speaker on screen`;
@@ -322,6 +363,7 @@ async function* runWorkflow(
       frames,
       engine,
       creditsCharged,
+      preview,
     },
   });
 }

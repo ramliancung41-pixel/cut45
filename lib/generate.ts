@@ -30,6 +30,7 @@ export type GenerateResult = {
   frames: StoryFrame[];
   engine: "stock" | "premium";
   creditsCharged: number;
+  preview?: boolean;
 };
 
 export type GenerateEvent =
@@ -41,6 +42,10 @@ export type GenerateEvent =
       detail?: string;
     }
   | {
+      type: "notice";
+      message: string;
+    }
+  | {
       type: "complete";
       result: GenerateResult;
     }
@@ -48,6 +53,16 @@ export type GenerateEvent =
       type: "error";
       message: string;
     };
+
+export function previewScript(topic: string) {
+  const subject = topic.replace(/\s+/g, " ").trim();
+  return [
+    `${subject} only looks obvious from the outside.`,
+    "The costly mistake is copying the surface and ignoring the constraint that actually decides the result.",
+    "One concrete check changes the outcome: name the limit, test it once, and keep the version that still works tomorrow.",
+    `That is the part of ${subject} worth remembering.`,
+  ].join(" ");
+}
 
 export function countWords(text: string) {
   return text.trim().split(/\s+/).filter(Boolean).length;
@@ -124,7 +139,11 @@ export function isGenerateEvent(value: unknown): value is GenerateEvent {
     return false;
   }
 
-  const event = value as { type?: unknown; step?: unknown; status?: unknown };
+  const event = value as { type?: unknown; step?: unknown; status?: unknown; message?: unknown };
+  if (event.type === "notice") {
+    return typeof event.message === "string" && event.message.length > 0;
+  }
+
   if (event.type === "complete" || event.type === "error") {
     return true;
   }

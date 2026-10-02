@@ -151,6 +151,12 @@ export function GenerateForm() {
       return;
     }
 
+    if (event.type === "notice") {
+      setNotice((current) => (current ? `${current} ${event.message}` : event.message));
+      setStatusMessage(event.message);
+      return;
+    }
+
     if (event.type === "complete") {
       outcomeRef.current = "complete";
       deductForEngine(event.result.engine);
@@ -171,7 +177,9 @@ export function GenerateForm() {
       setPlayhead(0);
       setResult(event.result);
       setStatusMessage(
-        `Preview ready. ${event.result.creditsCharged} credits used.`,
+        event.result.preview
+          ? `Free-tier preview ready. ${event.result.creditsCharged} credits used.`
+          : `Preview ready. ${event.result.creditsCharged} credits used.`,
       );
       return;
     }
@@ -314,13 +322,18 @@ export function GenerateForm() {
     abortRef.current?.abort();
   }
 
+  const activeStep = steps.find((step) => step.status === "started");
+
   return (
-    <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-      <form onSubmit={onSubmit} className="space-y-6">
+    <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+      <form onSubmit={onSubmit} className="gen-glass space-y-7 rounded-3xl p-5 sm:p-6">
         <div>
-          <label htmlFor="topic" className="block text-sm font-medium">
-            Video topic
-          </label>
+          <div className="flex items-baseline justify-between gap-3">
+            <label htmlFor="topic" className="text-sm font-medium tracking-tight">
+              Video topic
+            </label>
+            <span className="font-mono text-[11px] text-muted">{topic.trim().length}/120</span>
+          </div>
           <textarea
             id="topic"
             name="topic"
@@ -330,36 +343,28 @@ export function GenerateForm() {
             disabled={running}
             placeholder="Why night markets stay cheap"
             onChange={(event) => setTopic(event.target.value)}
-            className="mt-2 w-full resize-y rounded-xl border border-line bg-panel px-4 py-3 text-base text-foreground outline-none placeholder:text-muted/70 focus-visible:border-accent"
+            className="gen-field mt-3 w-full resize-y rounded-2xl px-4 py-3 text-base leading-7 text-foreground outline-none placeholder:text-muted/60"
           />
-          <p className="mt-2 text-xs text-muted">{topic.trim().length}/120</p>
         </div>
 
         <fieldset disabled={running} className="space-y-3">
-          <legend className="text-sm font-medium">Voice style</legend>
-          <div className="grid gap-2">
+          <legend className="text-sm font-medium tracking-tight">Voice style</legend>
+          <div className="grid gap-2.5 sm:grid-cols-2">
             {VOICES.map((option) => {
               const selected = voice === option.id;
               return (
-                <label
-                  key={option.id}
-                  className={cn(
-                    "flex cursor-pointer gap-3 rounded-xl border px-4 py-3 transition-colors",
-                    selected
-                      ? "border-accent bg-accent/10"
-                      : "border-line bg-panel hover:border-foreground/20",
-                  )}
-                >
+                <label key={option.id} className={cn("gen-pick", selected && "gen-pick-on")}>
                   <input
                     type="radio"
                     name="voice"
                     value={option.id}
                     checked={selected}
                     onChange={() => setVoiceOverride(option.id)}
-                    className="mt-1 accent-[var(--accent)]"
+                    className="sr-only"
                   />
-                  <span>
-                    <span className="block text-sm font-medium">{option.name}</span>
+                  <VoiceBadge id={option.id} selected={selected} />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium tracking-tight">{option.name}</span>
                     <span className="mt-1 block text-sm leading-6 text-muted">
                       {option.description}
                     </span>
@@ -371,20 +376,12 @@ export function GenerateForm() {
         </fieldset>
 
         <fieldset disabled={running} className="space-y-3">
-          <legend className="text-sm font-medium">Visual engine model</legend>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <legend className="text-sm font-medium tracking-tight">Visual engine model</legend>
+          <div className="grid gap-2.5 sm:grid-cols-2">
             {VISUAL_ENGINES.map((option) => {
               const selected = engine === option.id;
               return (
-                <label
-                  key={option.id}
-                  className={cn(
-                    "flex cursor-pointer gap-3 rounded-xl border px-4 py-3 transition-colors",
-                    selected
-                      ? "border-accent bg-accent/10"
-                      : "border-line bg-panel hover:border-foreground/20",
-                  )}
-                >
+                <label key={option.id} className={cn("gen-pick", selected && "gen-pick-on")}>
                   <input
                     type="radio"
                     name="visual-engine"
@@ -398,11 +395,12 @@ export function GenerateForm() {
                         );
                       }
                     }}
-                    className="mt-1 accent-[var(--accent)]"
+                    className="sr-only"
                   />
-                  <span>
-                    <span className="block text-sm font-medium">{option.name}</span>
-                    <span className="mt-1 block font-mono text-xs text-accent">
+                  <EngineBadge id={option.id} selected={selected} />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium tracking-tight">{option.name}</span>
+                    <span className="mt-1 block font-mono text-[11px] tracking-wide text-accent">
                       {option.rate}
                     </span>
                     <span className="mt-1 block text-sm leading-6 text-muted">
@@ -414,22 +412,19 @@ export function GenerateForm() {
             })}
           </div>
           {engine === "premium" && credits < generationCreditCost("premium") ? (
-            <p
-              role="status"
-              className="rounded-xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm leading-6 text-danger"
-            >
+            <p role="status" className="gen-alert">
               Premium AI generation costs 90 credits.
             </p>
           ) : null}
         </fieldset>
 
         {error ? (
-          <p role="alert" className="text-sm text-danger">
+          <p role="alert" className="gen-alert">
             {error}
           </p>
         ) : null}
 
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             type="submit"
             disabled={
@@ -437,29 +432,35 @@ export function GenerateForm() {
               topic.trim().length < 3 ||
               credits < generationCreditCost(engine)
             }
-            className="rounded-full bg-accent px-5 py-2.5 text-sm font-semibold text-accent-ink transition-opacity enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="gen-cta"
           >
             {running ? "Generating…" : "Generate Video"}
           </button>
           {running ? (
-            <button
-              type="button"
-              onClick={stop}
-              className="rounded-full border border-line px-5 py-2.5 text-sm text-foreground hover:bg-panel-raised"
-            >
+            <button type="button" onClick={stop} className="gen-ghost">
               Stop
             </button>
           ) : null}
+          <p className="text-xs text-muted">
+            {generationCreditCost(engine) === 0
+              ? "Free stock · 0 credits"
+              : `${generationCreditCost(engine)} credits when the preview is ready`}
+          </p>
         </div>
       </form>
 
-      <section className="rounded-2xl border border-line bg-panel p-5 sm:p-6">
+      <section className="gen-glass rounded-3xl p-5 sm:p-6">
         <p className="sr-only" aria-live="polite">
           {statusMessage}
         </p>
-        <div className="flex items-baseline justify-between gap-3">
-          <h2 className="text-lg font-semibold tracking-tight">Run</h2>
-          <p className="font-mono text-xs text-muted">45s · 9:16 · no face</p>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-accent">Timeline</p>
+            <h2 className="mt-1 text-lg font-semibold tracking-tight">Run</h2>
+          </div>
+          <p className="rounded-full border border-white/10 px-3 py-1 font-mono text-[11px] text-muted">
+            45s · 9:16 · no face
+          </p>
         </div>
 
         <ol className="mt-6">
@@ -468,83 +469,199 @@ export function GenerateForm() {
               {index < steps.length - 1 ? (
                 <span
                   aria-hidden
-                  className="absolute top-8 left-[15px] h-[calc(100%-1.25rem)] w-px bg-line"
+                  className={cn(
+                    "gen-rail",
+                    (step.status === "completed" || step.status === "started") && "gen-rail-on",
+                  )}
                 />
               ) : null}
               <span
                 aria-hidden
                 className={cn(
-                  "relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border font-mono text-xs",
-                  step.status === "completed" && "border-ok bg-ok/15 text-ok",
-                  step.status === "started" &&
-                    "border-accent bg-accent/15 text-accent",
-                  step.status === "pending" && "border-line text-muted",
+                  "gen-step",
+                  step.status === "completed" && "gen-step-done",
+                  step.status === "started" && "gen-step-live",
                 )}
               >
-                {index + 1}
+                {step.status === "started" ? <Spinner /> : step.status === "completed" ? <Check /> : index + 1}
               </span>
               <div className="min-w-0 pt-1">
-                <p className="text-sm font-medium">{step.label}</p>
-                <p
-                  className={cn(
-                    "mt-1 text-sm",
-                    step.status === "pending" ? "text-muted" : "text-foreground",
-                  )}
-                >
+                <p className="text-sm font-medium tracking-tight">{step.label}</p>
+                <p className={cn("mt-1 text-sm", step.status === "pending" ? "text-muted" : "text-foreground")}>
                   {step.status === "started" ? "Working…" : step.message}
                 </p>
-                {step.detail ? (
-                  <p className="mt-1 text-sm leading-6 text-muted">{step.detail}</p>
-                ) : null}
+                {step.detail ? <p className="mt-1 text-sm leading-6 text-muted">{step.detail}</p> : null}
               </div>
             </li>
           ))}
         </ol>
 
-        {notice ? <p className="mt-4 text-sm text-muted">{notice}</p> : null}
-
-        {result ? (
-          <div className="mt-6 border-t border-line pt-6">
-            <h3 className="text-base font-semibold tracking-tight">
-              Preview {result.id}
-            </h3>
-            <p className="mt-1 text-sm text-muted">
-              {result.durationSec}s · {result.voiceName} · {result.frames.length} clips ·{" "}
-              {result.creditsCharged} credits
-            </p>
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={playNarration}
-                className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-accent-ink hover:opacity-90"
-              >
-                Play narration
-              </button>
-              <button
-                type="button"
-                onClick={haltNarration}
-                className="rounded-full border border-line px-4 py-2 text-sm text-foreground hover:bg-panel-raised"
-              >
-                Stop
-              </button>
-              <p className="text-sm text-muted">{result.audioLabel}</p>
-            </div>
-            <Storyboard
-              frames={result.frames}
-              script={result.script}
-              playhead={playhead}
-              narrating={narrating}
-            />
-            <h3 className="mt-5 text-sm font-medium">Script</h3>
-            <p className="mt-2 text-sm leading-7 text-foreground/90">{result.script}</p>
-          </div>
-        ) : (
-          <p className="mt-2 text-sm leading-6 text-muted">
-            Progress lands here while the script is written, the voice reads it,
-            and matching clips fill the five-second blocks.
+        {notice ? (
+          <p role="status" className="gen-notice mt-2">
+            {notice}
           </p>
-        )}
+        ) : null}
+
+        <div className="mt-6 border-t border-white/10 pt-6">
+          {result ? (
+            <div>
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-semibold tracking-tight">
+                    {result.preview ? "Free-tier preview" : "Preview"} {result.id}
+                  </h3>
+                  <p className="mt-1 text-sm text-muted">
+                    {result.durationSec}s · {result.voiceName} · {result.frames.length} clips ·{" "}
+                    {result.creditsCharged} credits
+                  </p>
+                </div>
+                {result.preview ? (
+                  <span className="rounded-full border border-ok/30 bg-ok/10 px-3 py-1 text-xs text-ok">
+                    Fallback player
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button type="button" onClick={playNarration} className="gen-cta">
+                  Play narration
+                </button>
+                <button type="button" onClick={haltNarration} className="gen-ghost">
+                  Stop
+                </button>
+                <p className="text-sm text-muted">{result.audioLabel}</p>
+              </div>
+              <Storyboard
+                frames={result.frames}
+                script={result.script}
+                playhead={playhead}
+                narrating={narrating}
+              />
+              <h3 className="mt-5 text-sm font-medium tracking-tight">Script</h3>
+              <p className="mt-2 text-sm leading-7 text-foreground/90">{result.script}</p>
+            </div>
+          ) : (
+            <PreviewSkeleton running={running} label={activeStep?.label} />
+          )}
+        </div>
       </section>
     </div>
+  );
+}
+
+function PreviewSkeleton({ running, label }: { running: boolean; label?: string }) {
+  return (
+    <div>
+      <p className="text-sm text-muted">
+        {running
+          ? `${label ?? "Generation"} is in progress. The 9:16 preview fills in when the frames are ready.`
+          : "The preview player waits here. Script, voice, and five-second clips land in this frame."}
+      </p>
+      <div className="mt-4 flex gap-4">
+        <div className={cn("gen-skeleton aspect-[9/16] w-36 shrink-0 rounded-2xl sm:w-44", running && "gen-skeleton-live")} />
+        <div className="flex min-w-0 flex-1 flex-col justify-end gap-2 pb-1">
+          <span className={cn("gen-skeleton h-3 w-2/3 rounded-full", running && "gen-skeleton-live")} />
+          <span className={cn("gen-skeleton h-3 w-1/2 rounded-full", running && "gen-skeleton-live")} />
+          <span className={cn("gen-skeleton h-3 w-3/4 rounded-full", running && "gen-skeleton-live")} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VoiceBadge({ id, selected }: { id: VoiceId; selected: boolean }) {
+  return (
+    <span className={cn("gen-badge", selected && "gen-badge-on")} aria-hidden>
+      <VoiceGlyph id={id} />
+    </span>
+  );
+}
+
+function EngineBadge({ id, selected }: { id: VisualEngineId; selected: boolean }) {
+  return (
+    <span className={cn("gen-badge", selected && "gen-badge-on")} aria-hidden>
+      {id === "premium" ? <SparkIcon /> : <LayersIcon />}
+    </span>
+  );
+}
+
+function VoiceGlyph({ id }: { id: VoiceId }) {
+  if (id === "energetic-host") return <BoltIcon />;
+  if (id === "calm-documentary") return <FilmIcon />;
+  if (id === "deep-cinematic") return <MoonIcon />;
+  if (id === "friendly-explainer") return <ChatIcon />;
+  return <WaveIcon />;
+}
+
+function Spinner() {
+  return (
+    <svg viewBox="0 0 16 16" className="gen-spin h-3.5 w-3.5" fill="none" aria-hidden>
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.25" strokeWidth="1.6" />
+      <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function Check() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" aria-hidden>
+      <path d="M3.5 8.2 6.4 11 12.5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function WaveIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
+      <path d="M2 8h1.2M4.4 5.2v5.6M6.6 3.6v8.8M8.8 6v4M11 4.4v7.2M13.2 7h1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function BoltIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
+      <path d="M9 1.5 3.5 9H8l-1 5.5L12.5 7H8l1-5.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function FilmIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
+      <rect x="2" y="3" width="12" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M5 3v10M11 3v10M2 6.5h3M11 6.5h3M2 9.5h3M11 9.5h3" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
+      <path d="M10.2 2.2A5.6 5.6 0 1 0 13.8 9 4.4 4.4 0 0 1 10.2 2.2Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ChatIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
+      <path d="M3 3.5h10v7.2H6.2L3 13V3.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function LayersIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
+      <path d="M8 2.5 13.5 5.5 8 8.5 2.5 5.5 8 2.5ZM2.5 8 8 11l5.5-3M2.5 10.5 8 13.5l5.5-3" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SparkIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
+      <path d="M8 1.5 9.2 6 13.5 8 9.2 10 8 14.5 6.8 10 2.5 8 6.8 6 8 1.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+    </svg>
   );
 }
