@@ -16,6 +16,7 @@ import {
 import { VOICES, getVoice, isVoiceId, type VoiceId } from "@/lib/voices";
 import {
   VISUAL_ENGINES,
+  visualEngineName,
   type VisualEngineId,
 } from "@/lib/visual-engines";
 import { useCredits } from "@/components/credit-provider";
@@ -49,8 +50,9 @@ const VOICE_NOTE: Record<VoiceId, string> = {
 };
 
 const ENGINE_NOTE: Record<VisualEngineId, string> = {
-  stock: "Free stock loops",
-  premium: "Synthetic motion graphics",
+  stock: "Wikimedia and Pexels stock clips",
+  budget: "Fal.ai fast open-source motion",
+  ultra: "Luma cinematic, Runway-grade",
 };
 
 const FALLBACK_NOTICE =
@@ -90,6 +92,8 @@ export function GenerateForm() {
   const [topic, setTopic] = useState("");
   const [voiceOverride, setVoiceOverride] = useState<VoiceId | null>(null);
   const [engine, setEngine] = useState<VisualEngineId>("stock");
+  const [referenceImage, setReferenceImage] = useState<string | null>(null);
+  const [referenceName, setReferenceName] = useState<string | null>(null);
   const [steps, setSteps] = useState<StepView[]>(INITIAL_STEPS);
   const [result, setResult] = useState<GenerateResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -291,7 +295,7 @@ export function GenerateForm() {
 
     const cost = generationCreditCost(engine);
     if (credits < cost) {
-      setError(`Premium AI generation costs ${cost} credits.`);
+      setError(`${visualEngineName(engine)} costs ${cost} credits.`);
       return;
     }
 
@@ -310,7 +314,12 @@ export function GenerateForm() {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
         },
-        body: JSON.stringify({ topic: trimmed, voice, engine }),
+        body: JSON.stringify({
+          topic: trimmed,
+          voice,
+          engine,
+          ...(referenceImage ? { referenceImage } : {}),
+        }),
         signal: controller.signal,
       });
 
@@ -372,6 +381,34 @@ export function GenerateForm() {
     abortRef.current?.abort();
   }
 
+  function onReferenceImage(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type)) {
+      setError("Use a JPEG, PNG, or WebP reference image.");
+      return;
+    }
+    if (file.size > 1_200_000) {
+      setError("Keep the reference image under 1.2 MB.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = typeof reader.result === "string" ? reader.result : "";
+      if (!value.startsWith("data:image/")) return;
+      setReferenceImage(value);
+      setReferenceName(file.name);
+      setError((current) =>
+        current === "Use a JPEG, PNG, or WebP reference image." ||
+        current === "Keep the reference image under 1.2 MB."
+          ? null
+          : current,
+      );
+    };
+    reader.readAsDataURL(file);
+  }
+
   const activeStep = steps.find((step) => step.status === "started");
 
   return (
@@ -427,7 +464,7 @@ export function GenerateForm() {
 
         <fieldset disabled={running} className="space-y-3">
           <legend className="text-sm font-medium tracking-tight">Visual engine model</legend>
-          <div className="grid gap-2.5 sm:grid-cols-2">
+          <div className="grid gap-2.5">
             {VISUAL_ENGINES.map((option) => {
               const selected = engine === option.id;
               return (
@@ -439,11 +476,7 @@ export function GenerateForm() {
                     checked={selected}
                     onChange={() => {
                       setEngine(option.id);
-                      if (option.id === "stock") {
-                        setError((current) =>
-                          current?.startsWith("Premium AI generation costs") ? null : current,
-                        );
-                      }
+                      setError((current) => (current?.endsWith("credits.") ? null : current));
                     }}
                     className="sr-only"
                   />
@@ -461,12 +494,54 @@ export function GenerateForm() {
               );
             })}
           </div>
-          {engine === "premium" && credits < generationCreditCost("premium") ? (
+          {generationCreditCost(engine) > 0 && credits < generationCreditCost(engine) ? (
             <p role="status" className="gen-alert">
-              Premium AI generation costs 90 credits.
+              {visualEngineName(engine)} costs {generationCreditCost(engine)} credits.
             </p>
           ) : null}
         </fieldset>
+
+        <div>
+          <label htmlFor="reference-image" className="text-sm font-medium tracking-tight">
+            Image input / character reference
+          </label>
+          <p className="mt-1 text-sm leading-6 text-muted">
+            Optional. A JPEG, PNG, or WebP under 1.2 MB is sent to Fal.ai when you generate with
+            Budget or Ultra.
+          </p>
+          <input
+            id="reference-image"
+            name="reference-image"
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            disabled={running}
+            onChange={onReferenceImage}
+            className="gen-field mt-3 block w-full cursor-pointer rounded-2xl px-4 py-3 text-sm text-foreground file:mr-3 file:rounded-full file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-sm file:text-foreground"
+          />
+          {referenceImage ? (
+            <div className="mt-3 flex items-center gap-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={referenceImage}
+                alt=""
+                className="h-16 w-12 rounded-lg object-cover"
+              />
+              <div className="min-w-0">
+                <p className="truncate text-sm text-foreground">{referenceName}</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReferenceImage(null);
+                    setReferenceName(null);
+                  }}
+                  className="gen-ghost mt-2"
+                >
+                  Remove image
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
 
         {error ? (
           <p role="alert" className="gen-alert">
@@ -623,7 +698,7 @@ function VoiceBadge({ id, selected }: { id: VoiceId; selected: boolean }) {
 function EngineBadge({ id, selected }: { id: VisualEngineId; selected: boolean }) {
   return (
     <span className={cn("gen-badge", selected && "gen-badge-on")} aria-hidden>
-      {id === "premium" ? <SparkIcon /> : <LayersIcon />}
+      {id === "ultra" ? <FilmIcon /> : id === "budget" ? <BoltIcon /> : <LayersIcon />}
     </span>
   );
 }
@@ -698,14 +773,6 @@ function LayersIcon() {
   return (
     <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
       <path d="M8 2.5 13.5 5.5 8 8.5 2.5 5.5 8 2.5ZM2.5 8 8 11l5.5-3M2.5 10.5 8 13.5l5.5-3" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function SparkIcon() {
-  return (
-    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
-      <path d="M8 1.5 9.2 6 13.5 8 9.2 10 8 14.5 6.8 10 2.5 8 6.8 6 8 1.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
     </svg>
   );
 }

@@ -9,6 +9,7 @@ import {
   type GenerateEvent,
 } from "@/lib/generate";
 import { generationCreditCost } from "@/lib/credits";
+import { parseReferenceImage, renderFalClip, type ReferenceImage } from "@/lib/fal-video";
 import { getVoice, isVoiceId } from "@/lib/voices";
 import { isVisualEngineId, type VisualEngineId } from "@/lib/visual-engines";
 
@@ -248,6 +249,7 @@ async function* runWorkflow(
   voiceName: string,
   elevenLabsVoiceId: string,
   engine: VisualEngineId,
+  referenceImage: ReferenceImage | null,
   signal: AbortSignal,
 ) {
   yield encode({
@@ -336,16 +338,50 @@ async function* runWorkflow(
     status: "started",
     message: GENERATE_STEPS[2].label,
   });
-  await sleep(FRAME_STEP_MS, signal);
 
-  const frames = buildStoryboard(script);
-  const creditsCharged = generationCreditCost(engine);
+  let frames = buildStoryboard(script);
+  let creditsCharged = 0;
+  let frameDetail = `${FRAME_COUNT} Wikimedia stock clips · 9:16 · ${FRAME_LENGTH_SEC} seconds each`;
+
+  if (engine === "stock") {
+    await sleep(FRAME_STEP_MS, signal);
+  } else {
+    try {
+      const rendered = await renderFalClip({
+        engine,
+        prompt: `${topic}. Vertical 9:16 motion. ${script.slice(0, 500)}`,
+        image: referenceImage,
+        signal,
+      });
+      if ("videoUrl" in rendered) {
+        frames = frames.map((frame) => ({ ...frame, src: rendered.videoUrl }));
+        creditsCharged = generationCreditCost(engine);
+        frameDetail = referenceImage
+          ? "Image-to-video clip from Fal.ai · 9:16"
+          : "Fal.ai motion clip · 9:16";
+      } else {
+        preview = true;
+        await sleep(FRAME_STEP_MS, signal);
+        frameDetail = `${FRAME_COUNT} stock preview clips · 9:16`;
+        yield encode({ type: "notice", message: rendered.error });
+      }
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      preview = true;
+      frameDetail = `${FRAME_COUNT} stock preview clips · 9:16`;
+      yield encode({
+        type: "notice",
+        message: "Fal.ai could not be reached. A stock preview is ready instead.",
+      });
+    }
+  }
+
   yield encode({
     type: "progress",
     step: "frames",
     status: "completed",
     message: "Visual frames ready",
-    detail: `${FRAME_COUNT} clips · 9:16 · ${FRAME_LENGTH_SEC} seconds each`,
+    detail: frameDetail,
   });
 
   yield encode({
@@ -385,11 +421,12 @@ export async function POST(request: Request) {
 
   const record =
     body && typeof body === "object"
-      ? (body as { topic?: unknown; voice?: unknown; engine?: unknown })
+      ? (body as { topic?: unknown; voice?: unknown; engine?: unknown; referenceImage?: unknown })
       : {};
   const topic = typeof record.topic === "string" ? record.topic.trim() : "";
   const voice = typeof record.voice === "string" ? record.voice : "";
   const engine = typeof record.engine === "string" ? record.engine : "";
+  const referenceImage = parseReferenceImage(record.referenceImage);
 
   if (topic.length < 3) {
     return Response.json(
@@ -413,6 +450,13 @@ export async function POST(request: Request) {
     return Response.json({ error: "Select a visual engine." }, { status: 400 });
   }
 
+  if (referenceImage === "invalid") {
+    return Response.json(
+      { error: "Use a JPEG, PNG, or WebP reference image under 1.2 MB." },
+      { status: 400 },
+    );
+  }
+
   const voiceStyle = getVoice(voice);
   if (!voiceStyle) {
     return Response.json({ error: "Select a voice style." }, { status: 400 });
@@ -425,6 +469,7 @@ export async function POST(request: Request) {
       voiceStyle.name,
       voiceStyle.elevenLabsVoiceId,
       engine,
+      referenceImage,
       request.signal,
     ),
   );

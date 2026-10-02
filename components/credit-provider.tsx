@@ -103,7 +103,12 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
           {
             id: `spend_${Date.now().toString(36)}`,
             when: "Now",
-            item: engine === "premium" ? "Premium AI video" : "Free stock assets",
+            item:
+              engine === "ultra"
+                ? "Ultra cinematic AI"
+                : engine === "budget"
+                  ? "Budget AI motion"
+                  : "Free stock assets",
             change: cost === 0 ? "0" : `−${cost}`,
             balance: next,
           },

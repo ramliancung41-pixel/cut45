@@ -17,7 +17,7 @@ export default function GeneratorPage() {
         <p className="mt-4 max-w-xl text-base leading-7 text-muted">
           Shape a 45-second faceless short. Pick a voice and a visual engine, then watch the
           timeline build the 9:16 preview. Script and voice requests stay on the server. Free
-          stock costs 0 credits. Premium AI motion costs 90 credits.
+          stock costs 0 credits. Budget AI motion costs 45. Ultra cinematic costs 180.
         </p>
       </header>
       <GenerateForm />

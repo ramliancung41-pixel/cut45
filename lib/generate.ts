@@ -1,3 +1,5 @@
+import type { VisualEngineId } from "@/lib/visual-engines";
+
 export const VIDEO_DURATION_SEC = 45;
 export const FRAME_COUNT = 9;
 export const FRAME_LENGTH_SEC = 5;
@@ -28,7 +30,7 @@ export type GenerateResult = {
   audioLabel: string;
   audioSrc?: string;
   frames: StoryFrame[];
-  engine: "stock" | "premium";
+  engine: VisualEngineId;
   creditsCharged: number;
   preview?: boolean;
 };

@@ -1,4 +1,4 @@
-export type VisualEngineId = "stock" | "premium";
+export type VisualEngineId = "stock" | "budget" | "ultra";
 
 export type VisualEngine = {
   id: VisualEngineId;
@@ -11,20 +11,27 @@ export const VISUAL_ENGINES: VisualEngine[] = [
   {
     id: "stock",
     name: "Free Stock Assets",
-    rate: "0 credits/sec",
-    description: "Uses the free Wikimedia/MDN stock loop pipeline.",
+    rate: "0 credits",
+    description: "Wikimedia and Pexels stock clips.",
   },
   {
-    id: "premium",
-    name: "Premium AI Video Generation",
-    rate: "2 credits/sec",
-    description: "Synthetic AI motion graphics for a paid premium tier.",
+    id: "budget",
+    name: "Budget AI Motion",
+    rate: "45 credits",
+    description: "Fal.ai fast open-source video models.",
+  },
+  {
+    id: "ultra",
+    name: "Ultra Cinematic AI",
+    rate: "180 credits",
+    description: "Luma and Runway-grade cinematic generation.",
   },
 ];
 
-export const PREMIUM_ENGINE_WARNING =
-  "Requires a paid premium tier plan to generate synthetic AI motion graphics.";
-
 export function isVisualEngineId(value: string): value is VisualEngineId {
   return VISUAL_ENGINES.some((engine) => engine.id === value);
+}
+
+export function visualEngineName(id: VisualEngineId) {
+  return VISUAL_ENGINES.find((engine) => engine.id === id)?.name ?? id;
 }

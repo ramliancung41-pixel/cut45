@@ -88,7 +88,11 @@ export function GalleryBoard() {
             </div>
             <p className="mt-4 text-sm font-medium">{project.engineLabel}</p>
             <p className="mt-1 text-sm text-muted">
-              {project.engine === "premium" ? "Premium · 2 credits/sec" : "Free stock · 0 credits/sec"}
+              {project.engine === "ultra"
+                ? "Ultra cinematic · 180 credits"
+                : project.engine === "budget"
+                  ? "Budget AI · 45 credits"
+                  : "Free stock · 0 credits"}
               {" · "}
               {project.voiceName}
             </p>
