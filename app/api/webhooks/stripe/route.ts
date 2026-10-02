@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { creditGrantForPlan } from "@/lib/billing";
 import { grantProfileCredits } from "@/lib/profiles";
 import { checkoutPlan, checkoutUserId, lineItemPriceId, stripeSecretKey } from "@/lib/stripe-checkout";
 
@@ -92,7 +91,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Checkout session is missing the plan." }, { status: 400 });
   }
 
-  const credits = creditGrantForPlan(plan);
+  const credits = plan === "starter" ? 300 : plan === "pro" ? 1000 : plan === "topup" ? 150 : 0;
   if (credits !== 300 && credits !== 1000 && credits !== 150) {
     console.error("stripe checkout unknown plan", plan, credits);
     return NextResponse.json({ error: "Unknown plan." }, { status: 400 });

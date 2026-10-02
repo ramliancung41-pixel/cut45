@@ -64,3 +64,33 @@ $$;
 
 revoke all on function public.grant_checkout_credits(text, uuid, text, integer) from public, anon, authenticated;
 grant execute on function public.grant_checkout_credits(text, uuid, text, integer) to service_role;
+
+create or replace function public.add_user_credits(user_id uuid, credit_amount integer)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  next_credits integer;
+begin
+  if credit_amount is null or credit_amount <= 0 then
+    raise exception 'credit amount must be positive';
+  end if;
+
+  update public.profiles
+  set credits = coalesce(credits, 0) + credit_amount,
+      tokens = coalesce(tokens, 0) + credit_amount
+  where id = user_id
+  returning credits into next_credits;
+
+  if next_credits is null then
+    raise exception 'profile not found';
+  end if;
+
+  return next_credits;
+end;
+$$;
+
+revoke all on function public.add_user_credits(uuid, integer) from public, anon, authenticated;
+grant execute on function public.add_user_credits(uuid, integer) to service_role;

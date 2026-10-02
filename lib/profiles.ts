@@ -74,48 +74,51 @@ export async function grantProfileCredits(input: {
   );
   if (claim.error && !missingEvents) throw new Error(claim.error.message);
 
-  const current = await admin.from(PROFILES_TABLE).select("*").eq("id", input.userId).maybeSingle();
-  console.log("supabase profiles select", JSON.stringify({ data: current.data, error: current.error }));
-  if (current.error) throw new Error(current.error.message);
-  if (!current.data) throw new Error("Profile not found.");
-
-  const row = current.data as Record<string, unknown>;
-  const currentCredits =
-    "credits" in row && row.credits != null && row.credits !== ""
-      ? Number(row.credits)
-      : Number(row.tokens);
-  const next = (Number.isFinite(currentCredits) ? currentCredits : 0) + input.credits;
-  const patch: Record<string, number> = { credits: next };
-  if ("tokens" in row) patch.tokens = next;
-
-  let updated = await admin.from(PROFILES_TABLE).update(patch).eq("id", input.userId).select("*").maybeSingle();
-  console.log(
-    "supabase profiles credits update",
-    JSON.stringify({ patch, data: updated.data, error: updated.error }),
-  );
-
-  if (updated.error && /credits|schema cache|column/i.test(updated.error.message)) {
-    updated = await admin
-      .from(PROFILES_TABLE)
-      .update({ tokens: next })
-      .eq("id", input.userId)
-      .select("*")
-      .maybeSingle();
-    console.log("supabase profiles tokens update", JSON.stringify({ data: updated.data, error: updated.error }));
+  const granted = await admin.rpc("add_user_credits", {
+    user_id: input.userId,
+    credit_amount: input.credits,
+  });
+  console.log("supabase add_user_credits", JSON.stringify({ data: granted.data, error: granted.error }));
+  if (!granted.error) {
+    const credits = Number(granted.data);
+    return { credits: Number.isFinite(credits) ? credits : input.credits, via: "rpc" as const };
   }
-  if (updated.error) {
+
+  console.error("supabase add_user_credits failed", granted.error.message);
+  try {
+    return await addCreditsOnProfile(input.userId, input.credits);
+  } catch (error) {
     if (!missingEvents) {
       const removed = await admin.from("stripe_events").delete().eq("id", input.eventId);
       console.log("supabase stripe_events delete", JSON.stringify({ data: removed.data, error: removed.error }));
     }
-    throw new Error(updated.error.message);
+    throw error;
   }
-  if (!updated.data) throw new Error("Profile not found.");
+}
 
-  const saved = updated.data as Record<string, unknown>;
-  const credits =
-    "credits" in saved && saved.credits != null && saved.credits !== "" ? Number(saved.credits) : next;
-  return { credits };
+async function addCreditsOnProfile(userId: string, amount: number) {
+  const admin = createSupabaseAdminClient();
+  const current = await admin.from(PROFILES_TABLE).select("credits").eq("id", userId).maybeSingle();
+  console.log("supabase profiles select", JSON.stringify({ data: current.data, error: current.error }));
+  if (current.error) throw new Error(current.error.message);
+  if (!current.data) throw new Error("Profile not found.");
+
+  const row = current.data as { credits?: number | null };
+  const currentCredits = Number(row.credits);
+  const next = (Number.isFinite(currentCredits) ? currentCredits : 0) + amount;
+  const updated = await admin
+    .from(PROFILES_TABLE)
+    .update({ credits: next })
+    .eq("id", userId)
+    .select("credits")
+    .maybeSingle();
+  console.log(
+    "supabase profiles credits update",
+    JSON.stringify({ credits: next, data: updated.data, error: updated.error }),
+  );
+  if (updated.error) throw new Error(updated.error.message);
+  if (!updated.data) throw new Error("Profile not found.");
+  return { credits: Number(updated.data.credits), via: "profiles" as const };
 }
 
 export async function grantCheckoutCredits(input: {
