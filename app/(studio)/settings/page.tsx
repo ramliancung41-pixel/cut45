@@ -9,11 +9,11 @@ export const metadata: Metadata = {
 
 export default function SettingsPage() {
   return (
-    <div>
+    <div className="gen-stage">
       <PageHeader
         eyebrow="Studio"
         title="Settings"
-        description="Duration, frame, and the faceless format stay fixed. The default voice lasts for this visit."
+        description="Choose the voice AI Generator opens with. Length, frame, and the faceless format stay fixed."
       />
       <SettingsForm />
     </div>

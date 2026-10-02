@@ -66,8 +66,8 @@ export function GalleryBoard() {
 
   if (projects.length === 0) {
     return (
-      <p className="rounded-2xl border border-line bg-panel px-5 py-8 text-sm leading-6 text-muted">
-        Finished videos land here. Generate one from Create Video and it will keep its prompt,
+      <p className="gen-glass rounded-3xl px-5 py-8 text-sm leading-6 text-muted">
+        Finished previews land here. Generate one from AI Generator and it keeps its prompt,
         length, and engine.
       </p>
     );
@@ -77,12 +77,12 @@ export function GalleryBoard() {
     <>
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {projects.map((project) => (
-          <li key={project.id} className="flex flex-col rounded-2xl border border-line bg-panel p-4">
+          <li key={project.id} className="gen-glass flex flex-col rounded-3xl p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full bg-panel-raised px-2.5 py-1 text-xs text-foreground">
+              <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1 text-xs text-foreground">
                 {project.prompt}
               </span>
-              <span className="rounded-full border border-accent/40 px-2.5 py-1 font-mono text-[11px] text-accent">
+              <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 font-mono text-[11px] text-cyan-100">
                 {project.durationSec}s
               </span>
             </div>
@@ -96,7 +96,7 @@ export function GalleryBoard() {
               <button
                 type="button"
                 onClick={() => replay(project)}
-                className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-accent-ink hover:opacity-90"
+                className="gen-cta"
               >
                 Replay audio
               </button>
@@ -108,7 +108,7 @@ export function GalleryBoard() {
                     setDownloadError("Could not download that project.");
                   });
                 }}
-                className="rounded-full border border-line px-4 py-2 text-sm text-foreground hover:bg-panel-raised"
+                className="gen-ghost"
               >
                 Download
               </button>
@@ -117,7 +117,7 @@ export function GalleryBoard() {
         ))}
       </ul>
       {downloadError ? (
-        <p role="alert" className="mt-4 text-sm text-danger">
+        <p role="alert" className="gen-alert mt-4">
           {downloadError}
         </p>
       ) : null}
@@ -127,7 +127,7 @@ export function GalleryBoard() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="replay-title"
-            className="w-full max-w-md rounded-2xl border border-line bg-panel p-5"
+            className="gen-glass w-full max-w-md rounded-3xl p-5"
           >
             <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">
               Playing
@@ -141,7 +141,7 @@ export function GalleryBoard() {
             <button
               type="button"
               onClick={stopPlayback}
-              className="mt-5 rounded-full border border-line px-4 py-2 text-sm hover:bg-panel-raised"
+              className="gen-ghost mt-5"
             >
               Stop
             </button>

@@ -11,12 +11,14 @@ export const metadata: Metadata = {
 export default function GalleryPage() {
   return (
     <AppShell>
+      <div className="gen-stage">
       <PageHeader
         eyebrow="Archive"
         title="Gallery"
         description="Every finished run stays here with its prompt, length, and visual engine. Replay the narration or download the clip file."
       />
       <GalleryBoard />
+      </div>
     </AppShell>
   );
 }

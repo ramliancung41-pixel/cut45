@@ -18,14 +18,14 @@ const LEDGER = [
 
 export default function CreditsPage() {
   return (
-    <div>
+    <div className="gen-stage">
       <PageHeader
         eyebrow="Account"
         title="Credits & Billing"
         description="Free stock costs 0 credits. Premium AI motion costs 90 credits per short. Starter adds 300 credits, Pro adds 1,000, and the top-up adds 150."
       />
 
-      <div className="rounded-2xl border border-line bg-panel px-5 py-6">
+      <div className="gen-glass rounded-3xl px-5 py-6">
         <p className="text-sm text-muted">Available</p>
         <p className="mt-1 text-4xl font-semibold tracking-tight">
           <CreditFigure />
@@ -41,10 +41,10 @@ export default function CreditsPage() {
       <BillingPlans />
 
       <h2 className="mt-8 text-lg font-semibold tracking-tight">Ledger</h2>
-      <div className="mt-4 overflow-x-auto rounded-2xl border border-line">
+      <div className="gen-glass mt-4 overflow-x-auto rounded-3xl">
         <table className="w-full min-w-[32rem] border-collapse text-left text-sm">
           <caption className="sr-only">Recent credit changes</caption>
-          <thead className="bg-panel text-muted">
+          <thead className="text-muted">
             <tr>
               <th scope="col" className="px-4 py-3 font-medium">
                 When
@@ -60,7 +60,7 @@ export default function CreditsPage() {
               </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-line bg-panel">
+          <tbody className="divide-y divide-white/10">
             {LEDGER.map((row) => (
               <tr key={row.item}>
                 <td className="px-4 py-3">{row.when}</td>

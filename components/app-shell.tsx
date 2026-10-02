@@ -1,5 +1,6 @@
 "use client";
 
+import { Sora } from "next/font/google";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
@@ -13,6 +14,11 @@ const NAV = [
   { href: "/settings", label: "Settings" },
 ] as const;
 
+const sora = Sora({
+  subsets: ["latin"],
+  variable: "--font-studio",
+});
+
 function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
@@ -25,7 +31,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const displayName = account?.name ?? null;
 
   return (
-    <div className="min-h-dvh bg-background text-foreground">
+    <div className={`${sora.variable} studio-type min-h-dvh bg-background text-foreground`}>
       <div className="flex min-h-dvh">
         {open ? (
           <button

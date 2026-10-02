@@ -23,16 +23,14 @@ export function BillingPlans() {
             <article
               key={plan.id}
               className={cn(
-                "flex flex-col rounded-2xl border p-5",
-                plan.featured
-                  ? "border-accent bg-accent/10 shadow-[0_0_0_1px_rgba(255,90,31,0.25)]"
-                  : "border-line bg-panel",
+                "gen-glass flex flex-col rounded-3xl p-5",
+                plan.featured && "gen-pick-on",
               )}
             >
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-base font-semibold tracking-tight">{plan.name}</h3>
                 {plan.featured ? (
-                  <span className="rounded-full bg-accent px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-accent-ink">
+                  <span className="rounded-full bg-gradient-to-r from-cyan-300 to-orange-400 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-[#071018]">
                     Pro
                   </span>
                 ) : null}
@@ -57,7 +55,7 @@ export function BillingPlans() {
               <UpgradeNowButton
                 plan={plan.id}
                 paymentLink={plan.stripePaymentLink}
-                className="relative z-10 mt-6 inline-flex w-full cursor-pointer items-center justify-center rounded-full bg-accent px-5 py-2.5 text-sm font-semibold text-accent-ink transition-opacity enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                className="gen-cta relative z-10 mt-6 inline-flex w-full cursor-pointer items-center justify-center disabled:cursor-not-allowed"
               />
             </article>
           );

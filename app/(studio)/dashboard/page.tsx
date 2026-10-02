@@ -28,25 +28,25 @@ const JOBS = [
 
 export default function DashboardPage() {
   return (
-    <div>
+    <div className="gen-stage">
       <PageHeader
         eyebrow="Studio"
         title="Dashboard"
         description="45-second vertical shorts with no on-camera host. Start a new run or check what the last previews used."
       />
 
-      <dl className="grid overflow-hidden rounded-2xl border border-line bg-panel sm:grid-cols-3 sm:divide-x sm:divide-line">
+      <dl className="gen-glass grid overflow-hidden rounded-3xl sm:grid-cols-3 sm:divide-x sm:divide-white/10">
         <div className="px-5 py-4">
           <dt className="text-sm text-muted">Credits ready</dt>
           <dd className="mt-1 text-2xl font-semibold tracking-tight">
             <CreditFigure />
           </dd>
         </div>
-        <div className="border-t border-line px-5 py-4 sm:border-t-0">
+        <div className="border-t border-white/10 px-5 py-4 sm:border-t-0">
           <dt className="text-sm text-muted">Length</dt>
           <dd className="mt-1 text-2xl font-semibold tracking-tight">45s</dd>
         </div>
-        <div className="border-t border-line px-5 py-4 sm:border-t-0">
+        <div className="border-t border-white/10 px-5 py-4 sm:border-t-0">
           <dt className="text-sm text-muted">Picture</dt>
           <dd className="mt-1 text-2xl font-semibold tracking-tight">9:16</dd>
         </div>
@@ -56,13 +56,13 @@ export default function DashboardPage() {
         <h2 className="text-lg font-semibold tracking-tight">Recent previews</h2>
         <Link
           href="/generator"
-          className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-accent-ink hover:opacity-90"
+          className="gen-cta"
         >
           AI Generator
         </Link>
       </div>
 
-      <ul className="mt-4 divide-y divide-line overflow-hidden rounded-2xl border border-line bg-panel">
+      <ul className="gen-glass mt-4 divide-y divide-white/10 overflow-hidden rounded-3xl">
         {JOBS.map((job) => (
           <li
             key={job.title}

@@ -236,7 +236,22 @@ body {
 .gen-field {
   border: 1px solid rgba(244, 239, 230, 0.12);
   background: rgba(8, 7, 6, 0.45);
+  color: var(--foreground);
   transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.gen-select {
+  color-scheme: dark;
+  background-image:
+    linear-gradient(45deg, transparent 50%, rgba(70, 220, 255, 0.85) 50%),
+    linear-gradient(135deg, rgba(214, 122, 60, 0.85) 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) 55%,
+    calc(100% - 12px) 55%;
+  background-size:
+    6px 6px,
+    6px 6px;
+  background-repeat: no-repeat;
 }
 
 .gen-field:focus-visible {

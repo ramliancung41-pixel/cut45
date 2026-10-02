@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 
 export default function CreatePage() {
   return (
-    <div>
+    <div className="gen-stage">
       <PageHeader
         eyebrow="Workspace"
         title="Create Video"
