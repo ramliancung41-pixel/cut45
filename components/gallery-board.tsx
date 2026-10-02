@@ -1,9 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useCredits, type ArchiveProject } from "@/components/credit-provider";
 import { speakNarration, stopNarration } from "@/lib/browser-speech";
+import type { SavedGalleryItem } from "@/lib/gallery-store";
 import { isVoiceId } from "@/lib/voices";
+import type { VisualEngineId } from "@/lib/visual-engines";
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -16,21 +18,70 @@ function downloadBlob(blob: Blob, filename: string) {
 
 async function downloadProject(project: ArchiveProject) {
   const filename = project.id;
-  if (project.audioSrc) {
-    const response = await fetch(project.audioSrc);
+  const source = project.videoSrc || project.audioSrc;
+  if (source) {
+    const response = await fetch(source);
     const blob = await response.blob();
-    downloadBlob(blob, `${filename}.mp3`);
+    const extension = project.videoSrc ? "mp4" : "mp3";
+    downloadBlob(blob, `${filename}.${extension}`);
     return;
   }
   downloadBlob(new Blob([project.script], { type: "text/plain;charset=utf-8" }), `${filename}.txt`);
 }
 
+function fromSaved(item: SavedGalleryItem): ArchiveProject {
+  const engine: VisualEngineId = item.engine;
+  return {
+    id: item.id,
+    prompt: item.prompt,
+    durationSec: 45,
+    engine,
+    engineLabel:
+      engine === "ultra" ? "Ultra Cinematic AI" : "Budget AI Motion (Fal.ai Image-to-Video)",
+    voiceName: item.voiceName,
+    voiceId: "",
+    script: item.script,
+    videoSrc: item.videoUrl ?? undefined,
+    creditsCharged: item.credits,
+    createdAt: item.createdAt,
+  };
+}
+
+function rateLine(project: ArchiveProject) {
+  if (typeof project.creditsCharged === "number") {
+    return `${project.creditsCharged} credits`;
+  }
+  if (project.engine === "ultra") return "180 credits";
+  if (project.engine === "budget") return "45 credits";
+  return "0 credits";
+}
+
 export function GalleryBoard() {
   const { projects } = useCredits();
+  const [saved, setSaved] = useState<ArchiveProject[]>([]);
   const [playing, setPlaying] = useState<ArchiveProject | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const trackRef = useRef<HTMLAudioElement | null>(null);
   const playIdRef = useRef(0);
+
+  useEffect(() => {
+    let ignore = false;
+    void fetch("/api/gallery")
+      .then((response) => response.json())
+      .then((payload: { items?: SavedGalleryItem[] }) => {
+        if (ignore || !Array.isArray(payload.items)) return;
+        setSaved(payload.items.map(fromSaved));
+      })
+      .catch(() => undefined);
+    return () => {
+      ignore = true;
+    };
+  }, [projects.length]);
+
+  const listed = [
+    ...projects,
+    ...saved.filter((item) => !projects.some((project) => project.id === item.id)),
+  ];
 
   function stopPlayback() {
     playIdRef.current += 1;
@@ -60,11 +111,14 @@ export function GalleryBoard() {
       void track.play();
       return;
     }
-    if (!isVoiceId(project.voiceId)) return;
+    if (!isVoiceId(project.voiceId)) {
+      finish();
+      return;
+    }
     speakNarration(project.script, project.voiceId, { onEnd: finish });
   }
 
-  if (projects.length === 0) {
+  if (listed.length === 0) {
     return (
       <p className="gen-glass rounded-3xl px-5 py-8 text-sm leading-6 text-muted">
         Finished previews land here. Generate one from AI Generator and it keeps its prompt,
@@ -76,8 +130,17 @@ export function GalleryBoard() {
   return (
     <>
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {projects.map((project) => (
+        {listed.map((project) => (
           <li key={project.id} className="gen-glass flex flex-col rounded-3xl p-4">
+            {project.videoSrc ? (
+              <video
+                src={project.videoSrc}
+                muted
+                playsInline
+                controls
+                className="mb-4 aspect-[9/16] w-full rounded-2xl bg-black object-cover"
+              />
+            ) : null}
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1 text-xs text-foreground">
                 {project.prompt}
@@ -88,20 +151,12 @@ export function GalleryBoard() {
             </div>
             <p className="mt-4 text-sm font-medium">{project.engineLabel}</p>
             <p className="mt-1 text-sm text-muted">
-              {project.engine === "ultra"
-                ? "Ultra cinematic · 180 credits"
-                : project.engine === "budget"
-                  ? "Budget AI · 45 credits"
-                  : "Free stock · 0 credits"}
+              {rateLine(project)}
               {" · "}
               {project.voiceName}
             </p>
             <div className="mt-5 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => replay(project)}
-                className="gen-cta"
-              >
+              <button type="button" onClick={() => replay(project)} className="gen-cta">
                 Replay audio
               </button>
               <button
@@ -142,11 +197,7 @@ export function GalleryBoard() {
             <p className="mt-2 text-sm text-muted">
               {playing.durationSec}s · {playing.engineLabel}
             </p>
-            <button
-              type="button"
-              onClick={stopPlayback}
-              className="gen-ghost mt-5"
-            >
+            <button type="button" onClick={stopPlayback} className="gen-ghost mt-5">
               Stop
             </button>
           </div>

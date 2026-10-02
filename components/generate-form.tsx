@@ -16,7 +16,6 @@ import {
 import { VOICES, getVoice, isVoiceId, type VoiceId } from "@/lib/voices";
 import {
   VISUAL_ENGINES,
-  visualEngineName,
   type VisualEngineId,
 } from "@/lib/visual-engines";
 import { useCredits } from "@/components/credit-provider";
@@ -99,6 +98,29 @@ function formatFileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+function engineOffer(id: VisualEngineId, imageToVideo: boolean) {
+  if (imageToVideo && id === "budget") {
+    return {
+      name: "Budget AI Motion (Fal.ai Image-to-Video)",
+      rate: "60 credits",
+      note: "Fal.ai image-to-video motion",
+    };
+  }
+  if (imageToVideo && id === "ultra") {
+    return {
+      name: "Ultra Cinematic AI",
+      rate: "200 credits",
+      note: "Luma and Runway image-to-video",
+    };
+  }
+  const option = VISUAL_ENGINES.find((item) => item.id === id);
+  return {
+    name: option?.name ?? id,
+    rate: option?.rate ?? "",
+    note: ENGINE_NOTE[id],
+  };
+}
+
 function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
@@ -122,6 +144,7 @@ export function GenerateForm() {
   const [statusMessage, setStatusMessage] = useState("Waiting for a topic.");
   const [running, setRunning] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const imageRunRef = useRef(false);
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const outcomeRef = useRef<"idle" | "complete" | "error">("idle");
   const fallbackRef = useRef(false);
@@ -164,23 +187,45 @@ export function GenerateForm() {
 
     if (event.type === "complete") {
       outcomeRef.current = "complete";
+      const imageRun =
+        imageRunRef.current &&
+        !event.result.preview &&
+        event.result.creditsCharged > 0 &&
+        event.result.engine !== "stock";
       if (!(event.result.preview && event.result.creditsCharged === 0)) {
-        deductForEngine(event.result.engine);
+        deductForEngine(event.result.engine, imageRun);
       }
+      const videoSrc = event.result.frames.find((frame) => frame.src.startsWith("https://"))?.src;
+      const offer = engineOffer(event.result.engine, imageRun);
       archiveProject({
         id: event.result.id,
         prompt: event.result.topic,
         durationSec: event.result.durationSec,
         engine: event.result.engine,
-        engineLabel:
-          VISUAL_ENGINES.find((option) => option.id === event.result.engine)?.name ??
-          event.result.engine,
+        engineLabel: offer.name,
         voiceName: event.result.voiceName,
         voiceId: event.result.voiceId,
         script: event.result.script,
         audioSrc: event.result.audioSrc,
+        videoSrc: imageRun ? videoSrc : undefined,
+        creditsCharged: event.result.creditsCharged,
         createdAt: new Date().toISOString(),
       });
+      if (imageRun && videoSrc) {
+        void fetch("/api/gallery", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: event.result.id,
+            prompt: event.result.topic,
+            script: event.result.script,
+            engine: event.result.engine,
+            voiceName: event.result.voiceName,
+            videoUrl: videoSrc,
+            credits: event.result.creditsCharged,
+          }),
+        }).catch(() => undefined);
+      }
       setResult(event.result);
       setStatusMessage(
         event.result.preview
@@ -315,9 +360,11 @@ export function GenerateForm() {
       return;
     }
 
-    const cost = generationCreditCost(engine);
+    const imageToVideo = Boolean(referenceImage) && engine !== "stock";
+    imageRunRef.current = imageToVideo;
+    const cost = generationCreditCost(engine, imageToVideo);
     if (credits < cost) {
-      setError(`${visualEngineName(engine)} costs ${cost} credits.`);
+      setError(`${engineOffer(engine, imageToVideo).name} costs ${cost} credits.`);
       return;
     }
 
@@ -420,6 +467,7 @@ export function GenerateForm() {
       setReferenceImage(value);
       setReferenceName(file.name);
       setReferenceBytes(file.size);
+      setEngine("budget");
       setError((current) =>
         current === "Use a JPEG, PNG, or WebP reference image." ||
         current === "Keep the reference image under 1.2 MB."
@@ -466,6 +514,11 @@ export function GenerateForm() {
   }
 
   const activeStep = steps.find((step) => step.status === "started");
+  const imageToVideo = Boolean(referenceImage);
+  const runCost = generationCreditCost(engine, imageToVideo && engine !== "stock");
+  const engineChoices = imageToVideo
+    ? VISUAL_ENGINES.filter((option) => option.id !== "stock")
+    : VISUAL_ENGINES;
 
   return (
     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
@@ -632,10 +685,18 @@ export function GenerateForm() {
         </fieldset>
 
         <fieldset disabled={running} className="space-y-3">
-          <legend className="text-sm font-medium tracking-tight">Visual engine model</legend>
+          <legend className="flex flex-wrap items-center gap-2 text-sm font-medium tracking-tight">
+            {imageToVideo ? "Image-to-Video" : "Visual engine model"}
+            {imageToVideo ? (
+              <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 font-mono text-[11px] tracking-wide text-cyan-100">
+                Reference attached
+              </span>
+            ) : null}
+          </legend>
           <div className="grid gap-2.5">
-            {VISUAL_ENGINES.map((option) => {
+            {engineChoices.map((option) => {
               const selected = engine === option.id;
+              const offer = engineOffer(option.id, imageToVideo);
               return (
                 <label key={option.id} className={cn("gen-pick", selected && "gen-pick-on")}>
                   <input
@@ -651,21 +712,19 @@ export function GenerateForm() {
                   />
                   <EngineBadge id={option.id} selected={selected} />
                   <span className="min-w-0">
-                    <span className="block text-sm font-medium tracking-tight">{option.name}</span>
+                    <span className="block text-sm font-medium tracking-tight">{offer.name}</span>
                     <span className="mt-1 block font-mono text-[11px] tracking-wide text-accent">
-                      {option.rate}
+                      {offer.rate}
                     </span>
-                    <span className="mt-1 block text-sm leading-6 text-muted">
-                      {ENGINE_NOTE[option.id]}
-                    </span>
+                    <span className="mt-1 block text-sm leading-6 text-muted">{offer.note}</span>
                   </span>
                 </label>
               );
             })}
           </div>
-          {generationCreditCost(engine) > 0 && credits < generationCreditCost(engine) ? (
+          {runCost > 0 && credits < runCost ? (
             <p role="status" className="gen-alert">
-              {visualEngineName(engine)} costs {generationCreditCost(engine)} credits.
+              {engineOffer(engine, imageToVideo).name} costs {runCost} credits.
             </p>
           ) : null}
         </fieldset>
@@ -682,7 +741,7 @@ export function GenerateForm() {
             disabled={
               running ||
               topic.trim().length < 3 ||
-              credits < generationCreditCost(engine)
+              credits < runCost
             }
             className="gen-cta"
           >
@@ -694,9 +753,9 @@ export function GenerateForm() {
             </button>
           ) : null}
           <p className="text-xs text-muted">
-            {generationCreditCost(engine) === 0
+            {runCost === 0
               ? "Free stock · 0 credits"
-              : `${generationCreditCost(engine)} credits when the preview is ready`}
+              : `${runCost} credits when the preview is ready`}
           </p>
         </div>
       </form>

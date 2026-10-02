@@ -31,6 +31,8 @@ export type ArchiveProject = {
   voiceId: string;
   script: string;
   audioSrc?: string;
+  videoSrc?: string;
+  creditsCharged?: number;
   createdAt: string;
 };
 
@@ -48,7 +50,7 @@ type CreditContextValue = {
   projects: ArchiveProject[];
   connecting: boolean;
   startCheckout: (credits: number) => Promise<void>;
-  deductForEngine: (engine: VisualEngineId) => void;
+  deductForEngine: (engine: VisualEngineId, imageToVideo?: boolean) => void;
   archiveProject: (project: ArchiveProject) => void;
   setAccountBalance: (tokens: number) => void;
 };
@@ -93,18 +95,21 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
           setApproval(paymentApprovedMessage(grant));
         }, CHECKOUT_CONNECTING_MS);
       },
-      deductForEngine(engine) {
+      deductForEngine(engine, imageToVideo = false) {
         hydratedRef.current = true;
-        const cost = generationCreditCost(engine);
-        const next = deductGenerationCredits(creditsRef.current, engine);
+        const cost = generationCreditCost(engine, imageToVideo);
+        const next = deductGenerationCredits(creditsRef.current, engine, imageToVideo);
         creditsRef.current = next;
         setCredits(next);
         setLedger((rows) => [
           {
             id: `spend_${Date.now().toString(36)}`,
             when: "Now",
-            item:
-              engine === "ultra"
+            item: imageToVideo
+              ? engine === "ultra"
+                ? "Ultra image-to-video"
+                : "Budget image-to-video"
+              : engine === "ultra"
                 ? "Ultra cinematic AI"
                 : engine === "budget"
                   ? "Budget AI motion"
@@ -118,7 +123,7 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
         void fetch("/api/credits/spend", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ engine }),
+          body: JSON.stringify({ engine, imageToVideo }),
         })
           .then((response) => response.json())
           .then((payload: { credits?: number }) => {

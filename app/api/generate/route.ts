@@ -357,7 +357,7 @@ async function* runWorkflow(
       });
       if ("videoUrl" in rendered) {
         frames = frames.map((frame) => ({ ...frame, src: rendered.videoUrl }));
-        creditsCharged = generationCreditCost(engine);
+        creditsCharged = generationCreditCost(engine, Boolean(referenceImage));
         frameDetail = referenceImage
           ? "Image-to-video clip from Fal.ai · 9:16"
           : "Fal.ai motion clip · 9:16";
