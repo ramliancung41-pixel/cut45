@@ -28,6 +28,12 @@ export function planForPriceId(priceId: string | null | undefined): BillingPlanI
   return null;
 }
 
+export function checkoutModeForPrice(price: { type?: string | null }) {
+  if (price.type === "recurring") return "subscription" as const;
+  if (price.type === "one_time") return "payment" as const;
+  throw new Error("Stripe price type is not supported.");
+}
+
 function hostedCheckoutUrl(raw: string | null | undefined) {
   if (!raw) return null;
   try {
@@ -50,7 +56,8 @@ export async function createPlanCheckoutSession(input: {
   if (!key || !price || !USER_ID.test(input.userId)) return null;
 
   const stripe = new Stripe(key);
-  const mode = input.plan === "topup" ? "payment" : "subscription";
+  const priceObject = await stripe.prices.retrieve(price);
+  const mode = checkoutModeForPrice(priceObject);
   const metadata = { plan: input.plan, user_id: input.userId };
   const params: Stripe.Checkout.SessionCreateParams = {
     mode,
