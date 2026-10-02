@@ -5,6 +5,7 @@ import {
   withSupabaseCookies,
 } from "@/lib/auth-cookie";
 import { isBillingPlanId, stripeCheckoutDestination } from "@/lib/billing";
+import { createPlanCheckoutSession } from "@/lib/stripe-checkout";
 import { refreshSupabaseSession, userFromAccessToken } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -23,10 +24,26 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(login);
   }
 
-  const destination = stripeCheckoutDestination(plan, account.userId);
+  const origin = request.nextUrl.origin;
+  let destination: string | null = null;
+  try {
+    destination = await createPlanCheckoutSession({
+      plan,
+      userId: account.userId,
+      successUrl: `${origin}/credits?checkout=success`,
+      cancelUrl: `${origin}/credits`,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Stripe could not open checkout.";
+    return NextResponse.json(
+      { error: /sk_(live|test)_/i.test(message) ? "Stripe could not open checkout." : message.slice(0, 240) },
+      { status: 502 },
+    );
+  }
+  destination ??= stripeCheckoutDestination(plan, account.userId);
   if (!destination) {
     return NextResponse.json(
-      { error: `Add the Stripe Payment Link for the ${plan} plan.` },
+      { error: `Add STRIPE_SECRET_KEY and STRIPE_PRICE_ID_${plan.toUpperCase()} for the ${plan} plan.` },
       { status: 503 },
     );
   }

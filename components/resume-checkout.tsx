@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { isBillingPlanId, stripePaymentLinkForPlan } from "@/lib/billing";
+import { isBillingPlanId } from "@/lib/billing";
 
 export function ResumeCheckout() {
   const router = useRouter();
@@ -12,7 +12,7 @@ export function ResumeCheckout() {
 
   useEffect(() => {
     if (started.current) return;
-    if (!isBillingPlanId(plan) || !stripePaymentLinkForPlan(plan)) {
+    if (!isBillingPlanId(plan)) {
       if (plan) router.replace("/credits");
       return;
     }

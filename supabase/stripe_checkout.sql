@@ -49,6 +49,15 @@ begin
     raise exception 'profile not found';
   end if;
 
+  begin
+    update public.profiles
+    set credits = coalesce(credits, 0) + p_credits
+    where id = p_user_id;
+  exception
+    when undefined_column then
+      null;
+  end;
+
   return next_tokens;
 end;
 $$;

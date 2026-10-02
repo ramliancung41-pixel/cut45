@@ -56,6 +56,14 @@ export async function grantCheckoutCredits(input: {
   credits: number;
 }) {
   const admin = createSupabaseAdminClient();
+  const existing = await admin.from("stripe_events").select("id").eq("id", input.eventId).maybeSingle();
+  if (existing.error && !/stripe_events|schema cache|relation/i.test(existing.error.message)) {
+    throw new Error(existing.error.message);
+  }
+  if (existing.data) return { alreadyApplied: true as const };
+
+  const before = await profileRow(input.userId);
+  const beforeBalance = balanceFromRow(before);
   const granted = await admin.rpc("grant_checkout_credits", {
     p_event_id: input.eventId,
     p_user_id: input.userId,
@@ -63,7 +71,18 @@ export async function grantCheckoutCredits(input: {
     p_credits: input.credits,
   });
   if (!granted.error) {
-    return { tokens: Number(granted.data) };
+    const after = await profileRow(input.userId);
+    const afterBalance = balanceFromRow(after);
+    if (
+      before &&
+      after &&
+      beforeBalance != null &&
+      afterBalance != null &&
+      afterBalance < beforeBalance + input.credits
+    ) {
+      return { tokens: await writeDisplayedBalance(input.userId, after, beforeBalance + input.credits) };
+    }
+    return { tokens: afterBalance ?? Number(granted.data) };
   }
 
   const message = granted.error.message;
@@ -89,23 +108,40 @@ export async function grantCheckoutCredits(input: {
     throw new Error(claimed.error.message);
   }
 
-  const current = await admin
-    .from(PROFILES_TABLE)
-    .select("tokens")
-    .eq("id", input.userId)
-    .maybeSingle();
-  if (current.error) throw new Error(current.error.message);
-  if (!current.data) throw new Error("Profile not found.");
+  const tokens = await addDisplayedCredits(input.userId, input.credits);
+  return { tokens };
+}
 
-  const tokens = Number(current.data.tokens) + input.credits;
-  const updated = await admin
-    .from(PROFILES_TABLE)
-    .update({ tokens })
-    .eq("id", input.userId)
-    .select("tokens")
-    .single();
+async function addDisplayedCredits(userId: string, credits: number) {
+  const row = await profileRow(userId);
+  if (!row) throw new Error("Profile not found.");
+  const shown = balanceFromRow(row);
+  if (shown == null) throw new Error("Profile not found.");
+  return writeDisplayedBalance(userId, row, shown + credits);
+}
+
+async function writeDisplayedBalance(
+  userId: string,
+  row: Record<string, unknown>,
+  next: number,
+) {
+  const patch: Record<string, number> = {};
+  if ("credits" in row) patch.credits = next;
+  if ("tokens" in row || !("credits" in row)) patch.tokens = next;
+  const admin = createSupabaseAdminClient();
+  const updated = await admin.from(PROFILES_TABLE).update(patch).eq("id", userId).select("*").maybeSingle();
+  if (updated.error && "credits" in patch) {
+    const tokensOnly = await admin
+      .from(PROFILES_TABLE)
+      .update({ tokens: next })
+      .eq("id", userId)
+      .select("*")
+      .maybeSingle();
+    if (tokensOnly.error) throw new Error(tokensOnly.error.message);
+    return balanceFromRow((tokensOnly.data as Record<string, unknown> | null) ?? null) ?? next;
+  }
   if (updated.error) throw new Error(updated.error.message);
-  return { tokens: Number(updated.data.tokens) };
+  return balanceFromRow((updated.data as Record<string, unknown> | null) ?? null) ?? next;
 }
 
 export async function readProfileLabel(userId: string) {

@@ -47,7 +47,6 @@ export function BillingPlans() {
 
               <UpgradeNowButton
                 plan={plan.id}
-                paymentLink={plan.stripePaymentLink}
                 className="gen-cta relative z-10 mt-6 inline-flex w-full cursor-pointer items-center justify-center disabled:cursor-not-allowed"
               />
             </article>

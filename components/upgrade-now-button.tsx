@@ -7,18 +7,16 @@ import type { BillingPlanId } from "@/lib/billing";
 
 export function UpgradeNowButton({
   plan,
-  paymentLink,
   className,
 }: {
   plan: BillingPlanId;
-  paymentLink: string;
   className?: string;
 }) {
   const router = useRouter();
   const [checking, setChecking] = useState(false);
 
   async function onUpgrade() {
-    if (checking || !paymentLink) return;
+    if (checking) return;
     setChecking(true);
     const signedIn = await hasAccountSession();
     if (!signedIn) {
@@ -32,7 +30,7 @@ export function UpgradeNowButton({
   return (
     <button
       type="button"
-      disabled={checking || !paymentLink}
+      disabled={checking}
       onClick={() => void onUpgrade()}
       className={className}
     >
