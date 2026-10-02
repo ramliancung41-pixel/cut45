@@ -35,7 +35,7 @@ export async function proxy(request: NextRequest) {
   }
 
   if (pathname === "/create-video" || pathname.startsWith("/create-video/")) {
-    const response = NextResponse.redirect(new URL("/create", request.url));
+    const response = NextResponse.redirect(new URL("/generator", request.url));
     return applySession(response, session);
   }
 

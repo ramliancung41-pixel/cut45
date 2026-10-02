@@ -159,7 +159,7 @@ export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
           await storeServerSession(session);
           const tokens = await createProfile(session.access_token);
           if (typeof tokens === "number") setAccountBalance(tokens);
-          router.push("/create");
+          router.push("/generator");
           router.refresh();
         } catch (error) {
           const message = error instanceof Error ? error.message : "";

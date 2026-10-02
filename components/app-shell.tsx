@@ -7,8 +7,7 @@ import { CreditTag } from "@/components/credit-provider";
 import { ProfileCreditBar } from "@/components/profile-credit-bar";
 
 const NAV = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/create", label: "Create Video" },
+  { href: "/generator", label: "Dashboard" },
   { href: "/generator", label: "AI Generator" },
   { href: "/credits", label: "Credits" },
   { href: "/gallery", label: "Gallery" },
@@ -43,7 +42,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           )}
         >
           <Link
-            href="/create"
+            href="/generator"
             onClick={() => setMenuPath(null)}
             className="flex items-center gap-3 rounded-lg px-2 py-1"
           >
@@ -63,7 +62,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               const active = pathname === item.href;
               return (
                 <Link
-                  key={item.href}
+                  key={item.label}
                   href={item.href}
                   onClick={() => setMenuPath(null)}
                   aria-current={active ? "page" : undefined}
