@@ -23,6 +23,7 @@ import { useCredits } from "@/components/credit-provider";
 import { Storyboard } from "@/components/storyboard";
 import { useDefaultVoice } from "@/components/use-default-voice";
 import { generationCreditCost } from "@/lib/credits";
+import { isMotionStyleId, MOTION_STYLES, PROMPT_MAX, type MotionStyleId } from "@/lib/motion-styles";
 
 type StepStatus = "pending" | "started" | "completed";
 
@@ -112,6 +113,8 @@ export function GenerateForm() {
   const [referenceName, setReferenceName] = useState<string | null>(null);
   const [referenceBytes, setReferenceBytes] = useState<number | null>(null);
   const [draggingImage, setDraggingImage] = useState(false);
+  const [motionStyle, setMotionStyle] = useState<MotionStyleId | "">("");
+  const [enhancing, setEnhancing] = useState(false);
   const [steps, setSteps] = useState<StepView[]>(INITIAL_STEPS);
   const [result, setResult] = useState<GenerateResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -302,8 +305,8 @@ export function GenerateForm() {
       return;
     }
 
-    if (trimmed.length > 120) {
-      setError("Keep the topic under 120 characters.");
+    if (trimmed.length > PROMPT_MAX) {
+      setError(`Keep the prompt under ${PROMPT_MAX} characters.`);
       return;
     }
 
@@ -338,6 +341,7 @@ export function GenerateForm() {
           voice,
           engine,
           ...(referenceImage ? { referenceImage } : {}),
+          ...(motionStyle ? { motionStyle } : {}),
         }),
         signal: controller.signal,
       });
@@ -438,17 +442,52 @@ export function GenerateForm() {
     if (file) acceptReference(file);
   }
 
+  async function enhancePrompt() {
+    const trimmed = topic.trim();
+    if (trimmed.length < 3 || enhancing || running) return;
+    setEnhancing(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/prompt/enhance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: trimmed }),
+      });
+      const payload = (await response.json().catch(() => null)) as { prompt?: string; error?: string } | null;
+      if (!response.ok || typeof payload?.prompt !== "string") {
+        throw new Error(payload?.error ?? "Could not enhance the prompt.");
+      }
+      setTopic(payload.prompt.slice(0, PROMPT_MAX));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not enhance the prompt.");
+    } finally {
+      setEnhancing(false);
+    }
+  }
+
   const activeStep = steps.find((step) => step.status === "started");
 
   return (
     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
       <form onSubmit={onSubmit} className="gen-glass space-y-7 rounded-3xl p-5 sm:p-6">
         <div>
-          <div className="flex items-baseline justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <label htmlFor="topic" className="text-sm font-medium tracking-tight">
               Video topic
             </label>
-            <span className="font-mono text-[11px] text-muted">{topic.trim().length}/120</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void enhancePrompt()}
+                disabled={running || enhancing || topic.trim().length < 3}
+                className="gen-enhance"
+              >
+                {enhancing ? "Enhancing…" : "✨ Auto-Enhance Prompt"}
+              </button>
+              <span className="font-mono text-[11px] text-muted">
+                {topic.trim().length}/{PROMPT_MAX}
+              </span>
+            </div>
           </div>
           <div
             className={cn("gen-prompt mt-3", draggingImage && "gen-prompt-hot")}
@@ -472,7 +511,7 @@ export function GenerateForm() {
               id="topic"
               name="topic"
               rows={4}
-              maxLength={120}
+              maxLength={PROMPT_MAX}
               value={topic}
               disabled={running}
               placeholder="Why night markets stay cheap"
@@ -531,7 +570,37 @@ export function GenerateForm() {
                 </span>
               </button>
             )}
+            <p className="gen-tip">
+              Best stills are sharp 9:16 or 3:4, at least 720×1280, with the subject fully in frame and evenly lit.
+            </p>
           </div>
+        </div>
+
+        <div>
+          <label htmlFor="motion-style" className="text-sm font-medium tracking-tight">
+            Motion style
+          </label>
+          <select
+            id="motion-style"
+            name="motion-style"
+            value={motionStyle}
+            disabled={running}
+            onChange={(event) => {
+              const value = event.target.value;
+              setMotionStyle(isMotionStyleId(value) ? value : "");
+            }}
+            className="gen-field gen-select mt-3 w-full rounded-2xl px-4 py-3 text-sm text-foreground outline-none"
+          >
+            <option value="">Optional</option>
+            {MOTION_STYLES.map((style) => (
+              <option key={style.id} value={style.id}>
+                {style.name}
+              </option>
+            ))}
+          </select>
+          <p className="mt-2 text-xs leading-5 text-muted">
+            Added to the prompt sent to Fal.ai and Luma. Leave it optional for the model default.
+          </p>
         </div>
 
         <fieldset disabled={running} className="space-y-3">

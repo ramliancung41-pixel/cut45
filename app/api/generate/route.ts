@@ -10,6 +10,7 @@ import {
 } from "@/lib/generate";
 import { generationCreditCost } from "@/lib/credits";
 import { parseReferenceImage, renderFalClip, type ReferenceImage } from "@/lib/fal-video";
+import { isMotionStyleId, PROMPT_MAX, videoMotionPrompt } from "@/lib/motion-styles";
 import { getVoice, isVoiceId } from "@/lib/voices";
 import { isVisualEngineId, type VisualEngineId } from "@/lib/visual-engines";
 
@@ -250,6 +251,7 @@ async function* runWorkflow(
   elevenLabsVoiceId: string,
   engine: VisualEngineId,
   referenceImage: ReferenceImage | null,
+  motionStyle: string | null,
   signal: AbortSignal,
 ) {
   yield encode({
@@ -349,7 +351,7 @@ async function* runWorkflow(
     try {
       const rendered = await renderFalClip({
         engine,
-        prompt: `${topic}. Vertical 9:16 motion. ${script.slice(0, 500)}`,
+        prompt: videoMotionPrompt(topic, motionStyle),
         image: referenceImage,
         signal,
       });
@@ -421,12 +423,19 @@ export async function POST(request: Request) {
 
   const record =
     body && typeof body === "object"
-      ? (body as { topic?: unknown; voice?: unknown; engine?: unknown; referenceImage?: unknown })
+      ? (body as {
+          topic?: unknown;
+          voice?: unknown;
+          engine?: unknown;
+          referenceImage?: unknown;
+          motionStyle?: unknown;
+        })
       : {};
   const topic = typeof record.topic === "string" ? record.topic.trim() : "";
   const voice = typeof record.voice === "string" ? record.voice : "";
   const engine = typeof record.engine === "string" ? record.engine : "";
   const referenceImage = parseReferenceImage(record.referenceImage);
+  const motionStyle = typeof record.motionStyle === "string" ? record.motionStyle : "";
 
   if (topic.length < 3) {
     return Response.json(
@@ -435,9 +444,9 @@ export async function POST(request: Request) {
     );
   }
 
-  if (topic.length > 120) {
+  if (topic.length > PROMPT_MAX) {
     return Response.json(
-      { error: "Keep the topic under 120 characters." },
+      { error: `Keep the prompt under ${PROMPT_MAX} characters.` },
       { status: 400 },
     );
   }
@@ -457,6 +466,10 @@ export async function POST(request: Request) {
     );
   }
 
+  if (motionStyle && !isMotionStyleId(motionStyle)) {
+    return Response.json({ error: "Select a motion style." }, { status: 400 });
+  }
+
   const voiceStyle = getVoice(voice);
   if (!voiceStyle) {
     return Response.json({ error: "Select a voice style." }, { status: 400 });
@@ -470,6 +483,7 @@ export async function POST(request: Request) {
       voiceStyle.elevenLabsVoiceId,
       engine,
       referenceImage,
+      motionStyle || null,
       request.signal,
     ),
   );
