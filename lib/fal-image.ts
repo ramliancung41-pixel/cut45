@@ -1,3 +1,4 @@
+import { falApiKey } from "@/lib/fal-key";
 import { uploadReference, type ReferenceImage } from "@/lib/fal-video";
 
 const MODEL = "fal-ai/flux/dev/image-to-image";
@@ -40,7 +41,7 @@ export async function renderFluxImage(input: {
   image: ReferenceImage;
   signal: AbortSignal;
 }): Promise<{ imageUrl: string } | { error: string }> {
-  const key = process.env.FAL_KEY?.trim();
+  const key = falApiKey();
   if (!key) return { error: "Fal.ai is not configured yet." };
 
   const imageUrl = await uploadReference(key, input.image, input.signal);

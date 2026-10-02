@@ -9,6 +9,7 @@ import {
   type GenerateEvent,
 } from "@/lib/generate";
 import { generationCreditCost } from "@/lib/credits";
+import { falApiKey } from "@/lib/fal-key";
 import { parseReferenceImage, renderFalClip, type ReferenceImage } from "@/lib/fal-video";
 import { isMotionStyleId, PROMPT_MAX, videoMotionPrompt } from "@/lib/motion-styles";
 import { getVoice, isVoiceId } from "@/lib/voices";
@@ -361,14 +362,27 @@ async function* runWorkflow(
         frameDetail = referenceImage
           ? "Image-to-video clip from Fal.ai · 9:16"
           : "Fal.ai motion clip · 9:16";
+      } else if (falApiKey()) {
+        yield encode({ type: "error", message: rendered.error });
+        return;
       } else {
         preview = true;
         await sleep(FRAME_STEP_MS, signal);
         frameDetail = `${FRAME_COUNT} stock preview clips · 9:16`;
-        yield encode({ type: "notice", message: rendered.error });
+        yield encode({
+          type: "notice",
+          message: "Fal.ai is not configured yet. A stock preview is ready instead.",
+        });
       }
     } catch (error) {
       if (isAbortError(error)) throw error;
+      if (falApiKey()) {
+        yield encode({
+          type: "error",
+          message: "Fal.ai could not be reached.",
+        });
+        return;
+      }
       preview = true;
       frameDetail = `${FRAME_COUNT} stock preview clips · 9:16`;
       yield encode({

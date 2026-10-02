@@ -1,3 +1,4 @@
+import { falApiKey } from "@/lib/fal-key";
 import type { VisualEngineId } from "@/lib/visual-engines";
 
 export type ReferenceImage = {
@@ -17,7 +18,7 @@ const MODELS: Record<Exclude<VisualEngineId, "stock">, { text: string; image: st
 };
 
 const POLL_MS = 2000;
-const POLL_BUDGET_MS = 22000;
+const POLL_BUDGET_MS = 40000;
 const MAX_IMAGE_BYTES = 1_200_000;
 
 export function parseReferenceImage(value: unknown): ReferenceImage | null | "invalid" {
@@ -96,9 +97,9 @@ export async function renderFalClip(input: {
   image: ReferenceImage | null;
   signal: AbortSignal;
 }): Promise<{ videoUrl: string } | { error: string }> {
-  const key = process.env.FAL_KEY?.trim();
+  const key = falApiKey();
   if (!key) {
-    return { error: "Fal.ai is not configured yet. A stock preview is ready instead." };
+    return { error: "Fal.ai is not configured yet." };
   }
 
   const model = input.image ? MODELS[input.engine].image : MODELS[input.engine].text;
@@ -106,7 +107,7 @@ export async function renderFalClip(input: {
   if (input.image) {
     imageUrl = await uploadReference(key, input.image, input.signal);
     if (!imageUrl) {
-      return { error: "The reference image could not be sent to Fal.ai. A stock preview is ready instead." };
+      return { error: "The reference image could not be sent to Fal.ai." };
     }
   }
 
@@ -123,7 +124,7 @@ export async function renderFalClip(input: {
     signal: input.signal,
   });
   if (!submitted.ok) {
-    return { error: "Fal.ai did not accept this render. A stock preview is ready instead." };
+    return { error: "Fal.ai did not accept this render." };
   }
 
   const queued = (await submitted.json()) as {
@@ -133,7 +134,7 @@ export async function renderFalClip(input: {
   const statusUrl = httpsUrl(queued.status_url);
   const responseUrl = httpsUrl(queued.response_url);
   if (!statusUrl || !responseUrl) {
-    return { error: "Fal.ai accepted the job without a status URL. A stock preview is ready instead." };
+    return { error: "Fal.ai accepted the job without a status URL." };
   }
 
   const started = Date.now();
@@ -147,7 +148,7 @@ export async function renderFalClip(input: {
     if (!statusResponse.ok) continue;
     const status = (await statusResponse.json()) as { status?: string };
     if (status.status === "FAILED") {
-      return { error: "Fal.ai could not finish this clip. A stock preview is ready instead." };
+      return { error: "Fal.ai could not finish this clip." };
     }
     if (status.status !== "COMPLETED") continue;
     const resultResponse = await fetch(responseUrl, {
@@ -160,9 +161,5 @@ export async function renderFalClip(input: {
     return { videoUrl };
   }
 
-  return {
-    error: input.image
-      ? "The reference image was sent to Fal.ai. The stock preview is ready while that render finishes."
-      : "Fal.ai is still rendering. The stock preview is ready while that clip finishes.",
-  };
+  return { error: "Fal.ai is still rendering this clip. Try again in a moment." };
 }
