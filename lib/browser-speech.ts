@@ -8,6 +8,8 @@ const SPEECH_STYLE: Record<VoiceId, { rate: number; pitch: number; match: RegExp
   "friendly-explainer": { rate: 1.02, pitch: 1.05, match: /samantha|karen|female|google uk english female/i },
 };
 
+let keepAlive = 0;
+
 function pickVoice(voiceId: VoiceId) {
   const voices = window.speechSynthesis
     .getVoices()
@@ -20,21 +22,40 @@ export function canSpeak() {
   return typeof window !== "undefined" && "speechSynthesis" in window;
 }
 
+export function primeSpeechVoices() {
+  if (!canSpeak()) return;
+  window.speechSynthesis.getVoices();
+  window.speechSynthesis.addEventListener("voiceschanged", () => {
+    window.speechSynthesis.getVoices();
+  }, { once: true });
+}
+
 export function stopNarration() {
+  if (keepAlive) {
+    window.clearInterval(keepAlive);
+    keepAlive = 0;
+  }
   if (!canSpeak()) return;
   window.speechSynthesis.cancel();
 }
 
 export type NarrationHandlers = {
   onStart?: () => void;
-  onProgress?: (progress: number) => void;
   onEnd?: () => void;
 };
 
-function estimateDurationMs(script: string, rate: number) {
-  const words = script.trim().split(/\s+/).filter(Boolean).length;
-  const wordsPerMinute = 150 * rate;
-  return Math.max(8000, (words / wordsPerMinute) * 60_000);
+function holdSpeechOpen() {
+  const synth = window.speechSynthesis;
+  if (keepAlive) window.clearInterval(keepAlive);
+  keepAlive = window.setInterval(() => {
+    if (!synth.speaking && !synth.pending) {
+      window.clearInterval(keepAlive);
+      keepAlive = 0;
+      return;
+    }
+    synth.pause();
+    synth.resume();
+  }, 10000);
 }
 
 export function speakNarration(
@@ -42,65 +63,33 @@ export function speakNarration(
   voiceId: VoiceId,
   handlers?: NarrationHandlers,
 ) {
-  if (!canSpeak()) return false;
+  if (!canSpeak() || !script.trim()) return false;
 
   const synth = window.speechSynthesis;
-  const start = () => {
-    synth.cancel();
-    const utterance = new SpeechSynthesisUtterance(script);
-    const style = SPEECH_STYLE[voiceId];
-    utterance.rate = style.rate;
-    utterance.pitch = style.pitch;
-    utterance.lang = "en-US";
-    const voice = pickVoice(voiceId);
-    if (voice) utterance.voice = voice;
+  synth.resume();
 
-    let sawBoundary = false;
-    let frame = 0;
-    const durationMs = estimateDurationMs(script, style.rate);
+  const utterance = new SpeechSynthesisUtterance(script);
+  const style = SPEECH_STYLE[voiceId];
+  utterance.rate = style.rate;
+  utterance.pitch = style.pitch;
+  utterance.lang = "en-US";
+  const voice = pickVoice(voiceId);
+  if (voice) utterance.voice = voice;
 
-    const tick = (startedAt: number) => {
-      if (sawBoundary) return;
-      const elapsed = performance.now() - startedAt;
-      if (!synth.speaking && elapsed > 250) return;
-      const progress = Math.min(0.98, elapsed / durationMs);
-      handlers?.onProgress?.(progress);
-      frame = window.requestAnimationFrame(() => tick(startedAt));
-    };
+  utterance.onstart = () => handlers?.onStart?.();
+  utterance.onend = () => handlers?.onEnd?.();
+  utterance.onerror = () => handlers?.onEnd?.();
 
-    utterance.onstart = () => {
-      handlers?.onStart?.();
-      const startedAt = performance.now();
-      frame = window.requestAnimationFrame(() => tick(startedAt));
-    };
-    utterance.onboundary = (event) => {
-      if (script.length === 0 || event.charIndex < 0) return;
-      sawBoundary = true;
-      window.cancelAnimationFrame(frame);
-      handlers?.onProgress?.(Math.min(1, event.charIndex / script.length));
-    };
-    utterance.onend = () => {
-      window.cancelAnimationFrame(frame);
-      handlers?.onProgress?.(1);
-      handlers?.onEnd?.();
-    };
-    utterance.onerror = () => {
-      window.cancelAnimationFrame(frame);
-      handlers?.onEnd?.();
-    };
-
+  const begin = () => {
+    synth.resume();
     synth.speak(utterance);
+    synth.resume();
+    holdSpeechOpen();
   };
 
-  if (synth.getVoices().length > 0) {
-    start();
-    return true;
-  }
-
-  const onVoices = () => {
-    synth.removeEventListener("voiceschanged", onVoices);
-    start();
-  };
-  synth.addEventListener("voiceschanged", onVoices);
+  const busy = synth.speaking || synth.pending;
+  if (busy) synth.cancel();
+  if (busy) window.setTimeout(begin, 0);
+  else begin();
   return true;
 }

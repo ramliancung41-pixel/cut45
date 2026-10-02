@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ViralSubtitles } from "@/components/viral-subtitles";
+import { primeSpeechVoices, speakNarration, stopNarration } from "@/lib/browser-speech";
 import { FRAME_LENGTH_SEC, VIDEO_DURATION_SEC, type StoryFrame } from "@/lib/generate";
+import { isVoiceId } from "@/lib/voices";
 
 function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
@@ -13,21 +15,47 @@ function activeFrameIndex(playhead: number, count: number) {
   return Math.min(count - 1, Math.floor(Math.min(playhead, 0.999) * count));
 }
 
+function narrationDurationMs(script: string) {
+  const words = script.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(12_000, Math.round((words / 155) * 60_000));
+}
+
 export function Storyboard({
   frames,
   script,
-  playhead,
-  narrating,
+  voiceId,
+  audioSrc,
+  audioLabel,
 }: {
   frames: StoryFrame[];
   script: string;
-  playhead: number;
-  narrating: boolean;
+  voiceId: string;
+  audioSrc?: string;
+  audioLabel?: string;
 }) {
+  const [playhead, setPlayhead] = useState(0);
+  const [narrating, setNarrating] = useState(false);
   const activeIndex = activeFrameIndex(playhead, frames.length);
   const active = frames[activeIndex];
   const cardRefs = useRef<Array<HTMLElement | null>>([]);
   const playerRef = useRef<HTMLVideoElement>(null);
+  const thumbRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const rafRef = useRef(0);
+  const startedAtRef = useRef(0);
+  const playingRef = useRef(false);
+  const durationRef = useRef(narrationDurationMs(script));
+  const lastUiRef = useRef(0);
+
+  useEffect(() => {
+    primeSpeechVoices();
+    return () => {
+      playingRef.current = false;
+      window.cancelAnimationFrame(rafRef.current);
+      stopNarration();
+      audioRef.current?.pause();
+    };
+  }, []);
 
   useEffect(() => {
     cardRefs.current[activeIndex]?.scrollIntoView({
@@ -38,22 +66,109 @@ export function Storyboard({
   }, [activeIndex]);
 
   useEffect(() => {
+    if (!narrating) return;
     const player = playerRef.current;
-    if (!player) return;
-    if (narrating) {
-      void player.play().catch(() => undefined);
+    const thumb = thumbRef.current;
+    if (player) void player.play().catch(() => undefined);
+    if (thumb) void thumb.play().catch(() => undefined);
+  }, [narrating, activeIndex, active?.src]);
+
+  function stopPlayback(atEnd = false) {
+    playingRef.current = false;
+    window.cancelAnimationFrame(rafRef.current);
+    stopNarration();
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      if (!atEnd) audio.currentTime = 0;
+    }
+    playerRef.current?.pause();
+    thumbRef.current?.pause();
+    setNarrating(false);
+    if (atEnd) setPlayhead(1);
+  }
+
+  function tick(now: number) {
+    if (!playingRef.current) return;
+    const audio = audioRef.current;
+    if (audio && Number.isFinite(audio.duration) && audio.duration > 0) {
+      durationRef.current = audio.duration * 1000;
+    }
+    const elapsed = now - startedAtRef.current;
+    const spoken =
+      audio && !audio.paused && Number.isFinite(audio.currentTime)
+        ? audio.currentTime * 1000
+        : elapsed;
+    const progress = Math.min(1, spoken / durationRef.current);
+    if (now - lastUiRef.current > 80 || progress >= 1) {
+      lastUiRef.current = now;
+      setPlayhead(progress);
+    }
+    if (progress >= 1) {
+      stopPlayback(true);
       return;
     }
-    player.pause();
-  }, [narrating, activeIndex, active?.src]);
+    rafRef.current = window.requestAnimationFrame(tick);
+  }
+
+  function playNarration() {
+    playingRef.current = false;
+    window.cancelAnimationFrame(rafRef.current);
+    audioRef.current?.pause();
+    playerRef.current?.pause();
+    thumbRef.current?.pause();
+
+    durationRef.current = narrationDurationMs(script);
+    startedAtRef.current = performance.now();
+    lastUiRef.current = 0;
+    playingRef.current = true;
+    setPlayhead(0);
+    setNarrating(true);
+
+    const player = playerRef.current;
+    if (player) {
+      try {
+        player.currentTime = 0;
+      } catch {
+        // The clip may not be seekable until metadata loads.
+      }
+      void player.play().catch(() => undefined);
+    }
+
+    if (audioSrc && audioRef.current) {
+      const audio = audioRef.current;
+      audio.currentTime = 0;
+      void audio.play().catch(() => {
+        if (!playingRef.current || !isVoiceId(voiceId)) return;
+        speakNarration(script, voiceId);
+      });
+    } else if (isVoiceId(voiceId)) {
+      speakNarration(script, voiceId);
+    }
+
+    window.cancelAnimationFrame(rafRef.current);
+    rafRef.current = window.requestAnimationFrame(tick);
+  }
 
   return (
     <div className="mt-5">
+      {audioSrc ? <audio ref={audioRef} src={audioSrc} preload="auto" /> : null}
+
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" onClick={playNarration} className="gen-cta">
+          Play narration
+        </button>
+        <button type="button" onClick={() => stopPlayback()} className="gen-ghost">
+          Stop
+        </button>
+        {audioLabel ? <p className="text-sm text-muted">{audioLabel}</p> : null}
+      </div>
+
       {active ? (
-        <div className="gen-player relative mx-auto w-52 sm:w-64">
+        <div className="gen-player relative mx-auto mt-4 w-52 sm:w-64">
           <video
             ref={playerRef}
-            key={active.src}
+            key={`${activeIndex}-${active.src}`}
             src={active.src}
             muted
             loop
@@ -111,6 +226,8 @@ export function Storyboard({
               aria-current={activeCard ? "true" : undefined}
             >
               <video
+                ref={activeCard ? thumbRef : undefined}
+                key={activeCard ? `thumb-${index}-${frame.src}` : frame.src}
                 src={frame.src}
                 muted
                 playsInline

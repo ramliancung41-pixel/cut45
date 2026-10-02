@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   FRAME_COUNT,
   GENERATE_STEPS,
@@ -18,7 +18,6 @@ import {
   VISUAL_ENGINES,
   type VisualEngineId,
 } from "@/lib/visual-engines";
-import { speakNarration, stopNarration } from "@/lib/browser-speech";
 import { useCredits } from "@/components/credit-provider";
 import { Storyboard } from "@/components/storyboard";
 import { useDefaultVoice } from "@/components/use-default-voice";
@@ -97,54 +96,10 @@ export function GenerateForm() {
   const [notice, setNotice] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState("Waiting for a topic.");
   const [running, setRunning] = useState(false);
-  const [playhead, setPlayhead] = useState(0);
-  const [narrating, setNarrating] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const outcomeRef = useRef<"idle" | "complete" | "error">("idle");
   const fallbackRef = useRef(false);
-  const trackRef = useRef<HTMLAudioElement | null>(null);
   const voice = voiceOverride ?? storedVoice;
-
-  function stopTrack() {
-    const track = trackRef.current;
-    if (!track) return;
-    track.pause();
-    track.removeAttribute("src");
-    track.load();
-    trackRef.current = null;
-  }
-
-  function playTrack(src: string) {
-    stopNarration();
-    stopTrack();
-    const track = new Audio(src);
-    trackRef.current = track;
-    track.onplay = () => setNarrating(true);
-    track.ontimeupdate = () => {
-      if (!Number.isFinite(track.duration) || track.duration <= 0) return;
-      setPlayhead(Math.min(1, track.currentTime / track.duration));
-    };
-    track.onended = () => {
-      setPlayhead(1);
-      setNarrating(false);
-    };
-    track.onerror = () => setNarrating(false);
-    void track.play();
-  }
-
-  useEffect(() => {
-    if (!result || !isVoiceId(result.voiceId)) return;
-    if (result.audioSrc) {
-      playTrack(result.audioSrc);
-      return () => stopTrack();
-    }
-    speakNarration(result.script, result.voiceId, {
-      onStart: () => setNarrating(true),
-      onProgress: setPlayhead,
-      onEnd: () => setNarrating(false),
-    });
-    return () => stopNarration();
-  }, [result]);
 
   function resetRun() {
     outcomeRef.current = "idle";
@@ -153,29 +108,6 @@ export function GenerateForm() {
     setResult(null);
     setError(null);
     setNotice(null);
-    setPlayhead(0);
-    setNarrating(false);
-  }
-
-  function playNarration() {
-    if (!result || !isVoiceId(result.voiceId)) return;
-    setPlayhead(0);
-    if (result.audioSrc) {
-      playTrack(result.audioSrc);
-      return;
-    }
-    stopTrack();
-    speakNarration(result.script, result.voiceId, {
-      onStart: () => setNarrating(true),
-      onProgress: setPlayhead,
-      onEnd: () => setNarrating(false),
-    });
-  }
-
-  function haltNarration() {
-    stopNarration();
-    stopTrack();
-    setNarrating(false);
   }
 
   function applyEvent(event: GenerateEvent) {
@@ -223,7 +155,6 @@ export function GenerateForm() {
         audioSrc: event.result.audioSrc,
         createdAt: new Date().toISOString(),
       });
-      setPlayhead(0);
       setResult(event.result);
       setStatusMessage(
         event.result.preview
@@ -277,7 +208,6 @@ export function GenerateForm() {
     }
 
     outcomeRef.current = "complete";
-    setPlayhead(0);
     setResult({
       id: `c45_${Date.now().toString(36)}`,
       topic: topicText,
@@ -366,7 +296,6 @@ export function GenerateForm() {
     }
 
     abortRef.current?.abort();
-    haltNarration();
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -642,20 +571,12 @@ export function GenerateForm() {
                   </span>
                 ) : null}
               </div>
-              <div className="mt-4 flex flex-wrap items-center gap-3">
-                <button type="button" onClick={playNarration} className="gen-cta">
-                  Play narration
-                </button>
-                <button type="button" onClick={haltNarration} className="gen-ghost">
-                  Stop
-                </button>
-                <p className="text-sm text-muted">{result.audioLabel}</p>
-              </div>
               <Storyboard
                 frames={result.frames}
                 script={result.script}
-                playhead={playhead}
-                narrating={narrating}
+                voiceId={result.voiceId}
+                audioSrc={result.audioSrc}
+                audioLabel={result.audioLabel}
               />
               <h3 className="mt-5 text-sm font-medium tracking-tight">Script</h3>
               <p className="mt-2 text-sm leading-7 text-foreground/90">{result.script}</p>
