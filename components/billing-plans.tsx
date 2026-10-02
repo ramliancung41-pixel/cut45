@@ -45,13 +45,6 @@ export function BillingPlans() {
               <p className="mt-1 text-sm text-muted">{plan.volume}</p>
               <p className="mt-3 text-sm leading-6 text-muted">{plan.summary}</p>
 
-              <p className="mt-4 text-[11px] uppercase tracking-[0.14em] text-muted">
-                Stripe Payment Link
-              </p>
-              <p className="mt-1 break-all font-mono text-[11px] leading-5">
-                {plan.stripePaymentLink || plan.stripePaymentLinkEnv}
-              </p>
-
               <UpgradeNowButton
                 plan={plan.id}
                 paymentLink={plan.stripePaymentLink}
