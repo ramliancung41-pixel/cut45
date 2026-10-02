@@ -73,18 +73,18 @@ async function storeServerSession(session: Session) {
 }
 
 async function createProfile(accessToken: string) {
-  const response = await fetch("/api/auth/profile", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  const payload = (await response.json().catch(() => null)) as {
-    tokens?: number;
-    error?: string;
-  } | null;
-  if (!response.ok || typeof payload?.tokens !== "number") {
-    throw new Error(payload?.error ?? "Could not save the profile.");
+  try {
+    const response = await fetch("/api/auth/profile", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const payload = (await response.json().catch(() => null)) as {
+      tokens?: number;
+    } | null;
+    return typeof payload?.tokens === "number" ? payload.tokens : null;
+  } catch {
+    return null;
   }
-  return payload.tokens;
 }
 
 function GoogleMark() {
@@ -158,7 +158,7 @@ export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
         try {
           await storeServerSession(session);
           const tokens = await createProfile(session.access_token);
-          setAccountBalance(tokens);
+          if (typeof tokens === "number") setAccountBalance(tokens);
           router.push("/create");
           router.refresh();
         } catch (error) {
@@ -225,13 +225,13 @@ export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email: nextEmail }),
-          });
+          }).catch(() => undefined);
           setNotice(VERIFY_NOTICE);
           return;
         }
         await storeServerSession(data.session);
         const tokens = await createProfile(data.session.access_token);
-        setAccountBalance(tokens);
+        if (typeof tokens === "number") setAccountBalance(tokens);
       } else {
         const { data, error } = await supabase.auth.signInWithPassword({
           email: nextEmail,
@@ -243,7 +243,7 @@ export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
         }
         await storeServerSession(data.session);
         const tokens = await createProfile(data.session.access_token);
-        setAccountBalance(tokens);
+        if (typeof tokens === "number") setAccountBalance(tokens);
       }
 
       router.push(afterAuth);

@@ -3,30 +3,42 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 export const STARTING_TOKENS = 100;
 export const PROFILES_TABLE = "profiles";
 
+function tokenCount(value: unknown) {
+  const tokens = Number(value);
+  return Number.isFinite(tokens) ? tokens : STARTING_TOKENS;
+}
+
 export async function ensureProfile(userId: string, email: string) {
-  const admin = createSupabaseAdminClient();
-  const existing = await admin
-    .from(PROFILES_TABLE)
-    .select("tokens")
-    .eq("id", userId)
-    .maybeSingle();
+  try {
+    const admin = createSupabaseAdminClient();
+    const existing = await admin
+      .from(PROFILES_TABLE)
+      .select("tokens")
+      .eq("id", userId)
+      .maybeSingle();
 
-  if (existing.error) {
-    throw new Error(existing.error.message);
-  }
-  if (existing.data) {
-    return Number(existing.data.tokens);
-  }
+    if (existing.error) return STARTING_TOKENS;
+    if (existing.data) return tokenCount(existing.data.tokens);
 
-  const inserted = await admin.from(PROFILES_TABLE).insert({
-    id: userId,
-    email,
-    tokens: STARTING_TOKENS,
-  });
-  if (inserted.error) {
-    throw new Error(inserted.error.message);
+    const inserted = await admin.from(PROFILES_TABLE).insert({
+      id: userId,
+      email,
+      tokens: STARTING_TOKENS,
+    });
+    if (!inserted.error) return STARTING_TOKENS;
+
+    if (inserted.error.code === "23505") {
+      const again = await admin
+        .from(PROFILES_TABLE)
+        .select("tokens")
+        .eq("id", userId)
+        .maybeSingle();
+      if (!again.error && again.data) return tokenCount(again.data.tokens);
+    }
+    return STARTING_TOKENS;
+  } catch {
+    return STARTING_TOKENS;
   }
-  return STARTING_TOKENS;
 }
 
 export async function findAuthUserId(email: string) {
@@ -97,12 +109,16 @@ export async function grantCheckoutCredits(input: {
 }
 
 export async function readProfileTokens(userId: string) {
-  const admin = createSupabaseAdminClient();
-  const result = await admin
-    .from(PROFILES_TABLE)
-    .select("tokens")
-    .eq("id", userId)
-    .maybeSingle();
-  if (result.error || !result.data) return null;
-  return Number(result.data.tokens);
+  try {
+    const admin = createSupabaseAdminClient();
+    const result = await admin
+      .from(PROFILES_TABLE)
+      .select("tokens")
+      .eq("id", userId)
+      .maybeSingle();
+    if (result.error || !result.data) return null;
+    return tokenCount(result.data.tokens);
+  } catch {
+    return null;
+  }
 }
