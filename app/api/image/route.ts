@@ -38,6 +38,7 @@ export async function POST(request: NextRequest) {
       signal: request.signal,
     });
     if ("error" in rendered) {
+      console.error("Fal image generation failed", rendered.error);
       return NextResponse.json({ error: rendered.error }, { status: 502 });
     }
     return NextResponse.json({
@@ -47,9 +48,11 @@ export async function POST(request: NextRequest) {
       creditsCharged: IMAGE_GENERATION_COST,
     });
   } catch (error) {
+    console.error("Fal image generation failed", error);
     if (error instanceof DOMException && error.name === "AbortError") {
       return NextResponse.json({ error: "Image generation was stopped." }, { status: 499 });
     }
-    return NextResponse.json({ error: "Could not render that image." }, { status: 500 });
+    const message = error instanceof Error && error.message ? error.message : "Could not render that image.";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
