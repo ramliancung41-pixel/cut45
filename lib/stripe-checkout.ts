@@ -93,6 +93,27 @@ function isUnknownCheckoutParameter(error: unknown, parameter: string) {
   );
 }
 
+export function checkoutCustomerEmail(session: Stripe.Checkout.Session) {
+  const direct = session.customer_email?.trim() ?? "";
+  if (direct) return direct;
+  const details = session.customer_details?.email?.trim() ?? "";
+  return details || null;
+}
+
+export function paidCreditGrant(session: Stripe.Checkout.Session, plan: BillingPlanId) {
+  for (const item of session.line_items?.data ?? []) {
+    const price = item.price;
+    if (!price || typeof price === "string") continue;
+    const matched = planForCatalogAmount(price.unit_amount, price.currency);
+    if (matched === "starter") return 300;
+    if (matched === "pro") return 1000;
+    if (matched === "topup") return 150;
+  }
+  if (plan === "starter") return 300;
+  if (plan === "pro") return 1000;
+  return 150;
+}
+
 export function checkoutUserId(session: Stripe.Checkout.Session) {
   const reference = session.client_reference_id?.trim() ?? "";
   if (USER_ID.test(reference)) return reference;

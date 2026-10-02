@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { grantProfileCredits } from "@/lib/profiles";
-import { checkoutPlan, checkoutUserId, lineItemPriceId, stripeSecretKey } from "@/lib/stripe-checkout";
+import { findProfileIdByEmail, grantProfileCredits, ProfileGrantError } from "@/lib/profiles";
+import {
+  checkoutCustomerEmail,
+  checkoutPlan,
+  checkoutUserId,
+  lineItemPriceId,
+  paidCreditGrant,
+  stripeSecretKey,
+} from "@/lib/stripe-checkout";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -69,14 +76,32 @@ export async function POST(request: Request) {
     return NextResponse.json({ received: true });
   }
 
-  const userId = checkoutUserId(session);
+  const customerEmail = checkoutCustomerEmail(session);
+  let userId = checkoutUserId(session);
+  if (!userId && customerEmail) {
+    try {
+      userId = await findProfileIdByEmail(customerEmail);
+    } catch (error) {
+      console.error("supabase profile email", error instanceof Error ? error.message : error);
+      return NextResponse.json(profileErrorBody(error), { status: 500 });
+    }
+  }
   console.log("stripe checkout user", {
     userId,
     client_reference_id: session.client_reference_id,
     metadata: session.metadata,
+    customer_email: customerEmail,
   });
   if (!userId) {
-    return NextResponse.json({ error: "Checkout session is missing the user id." }, { status: 400 });
+    return NextResponse.json(
+      {
+        error: "Checkout session is missing the user id.",
+        client_reference_id: session.client_reference_id,
+        metadata: session.metadata,
+        customer_email: customerEmail,
+      },
+      { status: 400 },
+    );
   }
 
   let plan: Awaited<ReturnType<typeof checkoutPlan>>;
@@ -91,23 +116,43 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Checkout session is missing the plan." }, { status: 400 });
   }
 
-  const credits = plan === "starter" ? 300 : plan === "pro" ? 1000 : plan === "topup" ? 150 : 0;
+  const credits = paidCreditGrant(session, plan);
   if (credits !== 300 && credits !== 1000 && credits !== 150) {
     console.error("stripe checkout unknown plan", plan, credits);
-    return NextResponse.json({ error: "Unknown plan." }, { status: 400 });
+    return NextResponse.json({ error: "Unknown plan.", plan, credits }, { status: 400 });
   }
 
   try {
     const result = await grantProfileCredits({
       eventId: event.id,
       userId,
+      email: customerEmail,
       plan,
       credits,
     });
     console.log("stripe credit grant", JSON.stringify(result));
     return NextResponse.json({ received: true, ...result });
   } catch (error) {
-    console.error("supabase credit grant", error instanceof Error ? error.message : error);
-    return NextResponse.json({ error: "Could not update the profile." }, { status: 500 });
+    const body = profileErrorBody(error);
+    console.error("supabase credit grant", JSON.stringify(body));
+    return NextResponse.json(body, { status: 500 });
   }
+}
+
+function profileErrorBody(error: unknown) {
+  if (error instanceof ProfileGrantError) {
+    return {
+      error: "Could not update the profile.",
+      step: error.step,
+      message: error.message,
+      code: error.code ?? null,
+      details: error.details ?? null,
+      hint: error.hint ?? null,
+    };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    error: "Could not update the profile.",
+    message: message.replace(/sk_(live|test)_\w+/g, "[redacted]").slice(0, 500),
+  };
 }

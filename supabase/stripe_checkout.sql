@@ -79,8 +79,7 @@ begin
   end if;
 
   update public.profiles
-  set credits = coalesce(credits, 0) + credit_amount,
-      tokens = coalesce(tokens, 0) + credit_amount
+  set credits = coalesce(credits, 0) + credit_amount
   where id = user_id
   returning credits into next_credits;
 

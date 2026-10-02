@@ -49,9 +49,54 @@ export async function findAuthUserId(email: string) {
   return match?.id ?? null;
 }
 
+export class ProfileGrantError extends Error {
+  step: string;
+  code?: string;
+  details?: string | null;
+  hint?: string | null;
+
+  constructor(
+    step: string,
+    message: string,
+    extra?: { code?: string; details?: string | null; hint?: string | null },
+  ) {
+    super(message);
+    this.name = "ProfileGrantError";
+    this.step = step;
+    this.code = extra?.code;
+    this.details = extra?.details ?? null;
+    this.hint = extra?.hint ?? null;
+  }
+}
+
+function grantError(
+  step: string,
+  error: { message?: string; code?: string; details?: string | null; hint?: string | null } | null,
+  fallback: string,
+) {
+  return new ProfileGrantError(step, error?.message || fallback, {
+    code: error?.code,
+    details: error?.details,
+    hint: error?.hint,
+  });
+}
+
+export async function findProfileIdByEmail(email: string) {
+  const admin = createSupabaseAdminClient();
+  const normalized = email.trim().toLowerCase();
+  const found = await admin.from(PROFILES_TABLE).select("id, email").ilike("email", normalized);
+  console.log("supabase profiles email", JSON.stringify({ error: found.error, count: found.data?.length ?? 0 }));
+  if (found.error) throw grantError("profiles email", found.error, "Could not search profiles by email.");
+  const match = (found.data ?? []).find(
+    (row) => String(row.email ?? "").trim().toLowerCase() === normalized,
+  );
+  return typeof match?.id === "string" ? match.id : null;
+}
+
 export async function grantProfileCredits(input: {
   eventId: string;
   userId: string;
+  email?: string | null;
   plan: "starter" | "pro" | "topup";
   credits: number;
 }) {
@@ -72,21 +117,26 @@ export async function grantProfileCredits(input: {
   const missingEvents = Boolean(
     claim.error && /stripe_events|schema cache|relation/i.test(claim.error.message),
   );
-  if (claim.error && !missingEvents) throw new Error(claim.error.message);
+  if (claim.error && !missingEvents) throw grantError("stripe_events insert", claim.error, "Could not record the payment.");
 
+  const profileId = await resolveCreditProfileId(input.userId, input.email ?? null);
   const granted = await admin.rpc("add_user_credits", {
-    user_id: input.userId,
+    user_id: profileId,
     credit_amount: input.credits,
   });
   console.log("supabase add_user_credits", JSON.stringify({ data: granted.data, error: granted.error }));
   if (!granted.error) {
     const credits = Number(granted.data);
-    return { credits: Number.isFinite(credits) ? credits : input.credits, via: "rpc" as const };
+    return {
+      credits: Number.isFinite(credits) ? credits : input.credits,
+      userId: profileId,
+      via: "rpc" as const,
+    };
   }
 
   console.error("supabase add_user_credits failed", granted.error.message);
   try {
-    return await addCreditsOnProfile(input.userId, input.credits);
+    return await addCreditsOnProfile(profileId, input.credits);
   } catch (error) {
     if (!missingEvents) {
       const removed = await admin.from("stripe_events").delete().eq("id", input.eventId);
@@ -96,15 +146,38 @@ export async function grantProfileCredits(input: {
   }
 }
 
+async function resolveCreditProfileId(userId: string, email: string | null) {
+  const admin = createSupabaseAdminClient();
+  const byId = await admin.from(PROFILES_TABLE).select("id").eq("id", userId).maybeSingle();
+  console.log("supabase profiles by id", JSON.stringify({ data: byId.data, error: byId.error }));
+  if (byId.error) throw grantError("profiles select", byId.error, "Could not read the profile.");
+  if (byId.data?.id) return byId.data.id;
+
+  if (email) {
+    const matched = await findProfileIdByEmail(email);
+    if (matched) return matched;
+  }
+
+  const inserted = await admin
+    .from(PROFILES_TABLE)
+    .insert({ id: userId, email: email ?? "", credits: 0 })
+    .select("id")
+    .maybeSingle();
+  console.log("supabase profiles insert", JSON.stringify({ data: inserted.data, error: inserted.error }));
+  if (inserted.error || !inserted.data?.id) {
+    throw grantError("profiles insert", inserted.error, "Profile not found.");
+  }
+  return inserted.data.id;
+}
+
 async function addCreditsOnProfile(userId: string, amount: number) {
   const admin = createSupabaseAdminClient();
   const current = await admin.from(PROFILES_TABLE).select("credits").eq("id", userId).maybeSingle();
   console.log("supabase profiles select", JSON.stringify({ data: current.data, error: current.error }));
-  if (current.error) throw new Error(current.error.message);
-  if (!current.data) throw new Error("Profile not found.");
+  if (current.error) throw grantError("profiles select", current.error, "Could not read the profile.");
+  if (!current.data) throw new ProfileGrantError("profiles select", "Profile not found.");
 
-  const row = current.data as { credits?: number | null };
-  const currentCredits = Number(row.credits);
+  const currentCredits = Number((current.data as { credits?: number | null }).credits);
   const next = (Number.isFinite(currentCredits) ? currentCredits : 0) + amount;
   const updated = await admin
     .from(PROFILES_TABLE)
@@ -116,9 +189,9 @@ async function addCreditsOnProfile(userId: string, amount: number) {
     "supabase profiles credits update",
     JSON.stringify({ credits: next, data: updated.data, error: updated.error }),
   );
-  if (updated.error) throw new Error(updated.error.message);
-  if (!updated.data) throw new Error("Profile not found.");
-  return { credits: Number(updated.data.credits), via: "profiles" as const };
+  if (updated.error) throw grantError("profiles update", updated.error, "Could not update the profile.");
+  if (!updated.data) throw new ProfileGrantError("profiles update", "Profile not found.");
+  return { credits: Number(updated.data.credits), userId, via: "profiles" as const };
 }
 
 export async function grantCheckoutCredits(input: {
