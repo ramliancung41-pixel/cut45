@@ -24,6 +24,7 @@ import { useDefaultVoice } from "@/components/use-default-voice";
 import { IMAGE_GENERATION_COST, generationCreditCost } from "@/lib/credits";
 import { IMAGE_STYLES, imageStyleName, isImageStyleId, type ImageStyleId } from "@/lib/image-styles";
 import { isMotionStyleId, MOTION_STYLES, PROMPT_MAX, type MotionStyleId } from "@/lib/motion-styles";
+import { prepareReferenceImage } from "@/lib/prepare-reference-image";
 
 type StepStatus = "pending" | "started" | "completed";
 
@@ -152,6 +153,7 @@ export function GenerateForm() {
   const abortRef = useRef<AbortController | null>(null);
   const imageRunRef = useRef(false);
   const previewRef = useRef<string | null>(null);
+  const acceptIdRef = useRef(0);
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const outcomeRef = useRef<"idle" | "complete" | "error">("idle");
   const fallbackRef = useRef(false);
@@ -588,35 +590,42 @@ export function GenerateForm() {
     };
   }, []);
 
-  function acceptReference(file: File) {
+  async function acceptReference(file: File) {
     if (!/^image\/(jpeg|png|webp)$/.test(file.type)) {
       setError("Use a JPEG, PNG, or WebP reference image.");
       return;
     }
-    if (file.size > 1_200_000) {
-      setError("Keep the reference image under 1.2 MB.");
+    if (file.size > 25 * 1024 * 1024) {
+      setError("Use an image under 25 MB.");
       return;
     }
     replacePreview(URL.createObjectURL(file));
     setReferenceName(file.name);
     setReferenceBytes(file.size);
+    setReferenceImage(null);
     setEngine("budget");
+    const acceptId = ++acceptIdRef.current;
     setError((current) =>
       current === "Use a JPEG, PNG, or WebP reference image." ||
-      current === "Keep the reference image under 1.2 MB."
+      current === "Use an image under 25 MB." ||
+      current === "Could not prepare that image."
         ? null
         : current,
     );
-    const reader = new FileReader();
-    reader.onload = () => {
-      const value = typeof reader.result === "string" ? reader.result : "";
-      if (!value.startsWith("data:image/")) return;
-      setReferenceImage(value);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const dataUrl = await prepareReferenceImage(file);
+      if (acceptIdRef.current !== acceptId) return;
+      setReferenceImage(dataUrl);
+    } catch (caught) {
+      if (acceptIdRef.current !== acceptId) return;
+      const message = caught instanceof Error ? caught.message : "Could not prepare that image.";
+      setError(message);
+      clearReference();
+    }
   }
 
   function clearReference() {
+    acceptIdRef.current += 1;
     replacePreview(null);
     setReferenceImage(null);
     setReferenceName(null);

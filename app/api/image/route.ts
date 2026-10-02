@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
 
   const image = parseReferenceImage(body?.referenceImage);
   if (image === "invalid" || !image) {
-    return NextResponse.json({ error: "Upload a JPEG, PNG, or WebP input image under 1.2 MB." }, { status: 400 });
+    return NextResponse.json({ error: "Upload a JPEG, PNG, or WebP input image." }, { status: 400 });
   }
 
   try {

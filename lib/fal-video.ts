@@ -19,7 +19,7 @@ const MODELS: Record<Exclude<VisualEngineId, "stock">, { text: string; image: st
 
 const POLL_MS = 2000;
 const POLL_BUDGET_MS = 40000;
-const MAX_IMAGE_BYTES = 1_200_000;
+const MAX_IMAGE_BYTES = 3_500_000;
 
 export function parseReferenceImage(value: unknown): ReferenceImage | null | "invalid" {
   if (value == null || value === "") return null;

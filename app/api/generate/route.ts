@@ -475,7 +475,7 @@ export async function POST(request: Request) {
 
   if (referenceImage === "invalid") {
     return Response.json(
-      { error: "Use a JPEG, PNG, or WebP reference image under 1.2 MB." },
+      { error: "Use a JPEG, PNG, or WebP reference image." },
       { status: 400 },
     );
   }
