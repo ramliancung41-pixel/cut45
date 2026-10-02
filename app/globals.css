@@ -1,0 +1,196 @@
+@import "tailwindcss";
+
+:root {
+  --background: #12100e;
+  --foreground: #f4efe6;
+  --panel: #1c1916;
+  --panel-raised: #26211c;
+  --line: rgba(244, 239, 230, 0.12);
+  --muted: #c4b8a8;
+  --accent: #ff5a1f;
+  --accent-ink: #2a1008;
+  --ok: #d5ee8a;
+  --danger: #ff9b8a;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-panel: var(--panel);
+  --color-panel-raised: var(--panel-raised);
+  --color-line: var(--line);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-ok: var(--ok);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background:
+    radial-gradient(1000px 420px at 0% -10%, rgba(255, 90, 31, 0.08), transparent 55%),
+    var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+::selection {
+  background: rgba(255, 90, 31, 0.35);
+  color: var(--foreground);
+}
+
+.viral-caption {
+  max-width: 100%;
+  text-align: center;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(1.15rem, 4.2vw, 1.7rem);
+  font-weight: 900;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: #ffe14a;
+  -webkit-text-stroke: 1.5px #000;
+  paint-order: stroke fill;
+  text-shadow:
+    0 2px 0 #000,
+    2px 0 0 #000,
+    -2px 0 0 #000,
+    0 -2px 0 #000,
+    2px 2px 0 #000,
+    -2px 2px 0 #000,
+    2px -2px 0 #000,
+    -2px -2px 0 #000;
+  animation: viral-caption-in 120ms ease-out;
+}
+
+@keyframes viral-caption-in {
+  from {
+    opacity: 0.35;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.hero-title {
+  animation: hero-title-in 800ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.hero-mark {
+  color: var(--accent);
+  animation: hero-mark-glow 2.6s ease-in-out 0.7s infinite;
+}
+
+@keyframes hero-title-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes hero-mark-glow {
+  0%,
+  100% {
+    text-shadow: 0 0 0 rgba(255, 90, 31, 0);
+  }
+  50% {
+    text-shadow: 0 0 28px rgba(255, 90, 31, 0.7);
+  }
+}
+
+@keyframes preview-cruise {
+  from {
+    transform: scale(1.12) translate3d(0, 3%, 0);
+  }
+  to {
+    transform: scale(1.2) translate3d(-2%, -4%, 0);
+  }
+}
+
+@keyframes preview-descent {
+  from {
+    transform: scale(1.08) translate3d(0, -5%, 0);
+  }
+  to {
+    transform: scale(1.16) translate3d(1%, 4%, 0);
+  }
+}
+
+@keyframes preview-rain {
+  from {
+    background-position:
+      0 0,
+      12px 0;
+  }
+  to {
+    background-position:
+      -8px 180px,
+      4px 260px;
+  }
+}
+
+.preview-cruise,
+.preview-descent {
+  position: absolute;
+  inset: -8%;
+  width: 116%;
+  height: 116%;
+  object-fit: cover;
+  will-change: transform;
+}
+
+.preview-cruise {
+  animation: preview-cruise 9s ease-in-out infinite alternate;
+}
+
+.preview-descent {
+  animation: preview-descent 11s ease-in-out infinite alternate;
+}
+
+.preview-rain {
+  background-image:
+    linear-gradient(180deg, transparent 0 40%, rgba(255, 255, 255, 0.55) 40% 46%, transparent 46%),
+    linear-gradient(180deg, transparent 0 55%, rgba(140, 255, 255, 0.4) 55% 60%, transparent 60%);
+  background-size:
+    2px 22px,
+    1px 34px;
+  animation: preview-rain 0.85s linear infinite;
+  mix-blend-mode: screen;
+  opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-title,
+  .hero-mark,
+  .preview-cruise,
+  .preview-descent,
+  .preview-rain {
+    animation: none;
+  }
+}
+
+.auth-stage {
+  display: flex;
+  min-height: 100dvh;
+  align-items: center;
+  justify-content: center;
+  background-color: #000;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.055) 1px, transparent 1px);
+  background-size: 56px 56px;
+  padding:
+    max(1.5rem, env(safe-area-inset-top))
+    max(1rem, env(safe-area-inset-right))
+    max(1.5rem, env(safe-area-inset-bottom))
+    max(1rem, env(safe-area-inset-left));
+  color: #fff;
+}
