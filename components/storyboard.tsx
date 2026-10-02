@@ -50,7 +50,7 @@ export function Storyboard({
   return (
     <div className="mt-5">
       {active ? (
-        <div className="relative mx-auto w-52 sm:w-64">
+        <div className="gen-player relative mx-auto w-52 sm:w-64">
           <video
             ref={playerRef}
             key={active.src}
@@ -60,7 +60,7 @@ export function Storyboard({
             playsInline
             autoPlay={narrating}
             preload="auto"
-            className="aspect-[9/16] w-full rounded-xl border border-line object-cover"
+            className="aspect-[9/16] w-full rounded-[1.15rem] object-cover"
           />
           <ViralSubtitles script={script} playhead={playhead} visible={narrating} />
           <p className="mt-2 text-center font-mono text-[11px] text-muted">

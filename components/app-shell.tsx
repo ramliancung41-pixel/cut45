@@ -38,7 +38,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         <aside
           className={cn(
-            "fixed inset-y-0 left-0 z-30 w-64 flex-col border-r border-line bg-panel px-3 py-5 md:sticky md:top-0 md:flex md:h-dvh",
+            "studio-side fixed inset-y-0 left-0 z-30 w-64 flex-col px-3 py-5 md:sticky md:top-0 md:flex md:h-dvh",
             open ? "flex" : "hidden",
           )}
         >
@@ -68,10 +68,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   onClick={() => setMenuPath(null)}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "rounded-lg px-3 py-2.5 text-sm transition-colors",
+                    "rounded-xl px-3 py-2.5 text-sm transition-colors",
                     active
-                      ? "bg-panel-raised font-medium text-foreground"
-                      : "text-muted hover:bg-panel-raised/80 hover:text-foreground",
+                      ? "studio-nav-on font-medium text-foreground"
+                      : "text-muted hover:bg-white/5 hover:text-foreground",
                   )}
                 >
                   {item.label}

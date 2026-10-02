@@ -2,13 +2,18 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  FRAME_COUNT,
   GENERATE_STEPS,
+  VIDEO_DURATION_SEC,
+  buildStoryboard,
+  countWords,
   isGenerateEvent,
+  previewScript,
   type GenerateEvent,
   type GenerateResult,
   type GenerateStepId,
 } from "@/lib/generate";
-import { VOICES, isVoiceId, type VoiceId } from "@/lib/voices";
+import { VOICES, getVoice, isVoiceId, type VoiceId } from "@/lib/voices";
 import {
   VISUAL_ENGINES,
   type VisualEngineId,
@@ -36,6 +41,46 @@ const INITIAL_STEPS: StepView[] = GENERATE_STEPS.map((step) => ({
   message: "Waiting",
 }));
 
+const VOICE_NOTE: Record<VoiceId, string> = {
+  "warm-narrator": "Steady, close narration",
+  "energetic-host": "Bright pace for quick claims",
+  "calm-documentary": "Low, dry documentary tone",
+  "deep-cinematic": "Wide, low cinematic read",
+  "friendly-explainer": "Conversational walkthrough",
+};
+
+const ENGINE_NOTE: Record<VisualEngineId, string> = {
+  stock: "Free stock loops",
+  premium: "Synthetic motion graphics",
+};
+
+const FALLBACK_NOTICE =
+  "The free-tier limit was reached. A browser preview is ready with stock frames, so you can keep testing.";
+
+function isRecoverableFailure(message: string) {
+  return /429|quota|rate.?limit|resource exhausted|free tier|could not reach|elevenlabs|gemini|unexpected response|progress stream/i.test(
+    message,
+  );
+}
+
+function wait(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
@@ -56,6 +101,7 @@ export function GenerateForm() {
   const [narrating, setNarrating] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const outcomeRef = useRef<"idle" | "complete" | "error">("idle");
+  const fallbackRef = useRef(false);
   const trackRef = useRef<HTMLAudioElement | null>(null);
   const voice = voiceOverride ?? storedVoice;
 
@@ -102,6 +148,7 @@ export function GenerateForm() {
 
   function resetRun() {
     outcomeRef.current = "idle";
+    fallbackRef.current = false;
     setSteps(INITIAL_STEPS.map((step) => ({ ...step })));
     setResult(null);
     setError(null);
@@ -184,9 +231,66 @@ export function GenerateForm() {
       return;
     }
 
+    if (isRecoverableFailure(event.message)) {
+      fallbackRef.current = true;
+      outcomeRef.current = "idle";
+      setError(null);
+      setNotice(FALLBACK_NOTICE);
+      setStatusMessage(FALLBACK_NOTICE);
+      return;
+    }
+
     outcomeRef.current = "error";
     setError(event.message);
     setStatusMessage(event.message);
+  }
+
+  async function runBrowserPreview(topicText: string, signal: AbortSignal) {
+    const script = previewScript(topicText);
+    const frames = buildStoryboard(script);
+    const voiceStyle = getVoice(voice);
+    setError(null);
+    setNotice(FALLBACK_NOTICE);
+    setStatusMessage(FALLBACK_NOTICE);
+
+    for (const step of GENERATE_STEPS) {
+      setSteps((current) =>
+        current.map((item) =>
+          item.id === step.id ? { ...item, status: "started", message: "Working…" } : item,
+        ),
+      );
+      await wait(380, signal);
+      setSteps((current) =>
+        current.map((item) =>
+          item.id === step.id
+            ? {
+                ...item,
+                status: "completed",
+                message: "Ready",
+                detail: step.id === "frames" ? `${FRAME_COUNT} stock preview frames` : item.detail,
+              }
+            : item,
+        ),
+      );
+    }
+
+    outcomeRef.current = "complete";
+    setPlayhead(0);
+    setResult({
+      id: `c45_${Date.now().toString(36)}`,
+      topic: topicText,
+      voiceId: voice,
+      voiceName: voiceStyle?.name ?? "Voice",
+      durationSec: VIDEO_DURATION_SEC,
+      script,
+      wordCount: countWords(script),
+      audioLabel: `${voiceStyle?.name ?? "Voice"} · browser preview`,
+      frames,
+      engine,
+      creditsCharged: 0,
+      preview: true,
+    });
+    setStatusMessage("Browser preview ready.");
   }
 
   function consumeChunk(chunk: string) {
@@ -283,7 +387,12 @@ export function GenerateForm() {
         const payload = (await response.json().catch(() => null)) as {
           error?: string;
         } | null;
-        throw new Error(payload?.error ?? "Could not start generation.");
+        const message = payload?.error ?? "Could not start generation.";
+        if (response.status === 429 || response.status >= 500 || isRecoverableFailure(message)) {
+          await runBrowserPreview(trimmed, controller.signal);
+          return;
+        }
+        throw new Error(message);
       }
 
       const contentType = response.headers.get("content-type") ?? "";
@@ -296,19 +405,29 @@ export function GenerateForm() {
       if (controller.signal.aborted) {
         setNotice("Generation stopped.");
         setStatusMessage("Generation stopped.");
-      } else if (outcomeRef.current === "idle") {
-        setNotice("The generator stopped before the preview was ready.");
-        setStatusMessage("The generator stopped before the preview was ready.");
+      } else if (fallbackRef.current || outcomeRef.current === "idle") {
+        await runBrowserPreview(trimmed, controller.signal);
       }
     } catch (caught) {
-      if (controller.signal.aborted) {
+      if (controller.signal.aborted || (caught instanceof Error && caught.name === "AbortError")) {
         setNotice("Generation stopped.");
         setStatusMessage("Generation stopped.");
       } else {
         const message =
           caught instanceof Error ? caught.message : "Could not generate the video.";
-        setError(message);
-        setStatusMessage(message);
+        if (isRecoverableFailure(message) || caught instanceof TypeError) {
+          try {
+            await runBrowserPreview(trimmed, controller.signal);
+          } catch {
+            if (!controller.signal.aborted) {
+              setNotice(FALLBACK_NOTICE);
+              setStatusMessage(FALLBACK_NOTICE);
+            }
+          }
+        } else {
+          setError(message);
+          setStatusMessage(message);
+        }
       }
     } finally {
       if (abortRef.current === controller) {
@@ -366,7 +485,7 @@ export function GenerateForm() {
                   <span className="min-w-0">
                     <span className="block text-sm font-medium tracking-tight">{option.name}</span>
                     <span className="mt-1 block text-sm leading-6 text-muted">
-                      {option.description}
+                      {VOICE_NOTE[option.id]}
                     </span>
                   </span>
                 </label>
@@ -404,7 +523,7 @@ export function GenerateForm() {
                       {option.rate}
                     </span>
                     <span className="mt-1 block text-sm leading-6 text-muted">
-                      {option.description}
+                      {ENGINE_NOTE[option.id]}
                     </span>
                   </span>
                 </label>
@@ -553,15 +672,17 @@ function PreviewSkeleton({ running, label }: { running: boolean; label?: string 
     <div>
       <p className="text-sm text-muted">
         {running
-          ? `${label ?? "Generation"} is in progress. The 9:16 preview fills in when the frames are ready.`
-          : "The preview player waits here. Script, voice, and five-second clips land in this frame."}
+          ? `${label ?? "Generation"} is in progress. The 9:16 frame fills in when the clips are ready.`
+          : "The vertical preview waits in this frame."}
       </p>
-      <div className="mt-4 flex gap-4">
-        <div className={cn("gen-skeleton aspect-[9/16] w-36 shrink-0 rounded-2xl sm:w-44", running && "gen-skeleton-live")} />
-        <div className="flex min-w-0 flex-1 flex-col justify-end gap-2 pb-1">
-          <span className={cn("gen-skeleton h-3 w-2/3 rounded-full", running && "gen-skeleton-live")} />
-          <span className={cn("gen-skeleton h-3 w-1/2 rounded-full", running && "gen-skeleton-live")} />
-          <span className={cn("gen-skeleton h-3 w-3/4 rounded-full", running && "gen-skeleton-live")} />
+      <div className="mt-4 flex items-end gap-5">
+        <div className={cn("gen-frame w-36 shrink-0 sm:w-44", running && "gen-skeleton-live")}>
+          <div className="gen-skeleton aspect-[9/16] rounded-[1.15rem]" />
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col gap-2 pb-2">
+          <span className={cn("gen-skeleton h-2.5 w-2/3 rounded-full", running && "gen-skeleton-live")} />
+          <span className={cn("gen-skeleton h-2.5 w-1/2 rounded-full", running && "gen-skeleton-live")} />
+          <span className={cn("gen-skeleton h-2.5 w-3/4 rounded-full", running && "gen-skeleton-live")} />
         </div>
       </div>
     </div>
