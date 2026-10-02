@@ -54,7 +54,7 @@ const VOICE_NOTE: Record<VoiceId, string> = {
 const ENGINE_NOTE: Record<VisualEngineId, string> = {
   stock: "Wikimedia and Pexels stock clips",
   budget: "Fal.ai fast open-source motion",
-  ultra: "Luma cinematic, Runway-grade",
+  ultra: "Fal.ai cinematic motion",
 };
 
 const FALLBACK_NOTICE =
@@ -112,7 +112,7 @@ function engineOffer(id: VisualEngineId, imageToVideo: boolean) {
     return {
       name: "Ultra Cinematic AI",
       rate: "200 credits",
-      note: "Luma and Runway image-to-video",
+      note: "Fal.ai cinematic image-to-video",
     };
   }
   const option = VISUAL_ENGINES.find((item) => item.id === id);
@@ -908,7 +908,7 @@ export function GenerateForm() {
             ))}
           </select>
           <p className="mt-2 text-xs leading-5 text-muted">
-            Added to the prompt sent to Fal.ai and Luma. Leave it optional for the model default.
+            Added to the prompt sent to Fal.ai. Leave it optional for the model default.
           </p>
         </div>
         )}

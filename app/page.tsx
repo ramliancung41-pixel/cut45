@@ -17,14 +17,14 @@ const COST_ROWS = [
   ["CutVoice (Premium Narration)", "Voice Narration", "—", "Speech", "10.00 / video"],
   ["CutStock B-Roll (Standard)", "Visual frames", "1080 × 1920", "—", "0.00 / sec"],
   ["CutMotion Budget (Fal.ai)", "Visual frames", "1080 × 1920", "—", "45 / video"],
-  ["CutMotion Ultra (Luma)", "Visual frames", "1080 × 1920", "—", "180 / video"],
+  ["CutMotion Ultra (Fal.ai)", "Visual frames", "1080 × 1920", "—", "180 / video"],
   ["CutCaptions (Kinetic Subtitles)", "Kinetic Subtitles", "1080 × 1920", "Synced", "0.00"],
 ];
 
 const COST_SUMMARIES = [
   "Standard Video (Free Stock): 0 credits.",
   "Budget AI Motion (Fal.ai): 45 credits.",
-  "Ultra Cinematic AI (Luma): 180 credits.",
+  "Ultra Cinematic AI (Fal.ai): 180 credits.",
 ];
 
 export default function LandingPage() {

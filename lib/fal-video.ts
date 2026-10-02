@@ -193,20 +193,30 @@ export async function renderFalClip(input: {
     imageUrl = uploaded.fileUrl;
   }
 
-  const submitted = await fetch(`https://queue.fal.run/${model}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Key ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      prompt: input.prompt,
-      ...(imageUrl ? { image_url: imageUrl } : {}),
-    }),
-    signal: input.signal,
-  });
+  let submitted: Response;
+  try {
+    submitted = await fetch(`https://queue.fal.run/${model}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Key ${key}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        prompt: input.prompt,
+        ...(imageUrl ? { image_url: imageUrl } : {}),
+      }),
+      signal: input.signal,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Fal.ai could not be reached.";
+    console.error("Fal video submit failed", message);
+    return { error: message };
+  }
   if (!submitted.ok) {
-    return { error: "Fal.ai did not accept this render." };
+    const message = await falResponseError(submitted);
+    console.error("Fal video submit rejected", submitted.status, message);
+    return { error: message };
   }
 
   const queued = (await submitted.json()) as {
@@ -227,17 +237,28 @@ export async function renderFalClip(input: {
       headers: { Authorization: `Key ${key}` },
       signal: input.signal,
     });
-    if (!statusResponse.ok) continue;
-    const status = (await statusResponse.json()) as { status?: string };
+    if (!statusResponse.ok) {
+      const message = await falResponseError(statusResponse);
+      console.error("Fal video status failed", statusResponse.status, message);
+      continue;
+    }
+    const status = (await statusResponse.json()) as { status?: string; error?: unknown };
     if (status.status === "FAILED") {
-      return { error: "Fal.ai could not finish this clip." };
+      const message =
+        falErrorDetail(status.error) || falErrorDetail(status) || "Fal.ai could not finish this clip.";
+      console.error("Fal video job failed", message);
+      return { error: message };
     }
     if (status.status !== "COMPLETED") continue;
     const resultResponse = await fetch(responseUrl, {
       headers: { Authorization: `Key ${key}` },
       signal: input.signal,
     });
-    if (!resultResponse.ok) break;
+    if (!resultResponse.ok) {
+      const message = await falResponseError(resultResponse);
+      console.error("Fal video result failed", resultResponse.status, message);
+      return { error: message };
+    }
     const videoUrl = readVideoUrl(await resultResponse.json());
     if (!videoUrl) break;
     return { videoUrl };

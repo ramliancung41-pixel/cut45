@@ -2,7 +2,7 @@ import { PROMPT_MAX } from "@/lib/motion-styles";
 
 export const dynamic = "force-dynamic";
 
-const ENHANCE_PROMPT = `You rewrite a short video idea into one cinematic image-to-video prompt for Fal.ai and Luma.
+const ENHANCE_PROMPT = `You rewrite a short video idea into one cinematic image-to-video prompt for Fal.ai.
 
 Return only the prompt. Aim for 70 to 110 words. Describe the subject, setting, light, lens, and how the camera and subject move. The frame is vertical 9:16. Keep the original subject. Do not invent a different story.
 

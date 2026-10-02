@@ -24,7 +24,7 @@ export const VISUAL_ENGINES: VisualEngine[] = [
     id: "ultra",
     name: "Ultra Cinematic AI",
     rate: "180 credits",
-    description: "Luma and Runway-grade cinematic generation.",
+    description: "Fal.ai cinematic video models.",
   },
 ];
 
