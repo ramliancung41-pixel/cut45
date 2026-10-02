@@ -147,7 +147,7 @@ export function LandingPricing() {
             </div>
             <AuthGateButton
               label="Get in Touch"
-              signedInHref="/dashboard"
+              signedInHref="/generator"
               className="flex h-12 shrink-0 items-center justify-center rounded-full border border-white/20 px-6 text-sm font-medium text-white enabled:hover:bg-white/5 disabled:cursor-wait disabled:opacity-60"
             />
           </article>

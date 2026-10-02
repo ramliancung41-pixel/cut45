@@ -46,7 +46,7 @@ export default function LandingPage() {
             </a>
             <AuthGateButton
               label="Start Now"
-              signedInHref="/dashboard"
+              signedInHref="/generator"
               className="flex h-11 items-center justify-center rounded-full bg-white px-4 text-sm font-medium text-black enabled:hover:bg-white/90 disabled:cursor-wait disabled:opacity-60"
             />
           </nav>

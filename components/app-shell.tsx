@@ -7,7 +7,6 @@ import { CreditTag } from "@/components/credit-provider";
 import { ProfileCreditBar, SidebarAccount, useStudioAccount } from "@/components/profile-credit-bar";
 
 const NAV = [
-  { href: "/generator", label: "Dashboard" },
   { href: "/generator", label: "AI Generator" },
   { href: "/credits", label: "Credits" },
   { href: "/gallery", label: "Gallery" },

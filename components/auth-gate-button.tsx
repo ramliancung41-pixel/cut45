@@ -10,7 +10,7 @@ export function AuthGateButton({
   className,
   plan,
   credits,
-  signedInHref = "/dashboard",
+  signedInHref = "/generator",
 }: {
   label: string;
   className?: string;

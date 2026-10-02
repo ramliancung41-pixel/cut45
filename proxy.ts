@@ -34,7 +34,12 @@ export async function proxy(request: NextRequest) {
     return applySession(response, session);
   }
 
-  if (pathname === "/create-video" || pathname.startsWith("/create-video/")) {
+  if (
+    pathname === "/create-video" ||
+    pathname.startsWith("/create-video/") ||
+    pathname === "/dashboard" ||
+    pathname.startsWith("/dashboard/")
+  ) {
     const response = NextResponse.redirect(new URL("/generator", request.url));
     return applySession(response, session);
   }
