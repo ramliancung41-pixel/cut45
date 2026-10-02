@@ -18,6 +18,16 @@ function downloadBlob(blob: Blob, filename: string) {
 
 async function downloadProject(project: ArchiveProject) {
   const filename = project.id;
+  if (project.imageSrc) {
+    const response = await fetch("/api/image/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageUrl: project.imageSrc }),
+    });
+    if (!response.ok) throw new Error("Could not download that image.");
+    downloadBlob(await response.blob(), `${filename}.png`);
+    return;
+  }
   const source = project.videoSrc || project.audioSrc;
   if (source) {
     const response = await fetch(source);
@@ -30,6 +40,22 @@ async function downloadProject(project: ArchiveProject) {
 }
 
 function fromSaved(item: SavedGalleryItem): ArchiveProject {
+  if (item.engine === "image" || item.imageUrl) {
+    return {
+      id: item.id,
+      prompt: item.prompt,
+      durationSec: 0,
+      engine: "image",
+      engineLabel: "Image-to-Image / Avatar Studio",
+      voiceName: item.voiceName,
+      voiceId: "",
+      script: item.script,
+      imageSrc: item.imageUrl ?? undefined,
+      kind: "image",
+      creditsCharged: item.credits,
+      createdAt: item.createdAt,
+    };
+  }
   const engine: VisualEngineId = item.engine;
   return {
     id: item.id,
@@ -132,7 +158,14 @@ export function GalleryBoard() {
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {listed.map((project) => (
           <li key={project.id} className="gen-glass flex flex-col rounded-3xl p-4">
-            {project.videoSrc ? (
+            {project.imageSrc ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={project.imageSrc}
+                alt={project.prompt}
+                className="mb-4 aspect-square w-full rounded-2xl object-cover"
+              />
+            ) : project.videoSrc ? (
               <video
                 src={project.videoSrc}
                 muted
@@ -146,7 +179,7 @@ export function GalleryBoard() {
                 {project.prompt}
               </span>
               <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 font-mono text-[11px] text-cyan-100">
-                {project.durationSec}s
+                {project.kind === "image" ? "Still" : `${project.durationSec}s`}
               </span>
             </div>
             <p className="mt-4 text-sm font-medium">{project.engineLabel}</p>
@@ -156,9 +189,11 @@ export function GalleryBoard() {
               {project.voiceName}
             </p>
             <div className="mt-5 flex flex-wrap gap-2">
+              {project.kind === "image" ? null : (
               <button type="button" onClick={() => replay(project)} className="gen-cta">
                 Replay audio
               </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -169,7 +204,7 @@ export function GalleryBoard() {
                 }}
                 className="gen-ghost"
               >
-                Download
+                {project.kind === "image" ? "Download HD Image" : "Download"}
               </button>
             </div>
           </li>

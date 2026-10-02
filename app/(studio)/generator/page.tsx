@@ -15,9 +15,9 @@ export default function GeneratorPage() {
           AI Generator
         </h1>
         <p className="mt-4 max-w-xl text-base leading-7 text-muted">
-          Shape a 45-second faceless short. Pick a voice and a visual engine, then watch the
-          timeline build the 9:16 preview. Script and voice requests stay on the server. Free
-          stock costs 0 credits. Budget AI motion costs 45. Ultra cinematic costs 180.
+          Shape a 45-second faceless short, or restyle a still in Avatar Studio. Video stays
+          on the server. Free stock costs 0 credits. Budget AI motion costs 45. Ultra cinematic
+          costs 180. Image-to-image costs 10 credits.
         </p>
       </header>
       <GenerateForm />

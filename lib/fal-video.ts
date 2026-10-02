@@ -53,7 +53,7 @@ function httpsUrl(value: unknown) {
   return falHost(value) ? value : null;
 }
 
-async function uploadReference(key: string, image: ReferenceImage, signal: AbortSignal) {
+export async function uploadReference(key: string, image: ReferenceImage, signal: AbortSignal) {
   const extension = image.contentType === "image/png" ? "png" : image.contentType === "image/webp" ? "webp" : "jpg";
   const initiated = await fetch("https://rest.alpha.fal.ai/storage/upload/initiate", {
     method: "POST",

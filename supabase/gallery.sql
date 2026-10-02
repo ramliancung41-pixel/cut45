@@ -6,9 +6,12 @@ create table if not exists public.gallery (
   engine text not null,
   voice_name text not null,
   video_url text,
+  image_url text,
   credits integer not null default 0,
   created_at timestamptz not null default now()
 );
+
+alter table public.gallery add column if not exists image_url text;
 
 alter table public.gallery enable row level security;
 

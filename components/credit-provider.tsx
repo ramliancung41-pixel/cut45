@@ -12,6 +12,7 @@ import {
 import { hasAccountSession } from "@/lib/account-session";
 import {
   CHECKOUT_CONNECTING_MS,
+  IMAGE_GENERATION_COST,
   INITIAL_CREDITS,
   STRIPE_CONNECTING_MESSAGE,
   deductGenerationCredits,
@@ -25,13 +26,15 @@ export type ArchiveProject = {
   id: string;
   prompt: string;
   durationSec: number;
-  engine: VisualEngineId;
+  engine: VisualEngineId | "image";
   engineLabel: string;
   voiceName: string;
   voiceId: string;
   script: string;
   audioSrc?: string;
   videoSrc?: string;
+  imageSrc?: string;
+  kind?: "video" | "image";
   creditsCharged?: number;
   createdAt: string;
 };
@@ -51,6 +54,7 @@ type CreditContextValue = {
   connecting: boolean;
   startCheckout: (credits: number) => Promise<void>;
   deductForEngine: (engine: VisualEngineId, imageToVideo?: boolean) => void;
+  deductImageCredits: () => void;
   archiveProject: (project: ArchiveProject) => void;
   setAccountBalance: (tokens: number) => void;
 };
@@ -124,6 +128,38 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ engine, imageToVideo }),
+        })
+          .then((response) => response.json())
+          .then((payload: { credits?: number }) => {
+            if (typeof payload.credits !== "number") return;
+            creditsRef.current = payload.credits;
+            hydratedRef.current = true;
+            setCredits(payload.credits);
+            setLedger((rows) =>
+              rows.map((row, index) => (index === 0 ? { ...row, balance: payload.credits as number } : row)),
+            );
+          })
+          .catch(() => undefined);
+      },
+      deductImageCredits() {
+        hydratedRef.current = true;
+        const next = Math.max(0, creditsRef.current - IMAGE_GENERATION_COST);
+        creditsRef.current = next;
+        setCredits(next);
+        setLedger((rows) => [
+          {
+            id: `spend_${Date.now().toString(36)}`,
+            when: "Now",
+            item: "Image-to-image",
+            change: `−${IMAGE_GENERATION_COST}`,
+            balance: next,
+          },
+          ...rows,
+        ]);
+        void fetch("/api/credits/spend", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "image" }),
         })
           .then((response) => response.json())
           .then((payload: { credits?: number }) => {

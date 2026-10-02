@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SUPABASE_ACCESS_COOKIE } from "@/lib/auth-cookie";
-import { listGalleryItems, saveGalleryItem } from "@/lib/gallery-store";
+import { listGalleryItems, saveGalleryImage, saveGalleryItem } from "@/lib/gallery-store";
 import { userFromAccessToken } from "@/lib/supabase/server";
 import { isVisualEngineId } from "@/lib/visual-engines";
 
@@ -49,6 +49,9 @@ export async function POST(request: NextRequest) {
     engine?: unknown;
     voiceName?: unknown;
     videoUrl?: unknown;
+    imageUrl?: unknown;
+    styleName?: unknown;
+    kind?: unknown;
     credits?: unknown;
   } | null;
 
@@ -58,7 +61,27 @@ export async function POST(request: NextRequest) {
   const engine = typeof body?.engine === "string" ? body.engine : "";
   const voiceName = typeof body?.voiceName === "string" ? body.voiceName.trim() : "";
   const videoUrl = typeof body?.videoUrl === "string" ? body.videoUrl.trim() : "";
+  const imageUrl = typeof body?.imageUrl === "string" ? body.imageUrl.trim() : "";
+  const styleName = typeof body?.styleName === "string" ? body.styleName.trim() : "";
   const credits = Number(body?.credits);
+
+  if (body?.kind === "image") {
+    if (!id || !prompt || !isFalVideoUrl(imageUrl) || !Number.isFinite(credits) || credits <= 0) {
+      return NextResponse.json({ error: "A finished image is required." }, { status: 400 });
+    }
+    const storedUrl = await saveGalleryImage({
+      userId: user.id,
+      id,
+      prompt: prompt.slice(0, 800),
+      styleName: styleName.slice(0, 80) || "Avatar Studio",
+      imageUrl,
+      credits,
+    });
+    if (!storedUrl) {
+      return NextResponse.json({ error: "Could not save this image to the gallery." }, { status: 500 });
+    }
+    return NextResponse.json({ id, imageUrl: storedUrl });
+  }
 
   if (!id || !prompt || !script || !isVisualEngineId(engine) || engine === "stock") {
     return NextResponse.json({ error: "That render cannot be saved." }, { status: 400 });

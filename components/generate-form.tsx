@@ -21,7 +21,8 @@ import {
 import { useCredits } from "@/components/credit-provider";
 import { Storyboard } from "@/components/storyboard";
 import { useDefaultVoice } from "@/components/use-default-voice";
-import { generationCreditCost } from "@/lib/credits";
+import { IMAGE_GENERATION_COST, generationCreditCost } from "@/lib/credits";
+import { IMAGE_STYLES, imageStyleName, isImageStyleId, type ImageStyleId } from "@/lib/image-styles";
 import { isMotionStyleId, MOTION_STYLES, PROMPT_MAX, type MotionStyleId } from "@/lib/motion-styles";
 
 type StepStatus = "pending" | "started" | "completed";
@@ -127,7 +128,11 @@ function cn(...parts: Array<string | false | null | undefined>) {
 
 export function GenerateForm() {
   const { voice: storedVoice } = useDefaultVoice();
-  const { credits, deductForEngine, archiveProject } = useCredits();
+  const { credits, deductForEngine, deductImageCredits, archiveProject } = useCredits();
+  const [mode, setMode] = useState<"video" | "image">("video");
+  const [imageStyle, setImageStyle] = useState<ImageStyleId | "">("");
+  const [imageResult, setImageResult] = useState<{ id: string; imageUrl: string; prompt: string } | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [topic, setTopic] = useState("");
   const [voiceOverride, setVoiceOverride] = useState<VoiceId | null>(null);
   const [engine, setEngine] = useState<VisualEngineId>("stock");
@@ -341,8 +346,122 @@ export function GenerateForm() {
     }
   }
 
+  async function submitImage() {
+    const trimmed = topic.trim();
+    if (!referenceImage) {
+      setError("Upload an input image.");
+      return;
+    }
+    if (trimmed.length < 3 && !imageStyle) {
+      setError("Write a style prompt or pick a preset.");
+      return;
+    }
+    if (trimmed.length > PROMPT_MAX) {
+      setError(`Keep the prompt under ${PROMPT_MAX} characters.`);
+      return;
+    }
+    if (credits < IMAGE_GENERATION_COST) {
+      setError("Image generation costs 10 credits.");
+      return;
+    }
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setRunning(true);
+    setError(null);
+    setDownloadError(null);
+    setImageResult(null);
+    setStatusMessage("Rendering the image.");
+
+    try {
+      const response = await fetch("/api/image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          prompt: trimmed,
+          style: imageStyle || undefined,
+          referenceImage,
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        id?: string;
+        imageUrl?: string;
+        prompt?: string;
+        error?: string;
+      } | null;
+      if (!response.ok || typeof payload?.imageUrl !== "string") {
+        throw new Error(payload?.error ?? "Could not render that image.");
+      }
+      const id = payload.id || `img_${Date.now().toString(36)}`;
+      const prompt = payload.prompt || trimmed;
+      const styleLabel = imageStyle ? imageStyleName(imageStyle) : "Avatar Studio";
+      deductImageCredits();
+      setImageResult({ id, imageUrl: payload.imageUrl, prompt });
+      archiveProject({
+        id,
+        prompt,
+        durationSec: 0,
+        engine: "image",
+        engineLabel: "Image-to-Image / Avatar Studio",
+        voiceName: styleLabel,
+        voiceId: "",
+        script: prompt,
+        imageSrc: payload.imageUrl,
+        kind: "image",
+        creditsCharged: IMAGE_GENERATION_COST,
+        createdAt: new Date().toISOString(),
+      });
+      void fetch("/api/gallery", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "image",
+          id,
+          prompt,
+          imageUrl: payload.imageUrl,
+          styleName: styleLabel,
+          credits: IMAGE_GENERATION_COST,
+        }),
+      }).catch(() => undefined);
+      setStatusMessage("Image ready. 10 credits used.");
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") {
+        setStatusMessage("Stopped.");
+        return;
+      }
+      const message = caught instanceof Error ? caught.message : "Could not render that image.";
+      setError(message);
+      setStatusMessage(message);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function downloadImage(imageUrl: string) {
+    setDownloadError(null);
+    const response = await fetch("/api/image/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageUrl }),
+    });
+    if (!response.ok) throw new Error("Could not download that image.");
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "cut45-image.png";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (mode === "image") {
+      await submitImage();
+      return;
+    }
     const trimmed = topic.trim();
 
     if (trimmed.length < 3) {
@@ -514,7 +633,9 @@ export function GenerateForm() {
   }
 
   const activeStep = steps.find((step) => step.status === "started");
-  const imageToVideo = Boolean(referenceImage);
+  const imageMode = mode === "image";
+  const imageReady = Boolean(referenceImage) && (topic.trim().length >= 3 || Boolean(imageStyle));
+  const imageToVideo = !imageMode && Boolean(referenceImage);
   const runCost = generationCreditCost(engine, imageToVideo && engine !== "stock");
   const engineChoices = imageToVideo
     ? VISUAL_ENGINES.filter((option) => option.id !== "stock")
@@ -523,12 +644,47 @@ export function GenerateForm() {
   return (
     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
       <form onSubmit={onSubmit} className="gen-glass space-y-7 rounded-3xl p-5 sm:p-6">
+        <div role="tablist" aria-label="Generation mode" className="grid gap-2.5 sm:grid-cols-2">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "video"}
+            disabled={running}
+            onClick={() => {
+              setMode("video");
+              setError(null);
+            }}
+            className={cn("gen-pick text-left", mode === "video" && "gen-pick-on")}
+          >
+            <span className="min-w-0">
+              <span className="block text-sm font-medium tracking-tight">Video Generator</span>
+              <span className="mt-1 block text-sm leading-6 text-muted">45-second faceless short</span>
+            </span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "image"}
+            disabled={running}
+            onClick={() => {
+              setMode("image");
+              setError(null);
+            }}
+            className={cn("gen-pick text-left", mode === "image" && "gen-pick-on")}
+          >
+            <span className="min-w-0">
+              <span className="block text-sm font-medium tracking-tight">Image-to-Image / Avatar Studio</span>
+              <span className="mt-1 block text-sm leading-6 text-muted">10 credits per still</span>
+            </span>
+          </button>
+        </div>
         <div>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <label htmlFor="topic" className="text-sm font-medium tracking-tight">
-              Video topic
+              {imageMode ? "Style prompt" : "Video topic"}
             </label>
             <div className="flex items-center gap-2">
+              {imageMode ? null : (
               <button
                 type="button"
                 onClick={() => void enhancePrompt()}
@@ -537,6 +693,7 @@ export function GenerateForm() {
               >
                 {enhancing ? "Enhancing…" : "✨ Auto-Enhance Prompt"}
               </button>
+              )}
               <span className="font-mono text-[11px] text-muted">
                 {topic.trim().length}/{PROMPT_MAX}
               </span>
@@ -567,7 +724,7 @@ export function GenerateForm() {
               maxLength={PROMPT_MAX}
               value={topic}
               disabled={running}
-              placeholder="Why night markets stay cheap"
+              placeholder={imageMode ? "Transform into a 3D Pixar character" : "Why night markets stay cheap"}
               onChange={(event) => setTopic(event.target.value)}
               className="w-full resize-y bg-transparent px-4 py-3 text-base leading-7 text-foreground outline-none placeholder:text-muted/60"
             />
@@ -615,10 +772,12 @@ export function GenerateForm() {
                 <ImageIcon />
                 <span className="min-w-0">
                   <span className="block text-sm font-medium tracking-tight text-foreground">
-                    Upload Reference Image / Character
+                    {imageMode ? "Upload Input Image" : "Upload Reference Image / Character"}
                   </span>
                   <span className="mt-0.5 block text-xs text-muted">
-                    Drop a JPEG, PNG, or WebP · used by Budget and Ultra
+                    {imageMode
+                      ? "Drop a JPEG, PNG, or WebP · required"
+                      : "Drop a JPEG, PNG, or WebP · used by Budget and Ultra"}
                   </span>
                 </span>
               </button>
@@ -629,6 +788,35 @@ export function GenerateForm() {
           </div>
         </div>
 
+        {imageMode ? (
+          <div>
+            <p className="text-sm font-medium tracking-tight">Style presets</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {IMAGE_STYLES.map((style) => {
+                const selected = imageStyle === style.id;
+                return (
+                  <button
+                    key={style.id}
+                    type="button"
+                    disabled={running}
+                    aria-pressed={selected}
+                    onClick={() => setImageStyle(selected ? "" : style.id)}
+                    className={cn(
+                      "rounded-full border px-3 py-1.5 text-sm transition",
+                      selected
+                        ? "border-cyan-300/70 bg-cyan-300/15 text-cyan-50"
+                        : "border-white/10 bg-black/30 text-foreground hover:border-cyan-300/40",
+                    )}
+                  >
+                    {style.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        {imageMode ? null : (
         <div>
           <label htmlFor="motion-style" className="text-sm font-medium tracking-tight">
             Motion style
@@ -655,7 +843,10 @@ export function GenerateForm() {
             Added to the prompt sent to Fal.ai and Luma. Leave it optional for the model default.
           </p>
         </div>
+        )}
 
+        {imageMode ? null : (
+        <>
         <fieldset disabled={running} className="space-y-3">
           <legend className="text-sm font-medium tracking-tight">Voice style</legend>
           <div className="grid gap-2.5 sm:grid-cols-2">
@@ -728,6 +919,8 @@ export function GenerateForm() {
             </p>
           ) : null}
         </fieldset>
+        </>
+        )}
 
         {error ? (
           <p role="alert" className="gen-alert">
@@ -738,14 +931,10 @@ export function GenerateForm() {
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="submit"
-            disabled={
-              running ||
-              topic.trim().length < 3 ||
-              credits < runCost
-            }
+            disabled={running || (imageMode ? !imageReady || credits < IMAGE_GENERATION_COST : topic.trim().length < 3 || credits < runCost)}
             className="gen-cta"
           >
-            {running ? "Generating…" : "Generate Video"}
+            {running ? "Generating…" : imageMode ? "Generate image" : "Generate Video"}
           </button>
           {running ? (
             <button type="button" onClick={stop} className="gen-ghost">
@@ -753,13 +942,29 @@ export function GenerateForm() {
             </button>
           ) : null}
           <p className="text-xs text-muted">
-            {runCost === 0
-              ? "Free stock · 0 credits"
-              : `${runCost} credits when the preview is ready`}
+            {imageMode
+              ? "10 credits per image"
+              : runCost === 0
+                ? "Free stock · 0 credits"
+                : `${runCost} credits when the preview is ready`}
           </p>
         </div>
       </form>
 
+      {imageMode ? (
+        <ImageResultPanel
+          running={running}
+          source={referenceImage}
+          result={imageResult}
+          statusMessage={statusMessage}
+          downloadError={downloadError}
+          onDownload={(imageUrl) => {
+            void downloadImage(imageUrl).catch(() => {
+              setDownloadError("Could not download that image.");
+            });
+          }}
+        />
+      ) : (
       <section className="gen-glass rounded-3xl p-5 sm:p-6">
         <p className="sr-only" aria-live="polite">
           {statusMessage}
@@ -847,7 +1052,82 @@ export function GenerateForm() {
           )}
         </div>
       </section>
+      )}
     </div>
+  );
+}
+
+function ImageResultPanel({
+  running,
+  source,
+  result,
+  statusMessage,
+  downloadError,
+  onDownload,
+}: {
+  running: boolean;
+  source: string | null;
+  result: { id: string; imageUrl: string; prompt: string } | null;
+  statusMessage: string;
+  downloadError: string | null;
+  onDownload: (imageUrl: string) => void;
+}) {
+  return (
+    <section className="gen-glass rounded-3xl p-5 sm:p-6">
+      <p className="sr-only" aria-live="polite">
+        {statusMessage}
+      </p>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-accent">Avatar Studio</p>
+          <h2 className="mt-1 text-lg font-semibold tracking-tight">Image result</h2>
+        </div>
+        <p className="rounded-full border border-white/10 px-3 py-1 font-mono text-[11px] text-muted">
+          Flux · 10 credits
+        </p>
+      </div>
+      <div className="mt-6 grid gap-4 sm:grid-cols-2">
+        <figure>
+          <figcaption className="mb-2 text-xs uppercase tracking-[0.16em] text-muted">Input</figcaption>
+          {source ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={source} alt="" className="aspect-square w-full rounded-2xl object-cover ring-1 ring-white/10" />
+          ) : (
+            <div className="grid aspect-square place-items-center rounded-2xl border border-dashed border-white/15 text-sm text-muted">
+              Upload an image
+            </div>
+          )}
+        </figure>
+        <figure>
+          <figcaption className="mb-2 text-xs uppercase tracking-[0.16em] text-muted">Output</figcaption>
+          {result ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={result.imageUrl}
+              alt={result.prompt}
+              className="aspect-square w-full rounded-2xl object-cover ring-1 ring-cyan-300/30"
+            />
+          ) : (
+            <div className={cn("grid aspect-square place-items-center rounded-2xl border border-white/10 text-sm text-muted", running && "gen-skeleton-live")}>
+              {running ? "Rendering…" : "The styled image appears here"}
+            </div>
+          )}
+        </figure>
+      </div>
+      {result ? (
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <button type="button" onClick={() => onDownload(result.imageUrl)} className="gen-cta">
+            Download HD Image
+          </button>
+          <p className="text-sm text-muted">{result.prompt}</p>
+        </div>
+      ) : null}
+      {downloadError ? (
+        <p role="alert" className="gen-alert mt-4">
+          {downloadError}
+        </p>
+      ) : null}
+    </section>
   );
 }
 
