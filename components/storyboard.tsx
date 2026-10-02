@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ViralSubtitles } from "@/components/viral-subtitles";
 import { primeSpeechVoices, speakNarration, stopNarration } from "@/lib/browser-speech";
-import { FRAME_LENGTH_SEC, VIDEO_DURATION_SEC, type StoryFrame } from "@/lib/generate";
+import { FRAME_LENGTH_SEC, VIDEO_DURATION_SEC, formatTimecode, type StoryFrame } from "@/lib/generate";
 import { isVoiceId } from "@/lib/voices";
 
 function cn(...parts: Array<string | false | null | undefined>) {
@@ -26,17 +26,23 @@ export function Storyboard({
   voiceId,
   audioSrc,
   audioLabel,
+  durationSec = VIDEO_DURATION_SEC,
 }: {
   frames: StoryFrame[];
   script: string;
   voiceId: string;
   audioSrc?: string;
   audioLabel?: string;
+  durationSec?: number;
 }) {
   const [playhead, setPlayhead] = useState(0);
   const [narrating, setNarrating] = useState(false);
   const activeIndex = activeFrameIndex(playhead, frames.length);
   const active = frames[activeIndex];
+  const unified =
+    durationSec > VIDEO_DURATION_SEC &&
+    frames.length > 0 &&
+    frames.every((frame) => frame.src === frames[0]?.src);
   const cardRefs = useRef<Array<HTMLElement | null>>([]);
   const playerRef = useRef<HTMLVideoElement>(null);
   const thumbRef = useRef<HTMLVideoElement>(null);
@@ -103,6 +109,17 @@ export function Storyboard({
     if (now - lastUiRef.current > 80 || progress >= 1) {
       lastUiRef.current = now;
       setPlayhead(progress);
+    }
+    const player = playerRef.current;
+    if (unified && player && Number.isFinite(player.duration) && player.duration > 0) {
+      const target = progress * player.duration;
+      if (Math.abs(player.currentTime - target) > 0.45) {
+        try {
+          player.currentTime = target;
+        } catch {
+          // Ignore a seek that arrives before the clip can be scrubbed.
+        }
+      }
     }
     if (progress >= 1) {
       stopPlayback(true);
@@ -171,7 +188,7 @@ export function Storyboard({
             key={`${activeIndex}-${active.src}`}
             src={active.src}
             muted
-            loop
+            loop={!unified}
             playsInline
             autoPlay={narrating}
             preload="auto"
@@ -205,7 +222,7 @@ export function Storyboard({
         <span className="absolute top-3 right-0 translate-x-0">
           <span className="ml-auto block h-2 w-px bg-muted" />
           <span className="mt-1 block text-right font-mono text-[10px] text-muted">
-            0:{String(VIDEO_DURATION_SEC).padStart(2, "0")}
+            {formatTimecode(durationSec)}
           </span>
         </span>
       </div>

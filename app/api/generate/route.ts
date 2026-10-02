@@ -8,9 +8,16 @@ import {
   previewScript,
   type GenerateEvent,
 } from "@/lib/generate";
-import { generationCreditCost } from "@/lib/credits";
+import { EXTEND_VIDEO_COST, generationCreditCost } from "@/lib/credits";
 import { falApiKey } from "@/lib/fal-key";
-import { parseReferenceImage, renderFalClip, type ReferenceImage } from "@/lib/fal-video";
+import {
+  extractLastFrame,
+  falMediaUrl,
+  mergeFalVideos,
+  parseReferenceImage,
+  renderFalClip,
+  type ReferenceImage,
+} from "@/lib/fal-video";
 import { imageLockedMotionPrompt, isMotionStyleId, PROMPT_MAX, videoMotionPrompt } from "@/lib/motion-styles";
 import { alignReferenceContext } from "@/lib/reference-context";
 import { getVoice, isVoiceId } from "@/lib/voices";
@@ -197,6 +204,68 @@ async function writeScript(topic: string, signal: AbortSignal) {
   if (!script) {
     throw new Error("Gemini returned an empty script.");
   }
+  return script;
+}
+
+async function writeContinuation(topic: string, priorScript: string, signal: AbortSignal) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY is missing from the server environment.");
+  }
+
+  const endpoint = new URL(
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+  );
+  endpoint.searchParams.set("key", apiKey);
+  const prior = priorScript.trim().slice(-4000);
+
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        system_instruction: {
+          parts: [
+            {
+              text: "You continue a 45-second faceless TikTok narration. Return only the next spoken section. About 110 to 130 words. Continue from the last line. Do not repeat earlier lines. No title, labels, stage directions, hashtags, or markdown.",
+            },
+          ],
+        },
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: `Topic: ${topic}\n\nThe video already said:\n${prior}\n\nWrite the next 45 seconds.`,
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.8,
+          maxOutputTokens: 800,
+          thinkingConfig: { thinkingBudget: 0 },
+        },
+      }),
+    });
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    throw new Error("Could not reach Gemini.");
+  }
+
+  const payload = (await response.json().catch(() => null)) as GeminiResponse | null;
+  if (!response.ok) {
+    const message = payload?.error?.message ?? "";
+    throw new Error(
+      message ? `Gemini could not continue the script. ${message}`.slice(0, 300) : "Gemini could not continue the script.",
+    );
+  }
+  const script = cleanScript(
+    payload?.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("") ?? "",
+  );
+  if (!script) throw new Error("Gemini returned an empty continuation.");
   return script;
 }
 
@@ -430,6 +499,131 @@ async function* runWorkflow(
   });
 }
 
+async function* runExtend(input: {
+  topic: string;
+  voiceId: string;
+  voiceName: string;
+  priorScript: string;
+  priorVideoUrls: string[];
+  motionStyle: string | null;
+  signal: AbortSignal;
+}) {
+  yield encode({
+    type: "progress",
+    step: "script",
+    status: "started",
+    message: "Continuing the narration",
+  });
+
+  const lastVideo = input.priorVideoUrls[input.priorVideoUrls.length - 1];
+  if (!lastVideo) {
+    yield encode({ type: "error", message: "The finished video cannot be extended." });
+    return;
+  }
+  let continuation: string;
+  let frameUrl: string;
+  try {
+    const [script, frame] = await Promise.all([
+      writeContinuation(input.topic, input.priorScript, input.signal),
+      extractLastFrame(lastVideo, input.signal),
+    ]);
+    continuation = script;
+    if ("error" in frame) {
+      yield encode({ type: "error", message: frame.error || "Could not read the last frame." });
+      return;
+    }
+    frameUrl = frame.imageUrl;
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    yield encode({
+      type: "error",
+      message: error instanceof Error ? error.message : "Could not continue the script.",
+    });
+    return;
+  }
+
+  yield encode({
+    type: "progress",
+    step: "script",
+    status: "completed",
+    message: "Continuation ready",
+    detail: `${countWords(continuation)} new words`,
+  });
+
+  yield encode({
+    type: "progress",
+    step: "audio",
+    status: "started",
+    message: GENERATE_STEPS[1].label,
+  });
+  await sleep(AUDIO_STEP_MS, input.signal);
+  const audioLabel = `${input.voiceName} · browser voice · no speaker on screen`;
+  yield encode({
+    type: "progress",
+    step: "audio",
+    status: "completed",
+    message: "Audio ready",
+    detail: audioLabel,
+  });
+
+  yield encode({
+    type: "progress",
+    step: "frames",
+    status: "started",
+    message: "Rendering the next 45 seconds",
+  });
+
+  const rendered = await renderFalClip({
+    engine: "budget",
+    prompt: imageLockedMotionPrompt(
+      `${input.topic}. ${continuation.slice(0, 180)}`,
+      input.motionStyle,
+      "Continue from this exact frame. Keep the same character, face, clothing, colors, and setting.",
+    ),
+    image: null,
+    startFrameUrl: frameUrl,
+    pollBudgetMs: 25000,
+    signal: input.signal,
+  });
+  if ("error" in rendered) {
+    yield encode({ type: "error", message: rendered.error });
+    return;
+  }
+
+  const joined = await mergeFalVideos([...input.priorVideoUrls, rendered.videoUrl], input.signal);
+  const videoUrl = "videoUrl" in joined ? joined.videoUrl : undefined;
+  if (!videoUrl && "error" in joined) {
+    console.error("Fal video merge failed", joined.error);
+  }
+
+  const frames = buildStoryboard(continuation).map((frame) => ({ ...frame, src: rendered.videoUrl }));
+  yield encode({
+    type: "progress",
+    step: "frames",
+    status: "completed",
+    message: videoUrl ? "Extended video joined" : "Extension ready",
+    detail: videoUrl ? "Original and extension are one video" : "Playing the new segment after the original",
+  });
+
+  yield encode({
+    type: "complete",
+    result: {
+      id: `c45_${Date.now().toString(36)}`,
+      topic: input.topic,
+      voiceId: input.voiceId,
+      voiceName: input.voiceName,
+      durationSec: VIDEO_DURATION_SEC,
+      script: continuation,
+      wordCount: countWords(continuation),
+      audioLabel,
+      frames,
+      engine: "budget",
+      creditsCharged: EXTEND_VIDEO_COST,
+      videoUrl,
+    },
+  });
+}
+
 export async function POST(request: Request) {
   if (!process.env.GEMINI_API_KEY) {
     return Response.json(
@@ -453,9 +647,17 @@ export async function POST(request: Request) {
           engine?: unknown;
           referenceImage?: unknown;
           motionStyle?: unknown;
+          extend?: unknown;
+          priorScript?: unknown;
+          priorVideoUrls?: unknown;
         })
       : {};
   const topic = typeof record.topic === "string" ? record.topic.trim() : "";
+  const extend = record.extend === true;
+  const priorScript = typeof record.priorScript === "string" ? record.priorScript.trim() : "";
+  const priorVideoUrls = Array.isArray(record.priorVideoUrls)
+    ? record.priorVideoUrls.filter((item): item is string => typeof item === "string").slice(0, 6)
+    : [];
   const voice = typeof record.voice === "string" ? record.voice : "";
   const engine = typeof record.engine === "string" ? record.engine : "";
   const referenceImage = parseReferenceImage(record.referenceImage);
@@ -499,8 +701,27 @@ export async function POST(request: Request) {
     return Response.json({ error: "Select a voice style." }, { status: 400 });
   }
 
+  if (extend) {
+    if (priorScript.length < 20) {
+      return Response.json({ error: "The current script is too short to extend." }, { status: 400 });
+    }
+    if (priorVideoUrls.length === 0 || priorVideoUrls.some((url) => !falMediaUrl(url))) {
+      return Response.json({ error: "Extend a finished Studio Fast Motion video." }, { status: 400 });
+    }
+  }
+
   const stream = iteratorToStream(
-    runWorkflow(
+    extend
+      ? runExtend({
+          topic,
+          voiceId: voiceStyle.id,
+          voiceName: voiceStyle.name,
+          priorScript,
+          priorVideoUrls,
+          motionStyle: motionStyle || null,
+          signal: request.signal,
+        })
+      : runWorkflow(
       topic,
       voiceStyle.id,
       voiceStyle.name,

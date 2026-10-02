@@ -12,6 +12,7 @@ import {
 import { hasAccountSession } from "@/lib/account-session";
 import {
   CHECKOUT_CONNECTING_MS,
+  EXTEND_VIDEO_COST,
   IMAGE_GENERATION_COST,
   INITIAL_CREDITS,
   STRIPE_CONNECTING_MESSAGE,
@@ -55,6 +56,7 @@ type CreditContextValue = {
   startCheckout: (credits: number) => Promise<void>;
   deductForEngine: (engine: VisualEngineId, imageToVideo?: boolean) => void;
   deductImageCredits: () => void;
+  deductExtendCredits: () => void;
   archiveProject: (project: ArchiveProject) => void;
   setAccountBalance: (tokens: number) => void;
 };
@@ -128,6 +130,38 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ engine, imageToVideo }),
+        })
+          .then((response) => response.json())
+          .then((payload: { credits?: number }) => {
+            if (typeof payload.credits !== "number") return;
+            creditsRef.current = payload.credits;
+            hydratedRef.current = true;
+            setCredits(payload.credits);
+            setLedger((rows) =>
+              rows.map((row, index) => (index === 0 ? { ...row, balance: payload.credits as number } : row)),
+            );
+          })
+          .catch(() => undefined);
+      },
+      deductExtendCredits() {
+        hydratedRef.current = true;
+        const next = Math.max(0, creditsRef.current - EXTEND_VIDEO_COST);
+        creditsRef.current = next;
+        setCredits(next);
+        setLedger((rows) => [
+          {
+            id: `spend_${Date.now().toString(36)}`,
+            when: "Now",
+            item: "Extend video",
+            change: `−${EXTEND_VIDEO_COST}`,
+            balance: next,
+          },
+          ...rows,
+        ]);
+        void fetch("/api/credits/spend", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "extend" }),
         })
           .then((response) => response.json())
           .then((payload: { credits?: number }) => {

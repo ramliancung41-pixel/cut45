@@ -57,6 +57,10 @@ function httpsUrl(value: unknown) {
   return falHost(value) ? value : null;
 }
 
+export function falMediaUrl(value: unknown) {
+  return httpsUrl(value);
+}
+
 function issuedFileUrl(value: unknown) {
   if (typeof value !== "string" || !value.startsWith("https://")) return null;
   try {
@@ -205,16 +209,19 @@ export async function renderFalClip(input: {
   prompt: string;
   image: ReferenceImage | null;
   signal: AbortSignal;
+  startFrameUrl?: string | null;
+  pollBudgetMs?: number;
 }): Promise<{ videoUrl: string } | { error: string }> {
   const key = falApiKey();
   if (!key) {
     return { error: "Fal.ai is not configured yet." };
   }
 
-  const model = input.image ? MODELS[input.engine].image : MODELS[input.engine].text;
-  let imageUrl: string | null = null;
-  let storageUrl: string | null = null;
-  if (input.image) {
+  const startFrame = input.startFrameUrl ? httpsUrl(input.startFrameUrl) : null;
+  const model = input.image || startFrame ? MODELS[input.engine].image : MODELS[input.engine].text;
+  let imageUrl: string | null = startFrame;
+  let storageUrl: string | null = startFrame;
+  if (input.image && !imageUrl) {
     const uploaded = await uploadReference(key, input.image, input.signal);
     if ("fileUrl" in uploaded) {
       storageUrl = uploaded.fileUrl;
@@ -276,7 +283,8 @@ export async function renderFalClip(input: {
   }
 
   const started = Date.now();
-  while (Date.now() - started < POLL_BUDGET_MS) {
+  const pollBudgetMs = input.pollBudgetMs ?? POLL_BUDGET_MS;
+  while (Date.now() - started < pollBudgetMs) {
     if (input.signal.aborted) throw new DOMException("The operation was aborted.", "AbortError");
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     const statusResponse = await fetch(statusUrl, {
@@ -311,4 +319,107 @@ export async function renderFalClip(input: {
   }
 
   return { error: "Fal.ai is still rendering this clip. Try again in a moment." };
+}
+
+async function queueFal(input: {
+  model: string;
+  body: Record<string, unknown>;
+  signal: AbortSignal;
+  pollBudgetMs: number;
+}): Promise<{ payload: unknown } | { error: string }> {
+  const key = falApiKey();
+  if (!key) return { error: "Fal.ai is not configured yet." };
+  let submitted: Response;
+  try {
+    submitted = await fetch(`https://queue.fal.run/${input.model}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Key ${key}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(input.body),
+      signal: input.signal,
+    });
+  } catch (error) {
+    if (input.signal.aborted) throw error;
+    const message = error instanceof Error ? error.message : "Fal.ai could not be reached.";
+    console.error("Fal job submit failed", message);
+    return { error: message };
+  }
+  if (!submitted.ok) {
+    const message = await falResponseError(submitted);
+    console.error("Fal job rejected", submitted.status, message);
+    return { error: message };
+  }
+  const queued = (await submitted.json()) as { status_url?: unknown; response_url?: unknown };
+  const statusUrl = httpsUrl(queued.status_url);
+  const responseUrl = httpsUrl(queued.response_url);
+  if (!statusUrl || !responseUrl) return { error: "Fal.ai accepted the job without a status URL." };
+
+  const started = Date.now();
+  while (Date.now() - started < input.pollBudgetMs) {
+    if (input.signal.aborted) throw new DOMException("The operation was aborted.", "AbortError");
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    const statusResponse = await fetch(statusUrl, {
+      headers: { Authorization: `Key ${key}` },
+      signal: input.signal,
+    });
+    if (!statusResponse.ok) continue;
+    const status = (await statusResponse.json()) as { status?: string; error?: unknown };
+    if (status.status === "FAILED") {
+      const message = falErrorDetail(status.error) || falErrorDetail(status) || "Fal.ai could not finish this job.";
+      console.error("Fal job failed", message);
+      return { error: message };
+    }
+    if (status.status !== "COMPLETED") continue;
+    const resultResponse = await fetch(responseUrl, {
+      headers: { Authorization: `Key ${key}` },
+      signal: input.signal,
+    });
+    if (!resultResponse.ok) return { error: await falResponseError(resultResponse) };
+    return { payload: await resultResponse.json() };
+  }
+  return { error: "Fal.ai is still working. Try the extension again in a moment." };
+}
+
+function readFrameUrl(payload: unknown) {
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as {
+    images?: Array<{ url?: unknown }>;
+    image?: { url?: unknown };
+    frame?: { url?: unknown };
+  };
+  return (
+    httpsUrl(record.images?.[0]?.url) ?? httpsUrl(record.image?.url) ?? httpsUrl(record.frame?.url)
+  );
+}
+
+export async function extractLastFrame(videoUrl: string, signal: AbortSignal) {
+  if (!httpsUrl(videoUrl)) return { error: "The finished video cannot be extended." };
+  const queued = await queueFal({
+    model: "fal-ai/ffmpeg-api/extract-frame",
+    body: { video_url: videoUrl, frame_type: "last" },
+    signal,
+    pollBudgetMs: 15000,
+  });
+  if ("error" in queued) return queued;
+  const imageUrl = readFrameUrl(queued.payload);
+  if (!imageUrl) return { error: "Fal.ai did not return the last frame." };
+  return { imageUrl };
+}
+
+export async function mergeFalVideos(videoUrls: string[], signal: AbortSignal) {
+  const urls = videoUrls.map((url) => httpsUrl(url)).filter((url): url is string => Boolean(url));
+  if (urls.length < 2) return { error: "Two clips are required to join the video." };
+  const queued = await queueFal({
+    model: "fal-ai/ffmpeg-api/merge-videos",
+    body: { video_urls: urls },
+    signal,
+    pollBudgetMs: 15000,
+  });
+  if ("error" in queued) return queued;
+  const videoUrl = readVideoUrl(queued.payload);
+  if (!videoUrl) return { error: "Fal.ai did not return the joined video." };
+  return { videoUrl };
 }

@@ -8,6 +8,7 @@ export const ULTRA_GENERATION_COST = 180;
 export const BUDGET_IMAGE_GENERATION_COST = 60;
 export const ULTRA_IMAGE_GENERATION_COST = 200;
 export const IMAGE_GENERATION_COST = 10;
+export const EXTEND_VIDEO_COST = 45;
 
 const GENERATION_COST: Record<VisualEngineId, number> = {
   stock: STOCK_GENERATION_COST,

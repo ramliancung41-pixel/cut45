@@ -6,9 +6,11 @@ import {
   GENERATE_STEPS,
   VIDEO_DURATION_SEC,
   buildStoryboard,
+  chainVideoUrls,
   countWords,
   isGenerateEvent,
   previewScript,
+  stitchExtension,
   type GenerateEvent,
   type GenerateResult,
   type GenerateStepId,
@@ -21,7 +23,7 @@ import {
 import { useCredits } from "@/components/credit-provider";
 import { Storyboard } from "@/components/storyboard";
 import { useDefaultVoice } from "@/components/use-default-voice";
-import { IMAGE_GENERATION_COST, generationCreditCost } from "@/lib/credits";
+import { EXTEND_VIDEO_COST, IMAGE_GENERATION_COST, generationCreditCost } from "@/lib/credits";
 import { IMAGE_STYLES, imageStyleName, isImageStyleId, type ImageStyleId } from "@/lib/image-styles";
 import { isMotionStyleId, MOTION_STYLES, PROMPT_MAX, type MotionStyleId } from "@/lib/motion-styles";
 import { prepareReferenceImage } from "@/lib/prepare-reference-image";
@@ -129,7 +131,7 @@ function cn(...parts: Array<string | false | null | undefined>) {
 
 export function GenerateForm() {
   const { voice: storedVoice } = useDefaultVoice();
-  const { credits, deductForEngine, deductImageCredits, archiveProject } = useCredits();
+  const { credits, deductForEngine, deductImageCredits, deductExtendCredits, archiveProject } = useCredits();
   const [mode, setMode] = useState<"video" | "image">("video");
   const [imageStyle, setImageStyle] = useState<ImageStyleId | "">("");
   const [imageResult, setImageResult] = useState<{ id: string; imageUrl: string; prompt: string } | null>(null);
@@ -152,6 +154,7 @@ export function GenerateForm() {
   const [running, setRunning] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const imageRunRef = useRef(false);
+  const extendRunRef = useRef(false);
   const previewRef = useRef<string | null>(null);
   const acceptIdRef = useRef(0);
   const referenceInputRef = useRef<HTMLInputElement>(null);
@@ -196,6 +199,45 @@ export function GenerateForm() {
 
     if (event.type === "complete") {
       outcomeRef.current = "complete";
+      if (extendRunRef.current) {
+        extendRunRef.current = false;
+        const stitched = result ? stitchExtension(result, event.result) : event.result;
+        deductExtendCredits();
+        const urls = chainVideoUrls(stitched.frames);
+        const videoSrc = stitched.videoUrl || urls[urls.length - 1];
+        archiveProject({
+          id: stitched.id,
+          prompt: stitched.topic,
+          durationSec: stitched.durationSec,
+          engine: stitched.engine,
+          engineLabel: "Extend Video",
+          voiceName: stitched.voiceName,
+          voiceId: stitched.voiceId,
+          script: stitched.script,
+          audioSrc: stitched.audioSrc,
+          videoSrc,
+          creditsCharged: EXTEND_VIDEO_COST,
+          createdAt: new Date().toISOString(),
+        });
+        if (videoSrc) {
+          void fetch("/api/gallery", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: stitched.id,
+              prompt: stitched.topic,
+              script: stitched.script,
+              engine: stitched.engine,
+              voiceName: stitched.voiceName,
+              videoUrl: videoSrc,
+              credits: EXTEND_VIDEO_COST,
+            }),
+          }).catch(() => undefined);
+        }
+        setResult(stitched);
+        setStatusMessage(`Extended to ${stitched.durationSec}s. ${EXTEND_VIDEO_COST} credits used.`);
+        return;
+      }
       const imageRun =
         imageRunRef.current &&
         !event.result.preview &&
@@ -462,6 +504,72 @@ export function GenerateForm() {
     link.download = "cut45-image.png";
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function extendVideo() {
+    if (!result || running) return;
+    const urls = chainVideoUrls(result.frames);
+    if (urls.length === 0) {
+      setError("Extend a finished Studio Fast Motion video.");
+      return;
+    }
+    if (credits < EXTEND_VIDEO_COST) {
+      setError("Extend Video costs 45 credits.");
+      return;
+    }
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    extendRunRef.current = true;
+    imageRunRef.current = false;
+    outcomeRef.current = "idle";
+    setRunning(true);
+    setError(null);
+    setNotice(null);
+    setSteps(INITIAL_STEPS.map((step) => ({ ...step })));
+    setStatusMessage("Extending the video.");
+
+    try {
+      const response = await fetch("/api/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({
+          extend: true,
+          topic: result.topic,
+          voice: result.voiceId,
+          engine: "budget",
+          priorScript: result.script,
+          priorVideoUrls: urls,
+          ...(motionStyle ? { motionStyle } : {}),
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Could not extend that video.");
+      }
+      await readProgress(response, controller.signal);
+      if (outcomeRef.current === "idle") {
+        setError("The extension stopped before a video was ready.");
+      }
+    } catch (caught) {
+      extendRunRef.current = false;
+      if (caught instanceof DOMException && caught.name === "AbortError") {
+        setStatusMessage("Stopped.");
+        return;
+      }
+      const message = caught instanceof Error ? caught.message : "Could not extend that video.";
+      setError(message);
+      setStatusMessage(message);
+    } finally {
+      extendRunRef.current = false;
+      if (abortRef.current === controller) abortRef.current = null;
+      setRunning(false);
+    }
   }
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -1104,7 +1212,7 @@ export function GenerateForm() {
             <h2 className="mt-1 text-lg font-semibold tracking-tight">Run</h2>
           </div>
           <p className="rounded-full border border-white/10 px-3 py-1 font-mono text-[11px] text-muted">
-            45s · 9:16 · no face
+            {result ? `${result.durationSec}s` : "45s"} · 9:16 · no face
           </p>
         </div>
 
@@ -1172,7 +1280,21 @@ export function GenerateForm() {
                 voiceId={result.voiceId}
                 audioSrc={result.audioSrc}
                 audioLabel={result.audioLabel}
+                durationSec={result.durationSec}
               />
+              {chainVideoUrls(result.frames).length > 0 ? (
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void extendVideo()}
+                    disabled={running || credits < EXTEND_VIDEO_COST}
+                    className="gen-cta"
+                  >
+                    Extend Video (+45s)
+                  </button>
+                  <p className="text-xs text-muted">45 credits</p>
+                </div>
+              ) : null}
               <h3 className="mt-5 text-sm font-medium tracking-tight">Script</h3>
               <p className="mt-2 text-sm leading-7 text-foreground/90">{result.script}</p>
             </div>

@@ -24,7 +24,8 @@ export type GenerateResult = {
   topic: string;
   voiceId: string;
   voiceName: string;
-  durationSec: typeof VIDEO_DURATION_SEC;
+  durationSec: number;
+  videoUrl?: string;
   script: string;
   wordCount: number;
   audioLabel: string;
@@ -119,6 +120,71 @@ export function scanScriptForClips(script: string) {
     clip.terms.some((term) => scriptIncludesTerm(script, term)),
   );
   return matches.length > 0 ? matches : MEDIA_CLIPS;
+}
+
+export function chainVideoUrls(frames: StoryFrame[]) {
+  const urls: string[] = [];
+  for (const frame of frames) {
+    let host = "";
+    try {
+      const url = new URL(frame.src);
+      if (url.protocol !== "https:") continue;
+      host = url.hostname;
+    } catch {
+      continue;
+    }
+    const fal =
+      host === "fal.ai" ||
+      host === "fal.media" ||
+      host.endsWith(".fal.ai") ||
+      host.endsWith(".fal.media") ||
+      host.endsWith(".fal.run");
+    if (!fal || urls[urls.length - 1] === frame.src) continue;
+    urls.push(frame.src);
+  }
+  return urls.slice(0, 6);
+}
+
+export function stitchExtension(previous: GenerateResult, extension: GenerateResult): GenerateResult {
+  const durationSec = previous.durationSec + extension.durationSec;
+  const script = `${previous.script.trim()}\n\n${extension.script.trim()}`;
+  const frames = extension.videoUrl
+    ? buildTimeline(script, extension.videoUrl, durationSec)
+    : [...previous.frames, ...shiftFrames(extension.frames, previous.durationSec)];
+  return {
+    ...previous,
+    id: extension.id,
+    durationSec,
+    script,
+    wordCount: countWords(script),
+    frames,
+    creditsCharged: previous.creditsCharged + extension.creditsCharged,
+    videoUrl: extension.videoUrl,
+    preview: false,
+    audioLabel: previous.audioLabel,
+  };
+}
+
+export function shiftFrames(frames: StoryFrame[], offsetSec: number): StoryFrame[] {
+  return frames.map((frame, index) => ({
+    ...frame,
+    time: formatTimecode(offsetSec + index * FRAME_LENGTH_SEC),
+  }));
+}
+
+export function buildTimeline(script: string, src: string, durationSec: number): StoryFrame[] {
+  const count = Math.max(FRAME_COUNT, Math.round(durationSec / FRAME_LENGTH_SEC));
+  const clips = scanScriptForClips(script);
+  return Array.from({ length: count }, (_, index) => {
+    const clip = clips[index % clips.length];
+    const term = clip.terms.find((item) => scriptIncludesTerm(script, item)) ?? clip.terms[0];
+    return {
+      time: formatTimecode(index * FRAME_LENGTH_SEC),
+      caption: clip.label,
+      term,
+      src,
+    };
+  });
 }
 
 export function buildStoryboard(script: string): StoryFrame[] {

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SUPABASE_ACCESS_COOKIE } from "@/lib/auth-cookie";
-import { IMAGE_GENERATION_COST, generationCreditCost } from "@/lib/credits";
+import { EXTEND_VIDEO_COST, IMAGE_GENERATION_COST, generationCreditCost } from "@/lib/credits";
 import { spendProfileCredits } from "@/lib/profiles";
 import { userFromAccessToken } from "@/lib/supabase/server";
 import { isVisualEngineId } from "@/lib/visual-engines";
@@ -20,15 +20,18 @@ export async function POST(request: NextRequest) {
     kind?: unknown;
   } | null;
   const imageGeneration = body?.kind === "image";
+  const videoExtension = body?.kind === "extend";
   const engine = typeof body?.engine === "string" ? body.engine : "";
   const imageToVideo = body?.imageToVideo === true;
-  if (!imageGeneration && !isVisualEngineId(engine)) {
+  if (!imageGeneration && !videoExtension && !isVisualEngineId(engine)) {
     return NextResponse.json({ error: "Select a visual engine." }, { status: 400 });
   }
 
   const cost = imageGeneration
     ? IMAGE_GENERATION_COST
-    : generationCreditCost(engine as "stock" | "budget" | "ultra", imageToVideo && engine !== "stock");
+    : videoExtension
+      ? EXTEND_VIDEO_COST
+      : generationCreditCost(engine as "stock" | "budget" | "ultra", imageToVideo && engine !== "stock");
   const credits = await spendProfileCredits(user.id, user.email, cost);
   if (credits == null) {
     return NextResponse.json({ error: "Could not update the credit balance." }, { status: 500 });
