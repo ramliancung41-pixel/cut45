@@ -4,39 +4,26 @@ import { useEffect, useRef, useState } from "react";
 import { useCredits, type ArchiveProject } from "@/components/credit-provider";
 import { speakNarration, stopNarration } from "@/lib/browser-speech";
 import type { SavedGalleryItem } from "@/lib/gallery-store";
+import { saveGeneratedFile } from "@/lib/save-media";
 import { isVoiceId } from "@/lib/voices";
 import type { VisualEngineId } from "@/lib/visual-engines";
 
-function downloadBlob(blob: Blob, filename: string) {
+async function downloadProject(project: ArchiveProject) {
+  if (project.imageSrc) {
+    await saveGeneratedFile(project.imageSrc, `${project.id}.png`);
+    return;
+  }
+  if (project.videoSrc) {
+    await saveGeneratedFile(project.videoSrc, `${project.id}.mp4`);
+    return;
+  }
+  const blob = new Blob([project.script], { type: "text/plain;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = filename;
+  link.download = `${project.id}.txt`;
   link.click();
   URL.revokeObjectURL(url);
-}
-
-async function downloadProject(project: ArchiveProject) {
-  const filename = project.id;
-  if (project.imageSrc) {
-    const response = await fetch("/api/image/download", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ imageUrl: project.imageSrc }),
-    });
-    if (!response.ok) throw new Error("Could not download that image.");
-    downloadBlob(await response.blob(), `${filename}.png`);
-    return;
-  }
-  const source = project.videoSrc || project.audioSrc;
-  if (source) {
-    const response = await fetch(source);
-    const blob = await response.blob();
-    const extension = project.videoSrc ? "mp4" : "mp3";
-    downloadBlob(blob, `${filename}.${extension}`);
-    return;
-  }
-  downloadBlob(new Blob([project.script], { type: "text/plain;charset=utf-8" }), `${filename}.txt`);
 }
 
 function fromSaved(item: SavedGalleryItem): ArchiveProject {
@@ -204,7 +191,7 @@ export function GalleryBoard() {
                 }}
                 className="gen-ghost"
               >
-                {project.kind === "image" ? "Download HD Image" : "Download"}
+                Download / Save
               </button>
             </div>
           </li>

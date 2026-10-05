@@ -1,0 +1,13 @@
+---
+description: Ship studio work to Vercel production or local port 3000
+alwaysApply: true
+---
+
+# Deploy target
+
+After a finished studio change, publish it. Use one of these two places:
+
+- Production: `npx vercel --prod --yes --scope history7` from the repo. The live site is https://app.codeandbuild.tech.
+- Local: `npm run dev`, which serves http://localhost:3000.
+
+Do not leave the app only on port 3001. Do not start a second dev server if port 3000 is already running. Do not commit or git push unless the user asks.

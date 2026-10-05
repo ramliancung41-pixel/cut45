@@ -1,3 +1,4 @@
+import { NextResponse, type NextRequest } from "next/server";
 import {
   FRAME_COUNT,
   FRAME_LENGTH_SEC,
@@ -8,7 +9,11 @@ import {
   previewScript,
   type GenerateEvent,
 } from "@/lib/generate";
-import { EXTEND_VIDEO_COST, generationCreditCost } from "@/lib/credits";
+import { SUPABASE_ACCESS_COOKIE } from "@/lib/auth-cookie";
+import { EXTEND_VIDEO_COST, generationCreditCost, generationHoldCost } from "@/lib/credits";
+import { refundProfileCredits, reserveGenerationCredits } from "@/lib/profiles";
+import { userFromAccessToken } from "@/lib/supabase/server";
+import { CLIP_DURATION_SEC } from "@/lib/scenes";
 import { falApiKey } from "@/lib/fal-key";
 import {
   extractLastFrame,
@@ -31,6 +36,10 @@ export const maxDuration = 60;
 const FRAME_STEP_MS = 700;
 const AUDIO_STEP_MS = 600;
 const SCRIPT_CHAR_CAP = 1600;
+
+const SHORT_SCRIPT_PROMPT = `You write a 5-second faceless vertical video narration. Return only the spoken line.
+
+Pace: 12 to 20 words. One concrete hook about the topic. No title, labels, stage directions, hashtags, emojis, or markdown.`;
 
 const SCRIPT_SYSTEM_PROMPT = `You write rapid-fire, highly engaging 45-second TikTok scripts for faceless videos. Analyze the topic, then return only the spoken script.
 
@@ -86,19 +95,39 @@ function encode(event: GenerateEvent) {
   return new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
 }
 
-function iteratorToStream(iterator: AsyncIterator<Uint8Array>) {
+function iteratorToStream(
+  iterator: AsyncIterator<Uint8Array>,
+  hold: { userId: string; cost: number } | null,
+) {
+  let settled = false;
+  const release = async () => {
+    if (!hold || settled) return;
+    settled = true;
+    await refundProfileCredits(hold.userId, hold.cost);
+  };
+  const keep = () => {
+    settled = true;
+  };
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const { value, done } = await iterator.next();
         if (done) {
+          await release();
           controller.close();
           return;
         }
         if (value) {
+          const text = new TextDecoder().decode(value);
+          if (text.includes('"type":"error"')) await release();
+          else if (text.includes('"type":"complete"')) {
+            if (text.includes('"preview":true') || text.includes('"creditsCharged":0')) await release();
+            else keep();
+          }
           controller.enqueue(value);
         }
       } catch (error) {
+        await release();
         if (isAbortError(error)) {
           controller.close();
           return;
@@ -107,6 +136,7 @@ function iteratorToStream(iterator: AsyncIterator<Uint8Array>) {
       }
     },
     cancel() {
+      release();
       void iterator.return?.();
     },
   });
@@ -136,7 +166,7 @@ type GeminiResponse = {
   }>;
 };
 
-async function writeScript(topic: string, signal: AbortSignal) {
+async function writeScript(topic: string, signal: AbortSignal, clipSec = VIDEO_DURATION_SEC) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY is missing from the server environment.");
@@ -155,14 +185,17 @@ async function writeScript(topic: string, signal: AbortSignal) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         system_instruction: {
-          parts: [{ text: SCRIPT_SYSTEM_PROMPT }],
+          parts: [{ text: clipSec === CLIP_DURATION_SEC ? SHORT_SCRIPT_PROMPT : SCRIPT_SYSTEM_PROMPT }],
         },
         contents: [
           {
             role: "user",
             parts: [
               {
-                text: `Analyze this topic and write the 45-second TikTok script.\n\nTopic: ${topic}`,
+                text:
+                  clipSec === CLIP_DURATION_SEC
+                    ? `Write the 5-second narration.\n\nTopic: ${topic}`
+                    : `Analyze this topic and write the 45-second TikTok script.\n\nTopic: ${topic}`,
               },
             ],
           },
@@ -324,6 +357,7 @@ async function* runWorkflow(
   referenceImage: ReferenceImage | null,
   motionStyle: string | null,
   signal: AbortSignal,
+  clipSec = VIDEO_DURATION_SEC,
 ) {
   const lockPromise =
     referenceImage && engine !== "stock"
@@ -341,7 +375,7 @@ async function* runWorkflow(
   let script: string;
   let preview = false;
   try {
-    script = await writeScript(topic, signal);
+    script = await writeScript(topic, signal, clipSec);
   } catch (error) {
     if (isAbortError(error)) throw error;
     if (error instanceof QuotaError) {
@@ -365,7 +399,7 @@ async function* runWorkflow(
     message: preview ? "Preview script ready" : "Script ready",
     detail: preview
       ? "Local preview while the Gemini free tier is limited"
-      : `${wordCount} words, paced for a ${VIDEO_DURATION_SEC}-second narration`,
+      : `${wordCount} words, paced for a ${clipSec}-second narration`,
   });
 
   yield encode({
@@ -486,7 +520,7 @@ async function* runWorkflow(
       topic,
       voiceId,
       voiceName,
-      durationSec: VIDEO_DURATION_SEC,
+      durationSec: clipSec,
       script,
       wordCount,
       audioLabel,
@@ -721,7 +755,7 @@ async function* runScene(input: {
       topic: input.topic,
       voiceId: input.voiceId,
       voiceName: input.voiceName,
-      durationSec: VIDEO_DURATION_SEC,
+      durationSec: CLIP_DURATION_SEC,
       script,
       wordCount: countWords(script),
       audioLabel: `${input.voiceName} · browser voice · no speaker on screen`,
@@ -733,7 +767,7 @@ async function* runScene(input: {
   });
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   if (!process.env.GEMINI_API_KEY) {
     return Response.json(
       { error: "GEMINI_API_KEY must be set in .env.local." },
@@ -762,6 +796,7 @@ export async function POST(request: Request) {
           scene?: unknown;
           narration?: unknown;
           visualPrompt?: unknown;
+          durationSec?: unknown;
         })
       : {};
   const topic = typeof record.topic === "string" ? record.topic.trim() : "";
@@ -771,7 +806,7 @@ export async function POST(request: Request) {
   const visualPrompt = typeof record.visualPrompt === "string" ? record.visualPrompt.trim() : "";
   const priorScript = typeof record.priorScript === "string" ? record.priorScript.trim() : "";
   const priorVideoUrls = Array.isArray(record.priorVideoUrls)
-    ? record.priorVideoUrls.filter((item): item is string => typeof item === "string").slice(0, 6)
+    ? record.priorVideoUrls.filter((item): item is string => typeof item === "string").slice(0, 12)
     : [];
   const voice = typeof record.voice === "string" ? record.voice : "";
   const engine = typeof record.engine === "string" ? record.engine : "";
@@ -834,6 +869,40 @@ export async function POST(request: Request) {
     }
   }
 
+  const durationSec = typeof record.durationSec === "number" ? record.durationSec : null;
+  const holdQuote = generationHoldCost({
+    extend,
+    scene,
+    continuation: priorVideoUrls.length > 0,
+    engine,
+    imageToVideo: Boolean(referenceImage) && engine !== "stock",
+    durationSec,
+  });
+  let hold: { userId: string; cost: number } | null = null;
+  if (holdQuote.clipCost > 0) {
+    const accessToken = request.cookies.get(SUPABASE_ACCESS_COOKIE)?.value ?? "";
+    const user = accessToken ? await userFromAccessToken(accessToken) : null;
+    if (!user?.email) {
+      return NextResponse.json({ error: "Sign in before spending credits." }, { status: 401 });
+    }
+    const reserved = await reserveGenerationCredits(
+      user.id,
+      user.email,
+      holdQuote.required,
+      holdQuote.clipCost,
+    );
+    if (!reserved.ok) {
+      if (reserved.reason === "insufficient") {
+        return NextResponse.json(
+          { error: "Insufficient credits", upgradeRequired: true },
+          { status: 402 },
+        );
+      }
+      return NextResponse.json({ error: "Could not update the credit balance." }, { status: 500 });
+    }
+    hold = { userId: user.id, cost: holdQuote.clipCost };
+  }
+
   const stream = iteratorToStream(
     scene
       ? runScene({
@@ -866,7 +935,9 @@ export async function POST(request: Request) {
       referenceImage,
       motionStyle || null,
       request.signal,
+      record.durationSec === CLIP_DURATION_SEC ? CLIP_DURATION_SEC : VIDEO_DURATION_SEC,
     ),
+    hold,
   );
 
   return new Response(stream, {

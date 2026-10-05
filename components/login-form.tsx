@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import type { Provider, Session, SupabaseClient } from "@supabase/supabase-js";
 import { useCredits } from "@/components/credit-provider";
 import { authServiceMessage, normalizeEmail, validateEmail, validatePassword } from "@/lib/auth";
@@ -110,6 +110,14 @@ function GoogleMark() {
   );
 }
 
+function FacebookMark() {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4 fill-white">
+      <path d="M14.5 8.5V6.7c0-.7.5-1 1.2-1h1.3V3h-2.2C11.9 3 11 4.6 11 6.5v2H9v2.7h2V21h3.5v-9.8h2.3l.3-2.7h-2.6Z" />
+    </svg>
+  );
+}
+
 function AppleMark() {
   return (
     <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4 fill-white">
@@ -120,8 +128,11 @@ function AppleMark() {
 
 const VERIFY_NOTICE = "Check your email inbox for the verification link.";
 
+function openStudio(path: string) {
+  window.location.assign(path);
+}
+
 export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const { setAccountBalance } = useCredits();
   const [mode, setMode] = useState<Mode>("create");
@@ -159,8 +170,7 @@ export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
           await storeServerSession(session);
           const tokens = await createProfile(session.access_token);
           if (typeof tokens === "number") setAccountBalance(tokens);
-          router.push("/generator");
-          router.refresh();
+          openStudio(afterAuth);
         } catch (error) {
           const message = error instanceof Error ? error.message : "";
           setFormError(message || "Could not save the session.");
@@ -169,7 +179,7 @@ export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
       })();
     });
     return () => subscription.unsubscribe();
-  }, [awaitingVerification, router, setAccountBalance, supabase]);
+  }, [afterAuth, awaitingVerification, setAccountBalance, supabase]);
 
   function switchMode(nextMode: Mode) {
     setMode(nextMode);
@@ -246,8 +256,7 @@ export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
         if (typeof tokens === "number") setAccountBalance(tokens);
       }
 
-      router.push(afterAuth);
-      router.refresh();
+      openStudio(afterAuth);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       setFormError(message || "Could not reach the account service.");
@@ -264,7 +273,30 @@ export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: authRedirectUrl(),
+          redirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+      if (error) {
+        setFormError(authServiceMessage(error.message, mode));
+        setPending(false);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      setFormError(message || "Could not reach the account service.");
+      setPending(false);
+    }
+  }
+
+  async function continueWithFacebook() {
+    setFormError(null);
+    setNotice(null);
+    setPending(true);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "facebook",
+        options: {
+          scopes: "email public_profile",
+          redirectTo: `${window.location.origin}/auth/callback`,
         },
       });
       if (error) {
@@ -398,6 +430,15 @@ export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
         >
           <GoogleMark />
           Continue with Google
+        </button>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => void continueWithFacebook()}
+          className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-white/15 bg-transparent text-sm font-medium text-white transition-colors enabled:hover:bg-white/5 disabled:cursor-wait disabled:opacity-60"
+        >
+          <FacebookMark />
+          Continue with Facebook
         </button>
         <button
           type="button"

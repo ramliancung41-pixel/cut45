@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { CreditBar } from "@/components/credit-provider";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
@@ -11,7 +10,6 @@ type StudioAccount = {
 };
 
 export function useStudioAccount() {
-  const router = useRouter();
   const [account, setAccount] = useState<StudioAccount | null>(null);
   const [ready, setReady] = useState(false);
 
@@ -43,8 +41,7 @@ export function useStudioAccount() {
     }
     await fetch("/api/auth/logout", { method: "POST" });
     setAccount(null);
-    router.push("/login");
-    router.refresh();
+    window.location.href = "/";
   }
 
   return { account, ready, signOut };
@@ -58,15 +55,15 @@ export function ProfileCreditBar({
   ready: boolean;
 }) {
   return (
-    <div className="ml-auto flex items-center gap-3 rounded-2xl border border-line bg-panel px-3 py-2">
+    <div className="ml-auto flex min-w-0 shrink items-center gap-2 rounded-full border border-line bg-panel px-3 py-1.5 sm:gap-3 sm:py-2">
       {ready && name ? (
-        <p className="max-w-[9rem] truncate text-sm font-medium tracking-tight">{name}</p>
+        <p className="hidden max-w-[8rem] truncate text-sm font-medium tracking-tight sm:block">{name}</p>
       ) : (
-        <Link href="/login" className="text-sm font-medium text-foreground hover:text-accent">
+        <Link href="/login" className="shrink-0 text-sm font-medium text-foreground hover:text-accent">
           {ready ? "Sign in" : "Account"}
         </Link>
       )}
-      <span aria-hidden className="h-8 w-px bg-line" />
+      <span aria-hidden className="hidden h-4 w-px shrink-0 bg-line sm:block" />
       <CreditBar />
     </div>
   );

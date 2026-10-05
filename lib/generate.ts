@@ -142,7 +142,7 @@ export function chainVideoUrls(frames: StoryFrame[]) {
     if (!fal || urls[urls.length - 1] === frame.src) continue;
     urls.push(frame.src);
   }
-  return urls.slice(0, 6);
+  return urls.slice(0, 12);
 }
 
 export function stitchExtension(previous: GenerateResult, extension: GenerateResult): GenerateResult {

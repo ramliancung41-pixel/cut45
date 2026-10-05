@@ -25,10 +25,19 @@ import { Storyboard } from "@/components/storyboard";
 import { useDefaultVoice } from "@/components/use-default-voice";
 import { EXTEND_VIDEO_COST, IMAGE_GENERATION_COST, generationCreditCost } from "@/lib/credits";
 import { IMAGE_STYLES, imageStyleName, isImageStyleId, type ImageStyleId } from "@/lib/image-styles";
-import { isMotionStyleId, MOTION_STYLES, PROMPT_MAX, type MotionStyleId } from "@/lib/motion-styles";
+import { MOTION_STYLES, PROMPT_MAX, type MotionStyleId } from "@/lib/motion-styles";
 import { prepareReferenceImage } from "@/lib/prepare-reference-image";
 import { CopilotPanel } from "@/components/copilot-panel";
-import { movieCreditCost, type MovieScene } from "@/lib/scenes";
+import {
+  CLIP_DURATION_SEC,
+  VIDEO_DURATIONS,
+  movieCreditCost,
+  sceneCountForDuration,
+  type MovieScene,
+  type VideoDurationSec,
+} from "@/lib/scenes";
+import { saveGeneratedFile } from "@/lib/save-media";
+import { UpgradeModal } from "@/components/upgrade-modal";
 
 type StepStatus = "pending" | "started" | "completed";
 
@@ -108,7 +117,7 @@ function engineOffer(id: VisualEngineId, imageToVideo: boolean) {
   if (imageToVideo && id === "budget") {
     return {
       name: "Studio Fast Motion",
-      rate: "60 credits",
+      rate: "45 credits",
       note: "High quality render",
     };
   }
@@ -131,9 +140,30 @@ function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
 
+type StudioPicker = "voice" | "motion" | "model";
+
+function voicePillLabel(id: VoiceId) {
+  const word = getVoice(id)?.name.split(" ")[0];
+  return `Voice Style: ${word || "Voice"}`;
+}
+
+function motionPillLabel(id: MotionStyleId | "") {
+  if (!id) return "Motion Style";
+  if (id === "slowmo") return "Motion: Slow-Mo";
+  const name = MOTION_STYLES.find((style) => style.id === id)?.name ?? "Motion";
+  return `Motion: ${name.split(" ")[0]}`;
+}
+
+function modelPillLabel(id: VisualEngineId) {
+  if (id === "stock") return "Engine: Stock";
+  if (id === "budget") return "Engine: Fast";
+  return "Engine: Ultra";
+}
+
 export function GenerateForm() {
   const { voice: storedVoice } = useDefaultVoice();
-  const { credits, deductForEngine, deductImageCredits, deductExtendCredits, archiveProject } = useCredits();
+  const { credits, balanceReady, deductImageCredits, archiveProject, setAccountBalance } = useCredits();
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [mode, setMode] = useState<"video" | "image">("video");
   const [imageStyle, setImageStyle] = useState<ImageStyleId | "">("");
   const [imageResult, setImageResult] = useState<{ id: string; imageUrl: string; prompt: string } | null>(null);
@@ -160,7 +190,9 @@ export function GenerateForm() {
   const filmRunRef = useRef(false);
   const filmRef = useRef<GenerateResult | null>(null);
   const [scenes, setScenes] = useState<MovieScene[]>([]);
+  const [durationSec, setDurationSec] = useState<VideoDurationSec>(5);
   const [copilotOpen, setCopilotOpen] = useState(false);
+  const [picker, setPicker] = useState<StudioPicker | null>(null);
   const [planning, setPlanning] = useState(false);
   const plannedTopicRef = useRef("");
   const previewRef = useRef<string | null>(null);
@@ -169,6 +201,37 @@ export function GenerateForm() {
   const outcomeRef = useRef<"idle" | "complete" | "error">("idle");
   const fallbackRef = useRef(false);
   const voice = voiceOverride ?? storedVoice;
+
+  function requireCredits(cost: number, message: string) {
+    if (!balanceReady) return false;
+    if (credits >= cost) return true;
+    setError(message);
+    setUpgradeOpen(true);
+    return false;
+  }
+
+  async function syncBalance() {
+    try {
+      const response = await fetch("/api/auth/session");
+      const payload = (await response.json()) as { user?: { credits?: number; tokens?: number } | null };
+      const amount = payload.user?.credits ?? payload.user?.tokens;
+      if (typeof amount === "number") setAccountBalance(amount);
+    } catch {
+      // The header keeps the last balance until the next session read.
+    }
+  }
+
+  async function readGenerateResponse(response: Response) {
+    if (response.status === 402) {
+      setUpgradeOpen(true);
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(payload?.error ?? "Insufficient credits");
+    }
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(payload?.error ?? "Could not start generation.");
+    }
+  }
 
   function resetRun() {
     outcomeRef.current = "idle";
@@ -214,7 +277,6 @@ export function GenerateForm() {
       if (extendRunRef.current) {
         extendRunRef.current = false;
         const stitched = result ? stitchExtension(result, event.result) : event.result;
-        deductExtendCredits();
         const urls = chainVideoUrls(stitched.frames);
         const videoSrc = stitched.videoUrl || urls[urls.length - 1];
         archiveProject({
@@ -255,9 +317,6 @@ export function GenerateForm() {
         !event.result.preview &&
         event.result.creditsCharged > 0 &&
         event.result.engine !== "stock";
-      if (!(event.result.preview && event.result.creditsCharged === 0)) {
-        deductForEngine(event.result.engine, imageRun);
-      }
       const videoSrc = event.result.frames.find((frame) => frame.src.startsWith("https://"))?.src;
       const offer = engineOffer(event.result.engine, imageRun);
       archiveProject({
@@ -422,10 +481,7 @@ export function GenerateForm() {
       setError(`Keep the prompt under ${PROMPT_MAX} characters.`);
       return;
     }
-    if (credits < IMAGE_GENERATION_COST) {
-      setError("Image generation costs 10 credits.");
-      return;
-    }
+    if (!requireCredits(IMAGE_GENERATION_COST, "Image generation costs 10 credits.")) return;
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -503,54 +559,55 @@ export function GenerateForm() {
 
   async function downloadImage(imageUrl: string) {
     setDownloadError(null);
-    const response = await fetch("/api/image/download", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ imageUrl }),
-    });
-    if (!response.ok) throw new Error("Could not download that image.");
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "cut45-image.png";
-    link.click();
-    URL.revokeObjectURL(url);
+    await saveGeneratedFile(imageUrl, "cut45-image.png");
   }
 
-  async function planScenes(nextTopic = topic) {
+  async function downloadVideo(videoUrl: string) {
+    setDownloadError(null);
+    await saveGeneratedFile(videoUrl, "cut45-video.mp4");
+  }
+
+  function planKey(value: string, seconds: VideoDurationSec) {
+    return `${value.trim()}|${seconds}`;
+  }
+
+  async function planScenes(nextTopic = topic, seconds: VideoDurationSec = durationSec) {
     const trimmed = nextTopic.trim();
-    if (trimmed.length < 3 || planning || running || mode === "image") return;
-    if (plannedTopicRef.current === trimmed && scenes.length > 0) return;
+    const count = sceneCountForDuration(seconds);
+    if (trimmed.length < 3 || planning || mode === "image" || count < 2) return null;
+    const key = planKey(trimmed, seconds);
+    if (plannedTopicRef.current === key && scenes.length === count) return scenes;
     setPlanning(true);
     setError(null);
-    setStatusMessage("Breaking the topic into scenes.");
+    setStatusMessage(`Writing ${count} scenes for a ${seconds}s video.`);
     try {
       const response = await fetch("/api/copilot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "plan", topic: trimmed, scenes }),
+        body: JSON.stringify({ kind: "plan", topic: trimmed, scenes, sceneCount: count }),
       });
       const payload = (await response.json().catch(() => null)) as {
         scenes?: MovieScene[];
         error?: string;
       } | null;
-      if (!response.ok || !payload?.scenes) {
+      if (!response.ok || !payload?.scenes || payload.scenes.length !== count) {
         throw new Error(payload?.error ?? "Could not break that topic into scenes.");
       }
-      plannedTopicRef.current = trimmed;
+      plannedTopicRef.current = key;
       setScenes(payload.scenes);
       setCopilotOpen(true);
-      setStatusMessage("Three scenes are ready.");
+      setStatusMessage(`${count} scenes are ready for a ${seconds}s video.`);
+      return payload.scenes;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not break that topic into scenes.");
+      return null;
     } finally {
       setPlanning(false);
     }
   }
 
-  async function renderFilm() {
-    if (running || imageMode || scenes.length === 0) return;
+  async function renderFilm(sceneList: MovieScene[] = scenes) {
+    if (running || imageMode || sceneList.length === 0) return;
     if (!isVoiceId(voice)) {
       setError("Select a voice style.");
       return;
@@ -560,11 +617,8 @@ export function GenerateForm() {
       return;
     }
     const firstHasImage = Boolean(referenceImage);
-    const cost = movieCreditCost(scenes.length, firstHasImage);
-    if (credits < cost) {
-      setError(`This short costs ${cost} credits.`);
-      return;
-    }
+    const cost = movieCreditCost(sceneList.length, firstHasImage);
+    if (!requireCredits(cost, `This short costs ${cost} credits.`)) return;
     if (referencePreview && !referenceImage) {
       setError("The reference image is still preparing.");
       return;
@@ -584,10 +638,10 @@ export function GenerateForm() {
 
     let accumulated: GenerateResult | null = null;
     try {
-      for (let index = 0; index < scenes.length; index += 1) {
-        const scene = scenes[index];
+      for (let index = 0; index < sceneList.length; index += 1) {
+        const scene = sceneList[index];
         const priorVideoUrls = accumulated ? chainVideoUrls(accumulated.frames) : [];
-        setStatusMessage(`Scene ${index + 1} of ${scenes.length}.`);
+        setStatusMessage(`Scene ${index + 1} of ${sceneList.length}.`);
         outcomeRef.current = "idle";
         filmRef.current = null;
         const response = await fetch("/api/generate", {
@@ -606,13 +660,11 @@ export function GenerateForm() {
             ...(index === 0 && referenceImage ? { referenceImage } : {}),
             ...(priorVideoUrls.length > 0 ? { priorVideoUrls } : {}),
             ...(motionStyle ? { motionStyle } : {}),
+            durationSec,
           }),
           signal: controller.signal,
         });
-        if (!response.ok) {
-          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(payload?.error ?? `Scene ${index + 1} could not start.`);
-        }
+        await readGenerateResponse(response);
         await readProgress(response, controller.signal);
         const piece = (filmRef as { current: GenerateResult | null }).current;
         const sceneStatus = outcomeRef.current as "idle" | "complete" | "error";
@@ -621,8 +673,7 @@ export function GenerateForm() {
         }
         accumulated = accumulated ? stitchExtension(accumulated, piece) : piece;
         setResult(accumulated);
-        if (piece.creditsCharged > EXTEND_VIDEO_COST) deductForEngine("budget", true);
-        else deductForEngine("budget", false);
+        await syncBalance();
       }
       if (accumulated) {
         const urls = chainVideoUrls(accumulated.frames);
@@ -637,7 +688,7 @@ export function GenerateForm() {
           voiceId: accumulated.voiceId,
           script: accumulated.script,
           videoSrc,
-          creditsCharged: movieCreditCost(scenes.length, firstHasImage),
+          creditsCharged: movieCreditCost(sceneList.length, firstHasImage),
           createdAt: new Date().toISOString(),
         });
         if (videoSrc) {
@@ -651,7 +702,7 @@ export function GenerateForm() {
               engine: "budget",
               voiceName: accumulated.voiceName,
               videoUrl: videoSrc,
-              credits: movieCreditCost(scenes.length, firstHasImage),
+              credits: movieCreditCost(sceneList.length, firstHasImage),
             }),
           }).catch(() => undefined);
         }
@@ -669,6 +720,7 @@ export function GenerateForm() {
       filmRunRef.current = false;
       if (abortRef.current === controller) abortRef.current = null;
       setRunning(false);
+      void syncBalance();
     }
   }
 
@@ -679,10 +731,7 @@ export function GenerateForm() {
       setError("Extend a finished Studio Fast Motion video.");
       return;
     }
-    if (credits < EXTEND_VIDEO_COST) {
-      setError("Extend Video costs 45 credits.");
-      return;
-    }
+    if (!requireCredits(EXTEND_VIDEO_COST, "Extend Video costs 45 credits.")) return;
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -714,10 +763,7 @@ export function GenerateForm() {
         }),
         signal: controller.signal,
       });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(payload?.error ?? "Could not extend that video.");
-      }
+      await readGenerateResponse(response);
       await readProgress(response, controller.signal);
       if (outcomeRef.current === "idle") {
         setError("The extension stopped before a video was ready.");
@@ -735,7 +781,30 @@ export function GenerateForm() {
       extendRunRef.current = false;
       if (abortRef.current === controller) abortRef.current = null;
       setRunning(false);
+      void syncBalance();
     }
+  }
+
+  async function generateLongVideo(trimmed: string) {
+    if (!isVoiceId(voice)) {
+      setError("Select a voice style.");
+      return;
+    }
+    if (engine !== "budget") {
+      setError("Videos longer than 5 seconds use Studio Fast Motion. Each 5-second clip costs 45 credits.");
+      return;
+    }
+    if (referencePreview && !referenceImage) {
+      setError("The reference image is still preparing.");
+      return;
+    }
+    const count = sceneCountForDuration(durationSec);
+    const firstHasImage = Boolean(referenceImage);
+    const cost = movieCreditCost(count, firstHasImage);
+    if (!requireCredits(cost, `This ${durationSec}s video costs ${cost} credits.`)) return;
+    const ready = await planScenes(trimmed, durationSec);
+    if (!ready || ready.length !== count) return;
+    await renderFilm(ready);
   }
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -761,6 +830,11 @@ export function GenerateForm() {
       return;
     }
 
+    if (durationSec > CLIP_DURATION_SEC) {
+      await generateLongVideo(trimmed);
+      return;
+    }
+
     if (referencePreview && !referenceImage) {
       setError("The reference image is still preparing.");
       return;
@@ -769,10 +843,7 @@ export function GenerateForm() {
     const imageToVideo = Boolean(referenceImage) && engine !== "stock";
     imageRunRef.current = imageToVideo;
     const cost = generationCreditCost(engine, imageToVideo);
-    if (credits < cost) {
-      setError(`${engineOffer(engine, imageToVideo).name} costs ${cost} credits.`);
-      return;
-    }
+    if (!requireCredits(cost, `${engineOffer(engine, imageToVideo).name} costs ${cost} credits.`)) return;
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -795,9 +866,16 @@ export function GenerateForm() {
           engine,
           ...(referenceImage ? { referenceImage } : {}),
           ...(motionStyle ? { motionStyle } : {}),
+          durationSec: CLIP_DURATION_SEC,
         }),
         signal: controller.signal,
       });
+
+      if (response.status === 402) {
+        setUpgradeOpen(true);
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Insufficient credits");
+      }
 
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as {
@@ -850,6 +928,7 @@ export function GenerateForm() {
         abortRef.current = null;
       }
       setRunning(false);
+      void syncBalance();
     }
   }
 
@@ -934,6 +1013,15 @@ export function GenerateForm() {
     }
   }
 
+  useEffect(() => {
+    if (!picker) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setPicker(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [picker]);
+
   const activeStep = steps.find((step) => step.status === "started");
   const imageMode = mode === "image";
   const previewSrc = referencePreview ?? referenceImage;
@@ -941,21 +1029,28 @@ export function GenerateForm() {
   const referenceAttached = !imageMode && Boolean(previewSrc);
   const referencePreparing = referenceAttached && !referenceImage;
   const imageToVideo = referenceAttached && engine !== "stock";
+  const clipCount = sceneCountForDuration(durationSec);
+  const longForm = !imageMode && durationSec > CLIP_DURATION_SEC;
+  const longCost = movieCreditCost(clipCount, Boolean(referenceImage));
   const runCost = generationCreditCost(engine, imageToVideo);
+  const activeVideoCost = longForm ? longCost : runCost;
   const engineChoices = (referenceAttached
     ? VISUAL_ENGINES.filter((option) => option.id !== "stock")
     : VISUAL_ENGINES
   ).filter((option) => option.id !== "ultra");
-  const videoCostLabel = referenceAttached
-    ? `Reference image · ${runCost} credits`
-    : runCost === 0
-      ? "Free preview · 0 credits"
-      : `Text-only · ${runCost} credits`;
+  const videoCostLabel = longForm
+    ? `${durationSec}s · ${clipCount} clips · ${longCost} credits`
+    : referenceAttached
+      ? `Reference image · ${runCost} credits`
+      : runCost === 0
+        ? "Free preview · 0 credits"
+        : `5s clip · ${runCost} credits`;
 
   return (
-    <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
-      <form onSubmit={onSubmit} className="gen-glass space-y-7 rounded-3xl p-5 sm:p-6">
-        <div role="tablist" aria-label="Generation mode" className="grid gap-2.5 sm:grid-cols-2">
+    <div className="grid items-start gap-6 max-md:pb-28 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+      <UpgradeModal open={upgradeOpen} onClose={() => setUpgradeOpen(false)} />
+      <form onSubmit={onSubmit} className="gen-glass space-y-5 rounded-3xl p-4 max-md:pb-36 sm:space-y-7 sm:p-6">
+        <div role="tablist" aria-label="Generation mode" className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
           <button
             type="button"
             role="tab"
@@ -968,8 +1063,8 @@ export function GenerateForm() {
             className={cn("gen-pick text-left", mode === "video" && "gen-pick-on")}
           >
             <span className="min-w-0">
-              <span className="block text-sm font-medium tracking-tight">Video Generator</span>
-              <span className="mt-1 block text-sm leading-6 text-muted">45-second faceless short</span>
+              <span className="block text-[13px] font-medium tracking-tight sm:text-sm">Video Generator</span>
+              <span className="mt-1 block text-xs leading-5 text-muted sm:text-sm sm:leading-6">45-second faceless short</span>
             </span>
           </button>
           <button
@@ -979,13 +1074,14 @@ export function GenerateForm() {
             disabled={running}
             onClick={() => {
               setMode("image");
+              setPicker(null);
               setError(null);
             }}
             className={cn("gen-pick text-left", mode === "image" && "gen-pick-on")}
           >
             <span className="min-w-0">
-              <span className="block text-sm font-medium tracking-tight">Image-to-Image / Avatar Studio</span>
-              <span className="mt-1 block text-sm leading-6 text-muted">10 credits per still</span>
+              <span className="block text-[13px] font-medium tracking-tight sm:text-sm">Image-to-Image / Avatar Studio</span>
+              <span className="mt-1 block text-xs leading-5 text-muted sm:text-sm sm:leading-6">10 credits per still</span>
             </span>
           </button>
         </div>
@@ -994,7 +1090,7 @@ export function GenerateForm() {
             <label htmlFor="topic" className="text-sm font-medium tracking-tight">
               {imageMode ? "Style prompt" : "Movie topic"}
             </label>
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               {imageMode ? null : (
               <button
                 type="button"
@@ -1002,7 +1098,7 @@ export function GenerateForm() {
                 disabled={running}
                 className="gen-enhance"
               >
-                AI Co-Pilot
+                AI Co-Pilot · Free
               </button>
               )}
               {imageMode ? null : (
@@ -1048,16 +1144,186 @@ export function GenerateForm() {
               placeholder={imageMode ? "Transform into a 3D Pixar character" : "Why night markets stay cheap"}
               onChange={(event) => {
                 setTopic(event.target.value);
-                if (event.target.value.trim() !== plannedTopicRef.current) {
+                if (!plannedTopicRef.current.startsWith(`${event.target.value.trim()}|`)) {
                   plannedTopicRef.current = "";
                 }
               }}
               onBlur={(event) => {
                 const value = event.currentTarget.value;
-                if (!imageMode && value.trim().length >= 12) void planScenes(value);
+                if (!imageMode && durationSec > CLIP_DURATION_SEC && value.trim().length >= 12) {
+                  void planScenes(value, durationSec);
+                }
               }}
               className="w-full resize-y bg-transparent px-4 py-3 text-base leading-7 text-foreground outline-none placeholder:text-muted/60"
             />
+            {imageMode ? null : (
+              <div className="border-t border-white/10">
+                <div className="flex flex-wrap gap-2 px-3 py-2.5">
+                  {(
+                    [
+                      ["voice", voicePillLabel(voice)],
+                      ["motion", motionPillLabel(motionStyle)],
+                      ["model", modelPillLabel(engine)],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      disabled={running}
+                      aria-expanded={picker === id}
+                      onClick={() => setPicker((current) => (current === id ? null : id))}
+                      className={cn(
+                        "max-w-full rounded-full border px-3 py-1.5 text-xs font-medium",
+                        picker === id
+                          ? "border-cyan-300/70 bg-cyan-300/15 text-cyan-50"
+                          : "border-white/15 bg-black/30 text-foreground",
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-2 px-3 pb-2.5" role="radiogroup" aria-label="Video duration">
+                  {VIDEO_DURATIONS.map((seconds) => {
+                    const selected = durationSec === seconds;
+                    return (
+                      <button
+                        key={seconds}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        disabled={running}
+                        onClick={() => {
+                          setDurationSec(seconds);
+                          plannedTopicRef.current = "";
+                          setScenes([]);
+                        }}
+                        className={cn(
+                          "rounded-full border px-3 py-1.5 text-xs font-medium",
+                          selected
+                            ? "border-cyan-300/70 bg-cyan-300/15 text-cyan-50"
+                            : "border-white/15 bg-black/30 text-foreground",
+                        )}
+                      >
+                        {seconds}s
+                      </button>
+                    );
+                  })}
+                </div>
+                {picker ? (
+                  <div
+                    role="dialog"
+                    aria-label={
+                      picker === "voice" ? "Voice style" : picker === "motion" ? "Motion style" : "Engine"
+                    }
+                    className="border-t border-white/10 px-3 pb-3"
+                  >
+                    <div className="flex items-center justify-between gap-3 py-2">
+                      <p className="text-sm font-medium">
+                        {picker === "voice" ? "Voice style" : picker === "motion" ? "Motion style" : "Engine"}
+                      </p>
+                      <button
+                        type="button"
+                        aria-label="Close"
+                        onClick={() => setPicker(null)}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/15 text-sm"
+                      >
+                        X
+                      </button>
+                    </div>
+                    <div className="grid gap-1.5">
+                      {picker === "voice"
+                        ? VOICES.map((option) => {
+                            const selected = voice === option.id;
+                            return (
+                              <button
+                                key={option.id}
+                                type="button"
+                                aria-pressed={selected}
+                                onClick={() => {
+                                  setVoiceOverride(option.id);
+                                  setPicker(null);
+                                }}
+                                className={cn(
+                                  "rounded-xl border px-3 py-2.5 text-left",
+                                  selected ? "border-cyan-300/70 bg-cyan-300/10" : "border-white/10 bg-black/20",
+                                )}
+                              >
+                                <span className="block text-sm font-medium">{option.name}</span>
+                                <span className="mt-0.5 block text-xs leading-5 text-muted">{VOICE_NOTE[option.id]}</span>
+                              </button>
+                            );
+                          })
+                        : null}
+                      {picker === "motion" ? (
+                        <>
+                          <button
+                            type="button"
+                            aria-pressed={motionStyle === ""}
+                            onClick={() => {
+                              setMotionStyle("");
+                              setPicker(null);
+                            }}
+                            className={cn(
+                              "rounded-xl border px-3 py-2.5 text-left text-sm",
+                              motionStyle === "" ? "border-cyan-300/70 bg-cyan-300/10" : "border-white/10 bg-black/20",
+                            )}
+                          >
+                            Default look
+                          </button>
+                          {MOTION_STYLES.map((style) => {
+                            const selected = motionStyle === style.id;
+                            return (
+                              <button
+                                key={style.id}
+                                type="button"
+                                aria-pressed={selected}
+                                onClick={() => {
+                                  setMotionStyle(style.id);
+                                  setPicker(null);
+                                }}
+                                className={cn(
+                                  "rounded-xl border px-3 py-2.5 text-left text-sm",
+                                  selected ? "border-cyan-300/70 bg-cyan-300/10" : "border-white/10 bg-black/20",
+                                )}
+                              >
+                                {style.name}
+                              </button>
+                            );
+                          })}
+                        </>
+                      ) : null}
+                      {picker === "model"
+                        ? engineChoices.map((option) => {
+                            const selected = engine === option.id;
+                            const offer = engineOffer(option.id, imageToVideo);
+                            return (
+                              <button
+                                key={option.id}
+                                type="button"
+                                aria-pressed={selected}
+                                onClick={() => {
+                                  setEngine(option.id);
+                                  setError((current) => (current?.endsWith("credits.") ? null : current));
+                                  setPicker(null);
+                                }}
+                                className={cn(
+                                  "rounded-xl border px-3 py-2.5 text-left",
+                                  selected ? "border-cyan-300/70 bg-cyan-300/10" : "border-white/10 bg-black/20",
+                                )}
+                              >
+                                <span className="block text-sm font-medium">{offer.name}</span>
+                                <span className="mt-0.5 block font-mono text-[11px] text-accent">{offer.rate}</span>
+                                <span className="mt-0.5 block text-xs leading-5 text-muted">{offer.note}</span>
+                              </button>
+                            );
+                          })
+                        : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            )}
             <input
               ref={referenceInputRef}
               id="reference-image"
@@ -1236,111 +1502,13 @@ export function GenerateForm() {
           </div>
         ) : null}
 
-        {imageMode ? null : (
-        <div>
-          <label htmlFor="motion-style" className="text-sm font-medium tracking-tight">
-            Motion style
-          </label>
-          <select
-            id="motion-style"
-            name="motion-style"
-            value={motionStyle}
-            disabled={running}
-            onChange={(event) => {
-              const value = event.target.value;
-              setMotionStyle(isMotionStyleId(value) ? value : "");
-            }}
-            className="gen-field gen-select mt-3 w-full rounded-2xl px-4 py-3 text-sm text-foreground outline-none"
-          >
-            <option value="">Optional</option>
-            {MOTION_STYLES.map((style) => (
-              <option key={style.id} value={style.id}>
-                {style.name}
-              </option>
-            ))}
-          </select>
-          <p className="mt-2 text-xs leading-5 text-muted">
-            Added to the motion prompt. Leave it optional for the default look.
+        {!imageMode && activeVideoCost > 0 && credits < activeVideoCost ? (
+          <p role="status" className="gen-alert">
+            {longForm
+              ? `This ${durationSec}s video costs ${longCost} credits.`
+              : `${engineOffer(engine, imageToVideo).name} costs ${runCost} credits.`}
           </p>
-        </div>
-        )}
-
-        {imageMode ? null : (
-        <>
-        <fieldset disabled={running} className="space-y-3">
-          <legend className="text-sm font-medium tracking-tight">Voice style</legend>
-          <div className="grid gap-2.5 sm:grid-cols-2">
-            {VOICES.map((option) => {
-              const selected = voice === option.id;
-              return (
-                <label key={option.id} className={cn("gen-pick", selected && "gen-pick-on")}>
-                  <input
-                    type="radio"
-                    name="voice"
-                    value={option.id}
-                    checked={selected}
-                    onChange={() => setVoiceOverride(option.id)}
-                    className="sr-only"
-                  />
-                  <VoiceBadge id={option.id} selected={selected} />
-                  <span className="min-w-0">
-                    <span className="block text-sm font-medium tracking-tight">{option.name}</span>
-                    <span className="mt-1 block text-sm leading-6 text-muted">
-                      {VOICE_NOTE[option.id]}
-                    </span>
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-        </fieldset>
-
-        <fieldset disabled={running} className="space-y-3">
-          <legend className="flex flex-wrap items-center gap-2 text-sm font-medium tracking-tight">
-            {imageToVideo ? "Image-to-Video" : "Visual engine model"}
-            {imageToVideo ? (
-              <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 font-mono text-[11px] tracking-wide text-cyan-100">
-                Reference attached
-              </span>
-            ) : null}
-          </legend>
-          <div className="grid gap-2.5">
-            {engineChoices.map((option) => {
-              const selected = engine === option.id;
-              const offer = engineOffer(option.id, imageToVideo);
-              return (
-                <label key={option.id} className={cn("gen-pick", selected && "gen-pick-on")}>
-                  <input
-                    type="radio"
-                    name="visual-engine"
-                    value={option.id}
-                    checked={selected}
-                    onChange={() => {
-                      setEngine(option.id);
-                      setError((current) => (current?.endsWith("credits.") ? null : current));
-                    }}
-                    className="sr-only"
-                  />
-                  <EngineBadge id={option.id} selected={selected} />
-                  <span className="min-w-0">
-                    <span className="block text-sm font-medium tracking-tight">{offer.name}</span>
-                    <span className="mt-1 block font-mono text-[11px] tracking-wide text-accent">
-                      {offer.rate}
-                    </span>
-                    <span className="mt-1 block text-sm leading-6 text-muted">{offer.note}</span>
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-          {runCost > 0 && credits < runCost ? (
-            <p role="status" className="gen-alert">
-              {engineOffer(engine, imageToVideo).name} costs {runCost} credits.
-            </p>
-          ) : null}
-        </fieldset>
-        </>
-        )}
+        ) : null}
 
         {error ? (
           <p role="alert" className="gen-alert">
@@ -1348,20 +1516,20 @@ export function GenerateForm() {
           </p>
         ) : null}
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="studio-dock flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:gap-3">
           <button
             type="submit"
-            disabled={running || referencePreparing || (imageMode ? !imageReady || credits < IMAGE_GENERATION_COST : topic.trim().length < 3 || credits < runCost)}
-            className="gen-cta"
+            disabled={!balanceReady || running || referencePreparing || planning || (imageMode ? !imageReady : topic.trim().length < 3)}
+            className="gen-cta w-full md:w-auto"
           >
-            {running ? "Generating…" : imageMode ? "Generate image" : "Generate Video"}
+            {running ? "Generating…" : planning ? "Writing scenes…" : imageMode ? "Generate image" : longForm ? `Generate ${durationSec}s · ${longCost} credits` : "Generate Video"}
           </button>
           {!imageMode && scenes.length > 0 ? (
             <button
               type="button"
               onClick={() => void renderFilm()}
-              disabled={running || planning || engine !== "budget" || credits < movieCreditCost(scenes.length, Boolean(referenceImage))}
-              className="gen-ghost"
+              disabled={!balanceReady || running || planning || engine !== "budget"}
+              className="gen-ghost w-full md:w-auto"
             >
               {planning ? "Planning scenes…" : `Generate short film · ${movieCreditCost(scenes.length, Boolean(referenceImage))} credits`}
             </button>
@@ -1407,7 +1575,7 @@ export function GenerateForm() {
             <h2 className="mt-1 text-lg font-semibold tracking-tight">Run</h2>
           </div>
           <p className="rounded-full border border-white/10 px-3 py-1 font-mono text-[11px] text-muted">
-            {result ? `${result.durationSec}s` : "45s"} · 9:16 · no face
+            {result ? `${result.durationSec}s` : `${durationSec}s`} · 9:16 · no face
           </p>
         </div>
 
@@ -1477,12 +1645,34 @@ export function GenerateForm() {
                 audioLabel={result.audioLabel}
                 durationSec={result.durationSec}
               />
+              {(() => {
+                const clipUrl = result.videoUrl || chainVideoUrls(result.frames).at(-1);
+                if (!clipUrl) return null;
+                return (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void downloadVideo(clipUrl).catch(() => {
+                        setDownloadError("Could not download that video.");
+                      });
+                    }}
+                    className="gen-cta"
+                  >
+                    Download / Save
+                  </button>
+                );
+              })()}
+              {downloadError ? (
+                <p role="alert" className="gen-alert mt-3">
+                  {downloadError}
+                </p>
+              ) : null}
               {chainVideoUrls(result.frames).length > 0 ? (
                 <div className="mt-4 flex flex-wrap items-center gap-3">
                   <button
                     type="button"
                     onClick={() => void extendVideo()}
-                    disabled={running || credits < EXTEND_VIDEO_COST}
+                    disabled={!balanceReady || running}
                     className="gen-cta"
                   >
                     Extend Video (+45s)
@@ -1503,10 +1693,11 @@ export function GenerateForm() {
         open={copilotOpen && !imageMode}
         topic={topic}
         scenes={scenes}
+        sceneCount={clipCount}
         busy={running || planning}
         onClose={() => setCopilotOpen(false)}
         onScenes={(next) => {
-          plannedTopicRef.current = topic.trim();
+          plannedTopicRef.current = next.length === clipCount ? planKey(topic, durationSec) : "";
           setScenes(next);
         }}
       />
@@ -1621,7 +1812,7 @@ function ImageResultPanel({
       {result ? (
         <div className="mt-5 flex flex-wrap items-center gap-3">
           <button type="button" onClick={() => onDownload(result.imageUrl)} className="gen-cta">
-            Download HD Image
+            Download / Save
           </button>
           <p className="text-sm text-muted">{result.prompt}</p>
         </div>
@@ -1657,30 +1848,6 @@ function PreviewSkeleton({ running, label }: { running: boolean; label?: string 
   );
 }
 
-function VoiceBadge({ id, selected }: { id: VoiceId; selected: boolean }) {
-  return (
-    <span className={cn("gen-badge", selected && "gen-badge-on")} aria-hidden>
-      <VoiceGlyph id={id} />
-    </span>
-  );
-}
-
-function EngineBadge({ id, selected }: { id: VisualEngineId; selected: boolean }) {
-  return (
-    <span className={cn("gen-badge", selected && "gen-badge-on")} aria-hidden>
-      {id === "ultra" ? <FilmIcon /> : id === "budget" ? <BoltIcon /> : <LayersIcon />}
-    </span>
-  );
-}
-
-function VoiceGlyph({ id }: { id: VoiceId }) {
-  if (id === "energetic-host") return <BoltIcon />;
-  if (id === "calm-documentary") return <FilmIcon />;
-  if (id === "deep-cinematic") return <MoonIcon />;
-  if (id === "friendly-explainer") return <ChatIcon />;
-  return <WaveIcon />;
-}
-
 function Spinner() {
   return (
     <svg viewBox="0 0 16 16" className="gen-spin h-3.5 w-3.5" fill="none" aria-hidden>
@@ -1698,51 +1865,3 @@ function Check() {
   );
 }
 
-function WaveIcon() {
-  return (
-    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
-      <path d="M2 8h1.2M4.4 5.2v5.6M6.6 3.6v8.8M8.8 6v4M11 4.4v7.2M13.2 7h1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function BoltIcon() {
-  return (
-    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
-      <path d="M9 1.5 3.5 9H8l-1 5.5L12.5 7H8l1-5.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function FilmIcon() {
-  return (
-    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
-      <rect x="2" y="3" width="12" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
-      <path d="M5 3v10M11 3v10M2 6.5h3M11 6.5h3M2 9.5h3M11 9.5h3" stroke="currentColor" strokeWidth="1.3" />
-    </svg>
-  );
-}
-
-function MoonIcon() {
-  return (
-    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
-      <path d="M10.2 2.2A5.6 5.6 0 1 0 13.8 9 4.4 4.4 0 0 1 10.2 2.2Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function ChatIcon() {
-  return (
-    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
-      <path d="M3 3.5h10v7.2H6.2L3 13V3.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function LayersIcon() {
-  return (
-    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
-      <path d="M8 2.5 13.5 5.5 8 8.5 2.5 5.5 8 2.5ZM2.5 8 8 11l5.5-3M2.5 10.5 8 13.5l5.5-3" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-    </svg>
-  );
-}

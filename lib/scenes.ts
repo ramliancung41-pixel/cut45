@@ -1,6 +1,18 @@
 import { BUDGET_GENERATION_COST, EXTEND_VIDEO_COST, BUDGET_IMAGE_GENERATION_COST } from "@/lib/credits";
 
+export const CLIP_DURATION_SEC = 5;
+export const VIDEO_DURATIONS = [5, 15, 30, 60] as const;
+export type VideoDurationSec = (typeof VIDEO_DURATIONS)[number];
 export const MOVIE_SCENE_COUNT = 3;
+export const MAX_MOVIE_SCENES = 12;
+
+export function isVideoDuration(value: number): value is VideoDurationSec {
+  return (VIDEO_DURATIONS as readonly number[]).includes(value);
+}
+
+export function sceneCountForDuration(durationSec: VideoDurationSec) {
+  return durationSec / CLIP_DURATION_SEC;
+}
 
 export type MovieScene = {
   title: string;
@@ -15,10 +27,11 @@ export function movieCreditCost(sceneCount: number, firstHasImage: boolean) {
   return first + Math.max(0, sceneCount - 1) * EXTEND_VIDEO_COST;
 }
 
-export function parseMovieScenes(value: unknown): MovieScene[] | null {
+export function parseMovieScenes(value: unknown, maxCount = MAX_MOVIE_SCENES): MovieScene[] | null {
   if (!Array.isArray(value) || value.length === 0) return null;
+  const limit = Math.min(MAX_MOVIE_SCENES, Math.max(1, maxCount));
   const scenes: MovieScene[] = [];
-  for (const item of value.slice(0, MOVIE_SCENE_COUNT)) {
+  for (const item of value.slice(0, limit)) {
     if (!item || typeof item !== "object") return null;
     const record = item as Record<string, unknown>;
     const title = typeof record.title === "string" ? record.title.trim().slice(0, 80) : "";

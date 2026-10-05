@@ -8,9 +8,11 @@ import type { BillingPlanId } from "@/lib/billing";
 export function UpgradeNowButton({
   plan,
   className,
+  label = "Upgrade Now",
 }: {
   plan: BillingPlanId;
   className?: string;
+  label?: string;
 }) {
   const router = useRouter();
   const [checking, setChecking] = useState(false);
@@ -34,7 +36,7 @@ export function UpgradeNowButton({
       onClick={() => void onUpgrade()}
       className={className}
     >
-      Upgrade Now
+      {label}
     </button>
   );
 }

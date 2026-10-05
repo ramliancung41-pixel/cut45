@@ -59,6 +59,7 @@ type CreditContextValue = {
   deductExtendCredits: () => void;
   archiveProject: (project: ArchiveProject) => void;
   setAccountBalance: (tokens: number) => void;
+  balanceReady: boolean;
 };
 
 const CreditContext = createContext<CreditContextValue | null>(null);
@@ -68,6 +69,7 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
   const [ledger, setLedger] = useState<CreditLedgerEntry[]>([]);
   const [projects, setProjects] = useState<ArchiveProject[]>([]);
   const [connecting, setConnecting] = useState(false);
+  const [balanceReady, setBalanceReady] = useState(false);
   const [approval, setApproval] = useState<string | null>(null);
   const timerRef = useRef<number | null>(null);
   const hydratedRef = useRef(false);
@@ -87,6 +89,7 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
       ledger,
       projects,
       connecting,
+      balanceReady,
       async startCheckout(amount) {
         const grant = Math.round(amount);
         if (!Number.isFinite(grant) || grant <= 0 || timerRef.current !== null) return;
@@ -216,6 +219,7 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
         creditsRef.current = next;
         hydratedRef.current = true;
         setCredits(next);
+        setBalanceReady(true);
         setLedger([
           {
             id: "available",
@@ -227,7 +231,7 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
         ]);
       },
     }),
-    [connecting, credits, ledger, projects],
+    [balanceReady, connecting, credits, ledger, projects],
   );
 
   useEffect(() => {
@@ -237,9 +241,13 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
       .then((payload: { user?: { credits?: number; tokens?: number } | null }) => {
         if (ignore || hydratedRef.current) return;
         const amount = payload.user?.credits ?? payload.user?.tokens;
-        if (typeof amount !== "number") return;
+        if (typeof amount !== "number") {
+          setBalanceReady(true);
+          return;
+        }
         hydratedRef.current = true;
         creditsRef.current = amount;
+        setBalanceReady(true);
         setCredits(amount);
         setLedger([
           {
@@ -251,7 +259,9 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
           },
         ]);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (!ignore) setBalanceReady(true);
+      });
     return () => {
       ignore = true;
     };
@@ -377,16 +387,16 @@ export function CreditBar() {
   const fill = Math.min(100, (credits / 1000) * 100);
 
   return (
-    <div className="w-36 sm:w-44" aria-label={formatCreditTotal(credits)}>
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-accent">
+    <div className="shrink-0 sm:w-44" aria-label={formatCreditTotal(credits)}>
+      <div className="flex items-baseline justify-between gap-2 px-0.5">
+        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-accent">
           Credits
         </span>
-        <span className="text-sm font-semibold tracking-tight">
+        <span className="text-sm font-semibold tabular-nums tracking-tight">
           {credits.toLocaleString("en-US")}
         </span>
       </div>
-      <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-panel-raised">
+      <div className="mt-1.5 hidden h-1.5 overflow-hidden rounded-full bg-panel-raised sm:block">
         <div
           className="h-full rounded-full bg-accent transition-[width] duration-300"
           style={{ width: `${fill}%` }}

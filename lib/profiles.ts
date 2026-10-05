@@ -1,6 +1,7 @@
+import { FREE_TIER_CREDITS } from "@/lib/credits";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
-export const STARTING_TOKENS = 100;
+export const STARTING_TOKENS = FREE_TIER_CREDITS;
 export const PROFILES_TABLE = "profiles";
 
 function tokenCount(value: unknown) {
@@ -11,33 +12,39 @@ function tokenCount(value: unknown) {
 export async function ensureProfile(userId: string, email: string) {
   try {
     const admin = createSupabaseAdminClient();
-    const existing = await admin
-      .from(PROFILES_TABLE)
-      .select("tokens")
-      .eq("id", userId)
-      .maybeSingle();
-
-    if (existing.error) return STARTING_TOKENS;
-    if (existing.data) return tokenCount(existing.data.tokens);
+    const existing = await admin.from(PROFILES_TABLE).select("*").eq("id", userId).maybeSingle();
+    if (existing.error) return FREE_TIER_CREDITS;
+    if (existing.data) {
+      return balanceFromRow(existing.data as Record<string, unknown>) ?? FREE_TIER_CREDITS;
+    }
 
     const inserted = await admin.from(PROFILES_TABLE).insert({
       id: userId,
       email,
-      tokens: STARTING_TOKENS,
+      credits: FREE_TIER_CREDITS,
+      trial_claimed: true,
+      tier: "free",
     });
-    if (!inserted.error) return STARTING_TOKENS;
+    if (!inserted.error) return FREE_TIER_CREDITS;
+
+    if (/trial_claimed|tier|column/i.test(inserted.error.message)) {
+      const fallback = await admin.from(PROFILES_TABLE).insert({
+        id: userId,
+        email,
+        credits: FREE_TIER_CREDITS,
+      });
+      if (!fallback.error) return FREE_TIER_CREDITS;
+    }
 
     if (inserted.error.code === "23505") {
-      const again = await admin
-        .from(PROFILES_TABLE)
-        .select("tokens")
-        .eq("id", userId)
-        .maybeSingle();
-      if (!again.error && again.data) return tokenCount(again.data.tokens);
+      const again = await admin.from(PROFILES_TABLE).select("*").eq("id", userId).maybeSingle();
+      if (!again.error && again.data) {
+        return balanceFromRow(again.data as Record<string, unknown>) ?? FREE_TIER_CREDITS;
+      }
     }
-    return STARTING_TOKENS;
+    return FREE_TIER_CREDITS;
   } catch {
-    return STARTING_TOKENS;
+    return FREE_TIER_CREDITS;
   }
 }
 
@@ -368,5 +375,85 @@ export async function spendProfileCredits(userId: string, email: string, cost: n
     return balanceFromRow((updated.data as Record<string, unknown> | null) ?? null) ?? next;
   } catch {
     return null;
+  }
+}
+
+export async function chargeProfileCredits(userId: string, email: string, cost: number) {
+  const amount = Math.max(0, Math.round(cost));
+  try {
+    await ensureProfile(userId, email);
+    const available = (await readProfileBalance(userId)) ?? 0;
+    if (amount === 0) return { ok: true as const, credits: available };
+    if (available < amount) return { ok: false as const, reason: "insufficient" as const };
+
+    const admin = createSupabaseAdminClient();
+    const spent = await admin.rpc("spend_user_credits", {
+      user_id: userId,
+      credit_amount: amount,
+    });
+    if (!spent.error) {
+      if (spent.data == null || spent.data === "") {
+        return { ok: false as const, reason: "insufficient" as const };
+      }
+      const credits = Number(spent.data);
+      if (Number.isFinite(credits)) return { ok: true as const, credits };
+    }
+    const missingRpc = Boolean(
+      spent.error && /spend_user_credits|schema cache|could not find the function/i.test(spent.error.message),
+    );
+    if (!missingRpc) return { ok: false as const, reason: "unavailable" as const };
+
+    const updated = await admin
+      .from(PROFILES_TABLE)
+      .update({ credits: available - amount })
+      .eq("id", userId)
+      .gte("credits", amount)
+      .select("credits")
+      .maybeSingle();
+    if (updated.error || !updated.data) {
+      return { ok: false as const, reason: "insufficient" as const };
+    }
+    return { ok: true as const, credits: Number(updated.data.credits) };
+  } catch {
+    return { ok: false as const, reason: "unavailable" as const };
+  }
+}
+
+export async function reserveGenerationCredits(
+  userId: string,
+  email: string,
+  required: number,
+  charge: number,
+) {
+  const needed = Math.max(0, Math.round(required));
+  const amount = Math.max(0, Math.round(charge));
+  try {
+    await ensureProfile(userId, email);
+    const available = (await readProfileBalance(userId)) ?? 0;
+    if (available < needed || available < amount) {
+      return { ok: false as const, reason: "insufficient" as const };
+    }
+    return chargeProfileCredits(userId, email, amount);
+  } catch {
+    return { ok: false as const, reason: "unavailable" as const };
+  }
+}
+
+export async function refundProfileCredits(userId: string, cost: number) {
+  const amount = Math.max(0, Math.round(cost));
+  if (amount === 0) return;
+  try {
+    const admin = createSupabaseAdminClient();
+    const refunded = await admin.rpc("add_user_credits", {
+      user_id: userId,
+      credit_amount: amount,
+    });
+    if (!refunded.error && refunded.data != null) return;
+    const current = await admin.from(PROFILES_TABLE).select("credits").eq("id", userId).maybeSingle();
+    const balance = Number(current.data?.credits);
+    if (!Number.isFinite(balance)) return;
+    await admin.from(PROFILES_TABLE).update({ credits: balance + amount }).eq("id", userId);
+  } catch {
+    return;
   }
 }

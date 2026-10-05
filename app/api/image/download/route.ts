@@ -26,34 +26,70 @@ function allowedImageHost(value: string) {
   }
 }
 
-export async function POST(request: NextRequest) {
+async function requireUser(request: NextRequest) {
   const accessToken = request.cookies.get(SUPABASE_ACCESS_COOKIE)?.value ?? "";
   const user = accessToken ? await userFromAccessToken(accessToken) : null;
-  if (!user?.id) {
-    return NextResponse.json({ error: "Sign in before downloading an image." }, { status: 401 });
-  }
+  return user?.id ? user : null;
+}
 
-  const body = (await request.json().catch(() => null)) as { imageUrl?: unknown } | null;
-  const imageUrl = typeof body?.imageUrl === "string" ? body.imageUrl.trim() : "";
-  if (!allowedImageHost(imageUrl)) {
-    return NextResponse.json({ error: "That image cannot be downloaded." }, { status: 400 });
-  }
-
-  const source = await fetch(imageUrl, { signal: request.signal });
-  if (!source.ok) {
-    return NextResponse.json({ error: "Could not download that image." }, { status: 502 });
-  }
-  const bytes = Buffer.from(await source.arrayBuffer());
-  if (bytes.byteLength === 0 || bytes.byteLength > 20_000_000) {
-    return NextResponse.json({ error: "That image is too large to download." }, { status: 400 });
-  }
-  const contentType = source.headers.get("content-type") || "image/png";
-  const extension = contentType.includes("jpeg") ? "jpg" : contentType.includes("webp") ? "webp" : "png";
-  return new NextResponse(bytes, {
+function attachmentResponse(source: Response, mediaUrl: string) {
+  const contentType = source.headers.get("content-type") || "application/octet-stream";
+  const video = contentType.startsWith("video/") || /\.mp4($|\?)/i.test(mediaUrl);
+  const extension = video
+    ? "mp4"
+    : contentType.includes("jpeg")
+      ? "jpg"
+      : contentType.includes("webp")
+        ? "webp"
+        : "png";
+  const filename = video ? `cut45-video.${extension}` : `cut45-image.${extension}`;
+  return new NextResponse(source.body, {
     headers: {
       "Content-Type": contentType,
-      "Content-Disposition": `attachment; filename="cut45-image.${extension}"`,
+      "Content-Disposition": `attachment; filename="${filename}"`,
       "Cache-Control": "private, no-store",
     },
   });
+}
+
+export async function GET(request: NextRequest) {
+  const user = await requireUser(request);
+  if (!user) {
+    return NextResponse.json({ error: "Sign in before downloading a file." }, { status: 401 });
+  }
+  const mediaUrl = request.nextUrl.searchParams.get("fileUrl")?.trim() ?? "";
+  if (!allowedImageHost(mediaUrl)) {
+    return NextResponse.json({ error: "That file cannot be downloaded." }, { status: 400 });
+  }
+  const source = await fetch(mediaUrl, { signal: request.signal });
+  if (!source.ok || !source.body) {
+    return NextResponse.json({ error: "Could not download that file." }, { status: 502 });
+  }
+  return attachmentResponse(source, mediaUrl);
+}
+
+export async function POST(request: NextRequest) {
+  const user = await requireUser(request);
+  if (!user) {
+    return NextResponse.json({ error: "Sign in before downloading a file." }, { status: 401 });
+  }
+
+  const body = (await request.json().catch(() => null)) as {
+    imageUrl?: unknown;
+    videoUrl?: unknown;
+    fileUrl?: unknown;
+  } | null;
+  const fileUrl = [body?.fileUrl, body?.imageUrl, body?.videoUrl].find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  const mediaUrl = fileUrl?.trim() ?? "";
+  if (!allowedImageHost(mediaUrl)) {
+    return NextResponse.json({ error: "That file cannot be downloaded." }, { status: 400 });
+  }
+
+  const source = await fetch(mediaUrl, { signal: request.signal });
+  if (!source.ok || !source.body) {
+    return NextResponse.json({ error: "Could not download that file." }, { status: 502 });
+  }
+  return attachmentResponse(source, mediaUrl);
 }

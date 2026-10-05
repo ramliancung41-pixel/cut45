@@ -31,12 +31,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const displayName = account?.name ?? null;
 
   return (
-    <div className={`${sora.variable} studio-type min-h-dvh bg-background text-foreground`}>
-      <div className="flex min-h-dvh">
+    <div className={`${sora.variable} studio-type min-h-[100dvh] overflow-x-hidden bg-background text-foreground`}>
+      <div className="flex min-h-[100dvh] overflow-x-hidden">
         {open ? (
           <button
             type="button"
-            className="fixed inset-0 z-20 bg-black/60 md:hidden"
+            className="fixed inset-0 z-40 bg-black/60 md:hidden"
             aria-label="Close menu"
             onClick={() => setMenuPath(null)}
           />
@@ -44,7 +44,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         <aside
           className={cn(
-            "studio-side fixed inset-y-0 left-0 z-30 w-64 flex-col px-3 py-5 md:sticky md:top-0 md:flex md:h-dvh",
+            "studio-side fixed inset-y-0 left-0 z-50 w-64 flex-col px-3 py-5 md:sticky md:top-0 md:z-30 md:flex md:h-dvh",
             open ? "flex" : "hidden",
           )}
         >
@@ -104,21 +104,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </aside>
 
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-line bg-background/90 px-4 py-3 backdrop-blur">
+        <div className="flex min-w-0 flex-1 flex-col overflow-x-hidden">
+          <header className="sticky top-0 z-20 flex items-center gap-2 border-b border-line bg-background/90 px-4 py-2 backdrop-blur md:gap-3 md:py-3">
             <button
               type="button"
-              className="rounded-md border border-line px-3 py-1.5 text-sm md:hidden"
+              className="shrink-0 rounded-md border border-line px-3 py-1.5 text-sm md:hidden"
               aria-expanded={open}
               aria-controls="studio-nav"
               onClick={() => setMenuPath(open ? null : pathname)}
             >
               {open ? "Close" : "Menu"}
             </button>
-            <span className="text-sm font-semibold tracking-tight md:hidden">Cut45</span>
+            <span className="hidden text-sm font-semibold tracking-tight md:flex">Cut45</span>
             <ProfileCreditBar name={displayName} ready={ready} />
           </header>
-          <main className="flex-1 px-4 py-6 sm:px-6 md:px-10 md:py-10">
+          <main className="min-w-0 flex-1 px-4 py-4 sm:px-6 sm:py-6 md:px-10 md:py-10">
             <div className="mx-auto w-full max-w-6xl">{children}</div>
           </main>
         </div>

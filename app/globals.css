@@ -375,6 +375,41 @@ body {
   transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
+@media (max-width: 639px) {
+  .gen-pick {
+    gap: 0.55rem;
+    padding: 0.65rem 0.75rem;
+  }
+
+  .gen-badge {
+    height: 1.85rem;
+    width: 1.85rem;
+  }
+}
+
+.studio-dock {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 30;
+  border-top: 1px solid rgba(244, 239, 230, 0.12);
+  background: rgba(12, 10, 9, 0.94);
+  padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
+  backdrop-filter: blur(18px);
+}
+
+@media (min-width: 768px) {
+  .studio-dock {
+    position: static;
+    z-index: auto;
+    border-top: 0;
+    background: transparent;
+    padding: 0;
+    backdrop-filter: none;
+  }
+}
+
 .gen-pick:hover {
   border-color: rgba(244, 239, 230, 0.22);
 }
