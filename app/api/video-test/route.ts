@@ -5,7 +5,7 @@ import { PROMPT_MAX } from "@/lib/motion-styles";
 import { getVoice } from "@/lib/voices";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const STYLES = ["realistic", "cinematic", "anime"] as const;
 type TestStyle = (typeof STYLES)[number];
@@ -61,12 +61,18 @@ export async function POST(request: Request) {
       const engine = engineForStyle(style);
       const rendered = await renderFalClip({
         engine,
-        prompt: `${STYLE_LOOK[style]}. Vertical 9:16. No face, no on-screen text. ${visualPrompt}`.slice(0, 1200),
+        prompt: `${STYLE_LOOK[style]}. Vertical 9:16 medium close-up, faces and mouths visible, characters speaking. No on-screen text. ${visualPrompt}`.slice(0, 1200),
         image: null,
         signal: request.signal,
-        pollBudgetMs: engine === "budget" ? 40000 : 45000,
       });
+      if ("pending" in rendered) {
+        return NextResponse.json(
+          { pending: true, statusUrl: rendered.statusUrl, responseUrl: rendered.responseUrl },
+          { status: 202 },
+        );
+      }
       if ("error" in rendered) {
+        console.error("[fal] video render failed", rendered.error);
         return NextResponse.json({ error: rendered.error }, { status: 502 });
       }
       return NextResponse.json({
@@ -99,7 +105,7 @@ async function writeTestScript(prompt: string, style: TestStyle, signal: AbortSi
       system_instruction: {
         parts: [
           {
-            text: `Return JSON only: {"script":"...","visualPrompt":"..."}. script is 90 to 120 spoken words for a faceless 45-second vertical short. visualPrompt is 40 to 70 words, 9:16, no face, no on-screen text. Style: ${STYLE_LOOK[style]}.`,
+            text: `Return JSON only: {"script":"...","visualPrompt":"..."}. script is direct dialogue, each line Name: "spoken line", two characters, 90 to 120 spoken words. visualPrompt is 40 to 70 words, 9:16 medium close-up, faces and mouths visible, no on-screen text. Style: ${STYLE_LOOK[style]}.`,
           },
         ],
       },
@@ -143,7 +149,7 @@ function parsePlan(raw: string) {
 async function synthesizeTestVoice(script: string, signal: AbortSignal) {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) throw new Error("ELEVENLABS_API_KEY is missing from the server environment.");
-  const voiceId = getVoice("warm-narrator")?.elevenLabsVoiceId;
+  const voiceId = getVoice("rachel")?.elevenLabsVoiceId;
   if (!voiceId) throw new Error("A narration voice is not configured.");
 
   const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
@@ -157,6 +163,7 @@ async function synthesizeTestVoice(script: string, signal: AbortSignal) {
     body: JSON.stringify({
       text: script,
       model_id: "eleven_multilingual_v2",
+      voice_settings: { stability: 0.45, similarity_boost: 0.75 },
     }),
   });
   if (!response.ok) {

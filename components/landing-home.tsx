@@ -8,20 +8,22 @@ import { LandingPreview } from "@/components/landing-preview";
 import { LandingPricing } from "@/components/landing-pricing";
 
 const COST_ROWS = [
-  ["CutScript (Gemini AI)", "Write script", "—", "Text", "0.00"],
-  ["CutVoice (Premium Narration)", "Voice Narration", "—", "Speech", "10.00 / video"],
-  ["CutStock B-Roll (Standard)", "Visual frames", "1080 × 1920", "—", "0.00 / sec"],
-  ["CutMotion Budget (Fal.ai)", "Visual frames", "1080 × 1920", "—", "45 / video"],
-  ["CutMotion Ultra (Fal.ai)", "Visual frames", "1080 × 1920", "—", "180 / video"],
-  ["CutCaptions (Kinetic Subtitles)", "Kinetic Subtitles", "1080 × 1920", "Synced", "0.00"],
+  ["CutScript (Gemini AI)", "Write script", "—", "Text", "0.00 (Free)"],
+  ["CutVoice (ElevenLabs AI Narration)", "Multi-language & Gender Voice", "—", "Speech", "Included / Free"],
+  [
+    "CutMotion AI Video (Fal.ai / FLUX Engine)",
+    "Visual frames",
+    "1080 × 1920",
+    "—",
+    "2 credits / sec (20 credits per 10s video)",
+  ],
+  ["Image Studio / Character Sheet (FLUX)", "Character Turnaround / Still", "—", "—", "10 credits / image"],
 ];
 
 const COST_SUMMARIES = [
-  "Standard Video (Free Stock): 0 credits.",
-  "Budget AI Motion (Fal.ai): 45 credits.",
-  "Ultra Cinematic AI (Fal.ai): 180 credits.",
-  "Image generation (FLUX): 10 credits.",
-  "AI Co-Pilot chat: free.",
+  "AI Video Generation (Fal.ai): 20 credits per 10 seconds (10 credits per 5s clip).",
+  "Character Reference / Image Studio (FLUX): 10 credits per image.",
+  "AI Co-Pilot Scripting & Prompts: Free.",
 ];
 
 export function LandingHome() {
@@ -168,7 +170,7 @@ export function LandingHome() {
                   </tbody>
                 </table>
               </div>
-              <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <div className="mt-4 grid gap-4 md:grid-cols-3">
                 {COST_SUMMARIES.map((summary) => (
                   <article
                     key={summary}

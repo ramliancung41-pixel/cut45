@@ -60,3 +60,16 @@ export function imageLockedMotionPrompt(
     .join(" ")
     .slice(0, 1200);
 }
+
+export function speakingMotionPrompt(base: string, dialogue: string) {
+  const spoken = dialogue.replace(/\s+/g, " ").trim();
+  return [
+    "Vertical 9:16 medium close-up. The characters face the camera with mouths clearly visible and speak the dialogue.",
+    base.trim(),
+    spoken ? `Dialogue: ${spoken}` : "",
+    "Natural mouth movement while talking. No on-screen text. No narrator voiceover.",
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 1200);
+}

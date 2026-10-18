@@ -1,83 +1,62 @@
 "use client";
 
-import { useState } from "react";
 import { AuthGateButton } from "@/components/auth-gate-button";
-
-type Cycle = "monthly" | "yearly";
 
 const PLANS = [
   {
+    id: "topup",
+    name: "Top-up Boost",
+    price: "$10",
+    cadence: "One-time payment",
+    creditLabel: "150 Credits",
+    points: [
+      "15 x 5s video clips (or 150s total video)",
+      "Character reference sheets",
+      "Standard queue",
+    ],
+    featured: false,
+    label: "Buy Credits",
+  },
+  {
     id: "starter",
     name: "Starter Plan",
-    monthly: 15,
-    credits: 300,
+    price: "$15",
+    cadence: "/ month",
     creditLabel: "300 Credits",
-    points: ["Free stock assets access", "Basic text rendering tools"],
-    featured: false,
+    points: [
+      "3 x Full Short Movies (45s each)",
+      "30 x 5s video clips",
+      "Character reference sheets",
+      "Priority rendering",
+    ],
+    featured: true,
+    label: "Start Now",
   },
   {
     id: "pro",
     name: "Pro Plan",
-    monthly: 40,
-    credits: 1000,
+    price: "$40",
+    cadence: "/ month",
     creditLabel: "1,000 Credits",
-    points: ["2x generation priority queues", "Premium AI character modules"],
-    featured: true,
-  },
-  {
-    id: "ultra",
-    name: "Ultra Plan",
-    monthly: 120,
-    credits: 3500,
-    creditLabel: "3,500 Credits",
-    points: ["5x usage speed configurations", "Full access to custom cinematic rendering presets"],
+    points: [
+      "10 x Full Short Movies",
+      "100 x 5s video clips",
+      "2x priority rendering queue",
+      "Unlimited character reference sheets",
+    ],
     featured: false,
+    label: "Start Now",
   },
 ] as const;
-
-function yearlyPrice(monthly: number) {
-  return Math.round(monthly * 0.8);
-}
 
 const buttonClass =
   "mt-8 flex h-12 w-full items-center justify-center rounded-full text-sm font-medium transition-opacity enabled:hover:opacity-90 disabled:cursor-wait disabled:opacity-60";
 
 export function LandingPricing() {
-  const [cycle, setCycle] = useState<Cycle>("monthly");
-  const yearly = cycle === "yearly";
-
   return (
     <div>
-      <div className="flex justify-center">
-        <div
-          className="inline-flex rounded-full border border-white/10 bg-[#141414] p-1"
-          role="group"
-          aria-label="Billing period"
-        >
-          {(["monthly", "yearly"] as const).map((option) => {
-            const active = cycle === option;
-            return (
-              <button
-                key={option}
-                type="button"
-                aria-pressed={active}
-                onClick={() => setCycle(option)}
-                className={
-                  active
-                    ? "rounded-full bg-white px-5 py-2 text-sm font-medium text-black"
-                    : "rounded-full px-5 py-2 text-sm font-medium text-white/60"
-                }
-              >
-                {option === "monthly" ? "Monthly" : "Yearly"}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {PLANS.map((plan) => {
-          const amount = yearly ? yearlyPrice(plan.monthly) : plan.monthly;
           return (
             <article
               key={plan.id}
@@ -91,18 +70,13 @@ export function LandingPricing() {
                 <h3 className="text-lg font-medium tracking-tight">{plan.name}</h3>
                 {plan.featured ? (
                   <span className="rounded-full border border-white/30 px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] text-white">
-                    Featured
+                    Popular
                   </span>
                 ) : null}
               </div>
               <p className="mt-6 flex items-baseline gap-1">
-                <span className="text-5xl font-medium tracking-tight">${amount}</span>
-                <span className="text-sm text-white/55">/mo</span>
-              </p>
-              <p className="mt-2 min-h-5 text-sm text-white/50">
-                {yearly
-                  ? `20% off · $${yearlyPrice(plan.monthly) * 12} billed yearly`
-                  : `$${plan.monthly} billed monthly`}
+                <span className="text-5xl font-medium tracking-tight">{plan.price}</span>
+                <span className="text-sm text-white/55">{plan.cadence}</span>
               </p>
               <ul className="mt-6 space-y-3 text-sm leading-6 text-white/80">
                 <li>{plan.creditLabel}</li>
@@ -111,9 +85,8 @@ export function LandingPricing() {
                 ))}
               </ul>
               <AuthGateButton
-                label="Start Now"
+                label={plan.label}
                 plan={plan.id}
-                credits={plan.credits}
                 className={
                   plan.featured
                     ? `${buttonClass} bg-white text-black`
@@ -145,11 +118,12 @@ export function LandingPricing() {
               <h4 className="text-xl font-medium tracking-tight">{panel.title}</h4>
               <p className="mt-3 max-w-md text-sm leading-6 text-white/60">{panel.body}</p>
             </div>
-            <AuthGateButton
-              label="Get in Touch"
-              signedInHref="/generator"
-              className="flex h-12 shrink-0 items-center justify-center rounded-full border border-white/20 px-6 text-sm font-medium text-white enabled:hover:bg-white/5 disabled:cursor-wait disabled:opacity-60"
-            />
+            <a
+              href="mailto:support@codeandbuild.tech"
+              className="flex h-12 shrink-0 items-center justify-center rounded-full border border-white/20 px-6 text-sm font-medium text-white hover:bg-white/5"
+            >
+              Get in Touch
+            </a>
           </article>
         ))}
       </div>

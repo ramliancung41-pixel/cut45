@@ -1,4 +1,13 @@
+import { logApiKey } from "@/lib/api-keys";
 import { falApiKey } from "@/lib/fal-key";
+import { frameSize, type AspectRatio } from "@/lib/frame";
+import {
+  DEFAULT_VIDEO_RESOLUTION,
+  getVideoModel,
+  videoRenderResolution,
+  type VideoModelId,
+  type VideoResolution,
+} from "@/lib/video-models";
 import type { VisualEngineId } from "@/lib/visual-engines";
 
 export type ReferenceImage = {
@@ -8,8 +17,8 @@ export type ReferenceImage = {
 
 const MODELS: Record<Exclude<VisualEngineId, "stock">, { text: string; image: string }> = {
   budget: {
-    text: "fal-ai/ltx-video",
-    image: "fal-ai/ltx-video/image-to-video",
+    text: "fal-ai/ltx-video-13b-distilled",
+    image: "fal-ai/ltx-video-13b-distilled/image-to-video",
   },
   ultra: {
     text: "fal-ai/luma-dream-machine/ray-2",
@@ -17,8 +26,9 @@ const MODELS: Record<Exclude<VisualEngineId, "stock">, { text: string; image: st
   },
 };
 
-const POLL_MS = 2000;
-const POLL_BUDGET_MS = 40000;
+const POLL_START_MS = 2000;
+const POLL_MAX_MS = 10000;
+const POLL_BUDGET_MS = 80000;
 const MAX_IMAGE_BYTES = 3_500_000;
 
 export function parseReferenceImage(value: unknown): ReferenceImage | null | "invalid" {
@@ -173,11 +183,94 @@ function referenceDataUri(image: ReferenceImage) {
   return `data:${image.contentType};base64,${image.bytes.toString("base64")}`;
 }
 
+function motionSeconds(durationSec: number) {
+  return durationSec >= 10 ? 10 : 5;
+}
+
+function hunyuanAspect(aspect: AspectRatio) {
+  return aspect === "9:16" ? "9:16" : "16:9";
+}
+
+function videoInput(
+  model: string,
+  prompt: string,
+  imageUrl: string | null,
+  durationSec: number,
+  aspect: AspectRatio,
+  resolution: VideoResolution,
+) {
+  const seconds = motionSeconds(durationSec);
+
+  if (model.includes("ltx-video")) {
+    return {
+      prompt,
+      negative_prompt: "worst quality, inconsistent motion, blurry, jittery, distorted, still frame, slideshow, static image",
+      resolution,
+      aspect_ratio: aspect,
+      num_frames: seconds * 24 + 1,
+      frame_rate: 24,
+      expand_prompt: false,
+      ...(imageUrl ? { image_url: imageUrl } : {}),
+    };
+  }
+
+  if (model.includes("pika")) {
+    return {
+      prompt,
+      aspect_ratio: aspect,
+      resolution,
+      duration: seconds,
+      ...(imageUrl ? { image_url: imageUrl } : {}),
+    };
+  }
+
+  if (model.includes("hunyuan-video")) {
+    return {
+      prompt,
+      aspect_ratio: hunyuanAspect(aspect),
+      resolution,
+      num_frames: 129,
+      ...(imageUrl ? { image_url: imageUrl } : {}),
+    };
+  }
+
+  if (model.includes("fast-svd")) {
+    const size = frameSize(aspect);
+    return {
+      prompt,
+      resolution,
+      video_size: { width: size.width, height: size.height },
+      ...(imageUrl ? { image_url: imageUrl } : {}),
+    };
+  }
+
+  if (model.includes("runway")) {
+    return {
+      prompt,
+      duration: seconds,
+      ratio: aspect,
+      resolution,
+      ...(imageUrl ? { image_url: imageUrl } : {}),
+    };
+  }
+
+  return {
+    prompt,
+    aspect_ratio: aspect,
+    duration: `${seconds}s`,
+    resolution,
+    ...(imageUrl ? { image_url: imageUrl } : {}),
+  };
+}
+
 async function submitVideo(input: {
   key: string;
   model: string;
   prompt: string;
   imageUrl: string | null;
+  durationSec: number;
+  aspect: AspectRatio;
+  resolution: VideoResolution;
   signal: AbortSignal;
 }) {
   return fetch(`https://queue.fal.run/${input.model}`, {
@@ -187,12 +280,115 @@ async function submitVideo(input: {
       "Content-Type": "application/json",
       Accept: "application/json",
     },
-    body: JSON.stringify({
-      prompt: input.prompt,
-      ...(input.imageUrl ? { image_url: input.imageUrl } : {}),
-    }),
+    body: JSON.stringify(
+      videoInput(input.model, input.prompt, input.imageUrl, input.durationSec, input.aspect, input.resolution),
+    ),
     signal: input.signal,
   });
+}
+
+function pollDelay(attempt: number) {
+  return Math.min(POLL_MAX_MS, POLL_START_MS * 2 ** attempt);
+}
+
+function sleep(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function logFal(scope: string, status: number | null, message: string) {
+  const key = process.env.FAL_KEY?.trim() || process.env.FAL_AI_API_KEY?.trim() || "";
+  if (!key) {
+    console.error(`[fal] ${scope}: FAL_KEY is not set`);
+    return;
+  }
+  if (status === 401 || status === 403 || /unauthorized|forbidden|invalid api key|api key/i.test(message)) {
+    console.error(`[fal] ${scope}: authorization failed`, status ?? "", message);
+    return;
+  }
+  console.error(`[fal] ${scope}:`, status ?? "", message);
+}
+
+async function pollQueue(input: {
+  key: string;
+  statusUrl: string;
+  responseUrl: string;
+  signal: AbortSignal;
+  pollBudgetMs: number;
+  scope: string;
+}): Promise<{ payload: unknown } | { error: string } | { pending: true }> {
+  const started = Date.now();
+  let attempt = 0;
+  while (Date.now() - started < input.pollBudgetMs) {
+    await sleep(pollDelay(attempt), input.signal);
+    attempt += 1;
+    let statusResponse: Response;
+    try {
+      statusResponse = await fetch(input.statusUrl, {
+        headers: { Authorization: `Key ${input.key}`, Accept: "application/json" },
+        signal: input.signal,
+      });
+    } catch (error) {
+      if (input.signal.aborted) throw error;
+      const message = error instanceof Error ? error.message : "Fal.ai status could not be reached.";
+      logFal(input.scope, null, message);
+      continue;
+    }
+    if (statusResponse.status === 401 || statusResponse.status === 403) {
+      const message = await falResponseError(statusResponse);
+      logFal(input.scope, statusResponse.status, message);
+      return { error: "Fal.ai rejected the API key. Check FAL_KEY." };
+    }
+    if (!statusResponse.ok) {
+      const message = await falResponseError(statusResponse);
+      logFal(input.scope, statusResponse.status, message);
+      continue;
+    }
+    const status = (await statusResponse.json()) as { status?: string; error?: unknown };
+    const state = (status.status ?? "").toUpperCase();
+    if (state === "FAILED" || state === "ERROR") {
+      const message = falErrorDetail(status.error) || falErrorDetail(status) || "Fal.ai could not finish this job.";
+      logFal(input.scope, null, message);
+      if (/credit|quota|exhausted|insufficient|billing|balance/i.test(message)) {
+        return { error: `Fal.ai credits are depleted. ${message}` };
+      }
+      return { error: message };
+    }
+    if (state !== "COMPLETED") {
+      console.info(`[fal] ${input.scope}: queue ${state || "IN_PROGRESS"}`);
+      continue;
+    }
+    const resultResponse = await fetch(input.responseUrl, {
+      headers: { Authorization: `Key ${input.key}`, Accept: "application/json" },
+      signal: input.signal,
+    });
+    if (resultResponse.status === 401 || resultResponse.status === 403) {
+      const message = await falResponseError(resultResponse);
+      logFal(input.scope, resultResponse.status, message);
+      return { error: "Fal.ai rejected the API key. Check FAL_KEY." };
+    }
+    if (!resultResponse.ok) {
+      const message = await falResponseError(resultResponse);
+      logFal(input.scope, resultResponse.status, message);
+      return { error: message };
+    }
+    return { payload: await resultResponse.json() };
+  }
+  console.error(`[fal] ${input.scope}: queue still processing after ${input.pollBudgetMs}ms`);
+  return { pending: true };
 }
 
 function readVideoUrl(payload: unknown) {
@@ -204,6 +400,14 @@ function readVideoUrl(payload: unknown) {
   return httpsUrl(record.video?.url) ?? httpsUrl(record.data?.video?.url);
 }
 
+function videoEndpoints(engine: Exclude<VisualEngineId, "stock">, videoModel?: VideoModelId) {
+  if (videoModel) {
+    const model = getVideoModel(videoModel);
+    return { text: model.textEndpoint, image: model.imageEndpoint };
+  }
+  return MODELS[engine];
+}
+
 export async function renderFalClip(input: {
   engine: Exclude<VisualEngineId, "stock">;
   prompt: string;
@@ -211,14 +415,25 @@ export async function renderFalClip(input: {
   signal: AbortSignal;
   startFrameUrl?: string | null;
   pollBudgetMs?: number;
-}): Promise<{ videoUrl: string } | { error: string }> {
-  const key = falApiKey();
+  durationSec?: number;
+  aspectRatio?: AspectRatio;
+  videoModel?: VideoModelId;
+  resolution?: VideoResolution;
+}): Promise<{ videoUrl: string } | { error: string } | { pending: true; statusUrl: string; responseUrl: string }> {
+  if (!logApiKey("FAL_KEY")) {
+    return { error: "Fal.ai is not configured yet." };
+  }
+  const key = process.env.FAL_KEY?.trim() || falApiKey();
   if (!key) {
     return { error: "Fal.ai is not configured yet." };
   }
 
   const startFrame = input.startFrameUrl ? httpsUrl(input.startFrameUrl) : null;
-  const model = input.image || startFrame ? MODELS[input.engine].image : MODELS[input.engine].text;
+  const endpoints = videoEndpoints(input.engine, input.videoModel);
+  const model = input.image || startFrame ? endpoints.image : endpoints.text;
+  const resolution = input.videoModel
+    ? videoRenderResolution(input.videoModel, input.resolution)
+    : input.resolution ?? DEFAULT_VIDEO_RESOLUTION;
   let imageUrl: string | null = startFrame;
   let storageUrl: string | null = startFrame;
   if (input.image && !imageUrl) {
@@ -239,6 +454,9 @@ export async function renderFalClip(input: {
       model,
       prompt: input.prompt,
       imageUrl,
+      durationSec: input.durationSec ?? 5,
+      aspect: input.aspectRatio ?? "9:16",
+      resolution,
       signal: input.signal,
     });
   } catch (error) {
@@ -257,6 +475,9 @@ export async function renderFalClip(input: {
         model,
         prompt: input.prompt,
         imageUrl: referenceDataUri(input.image),
+        durationSec: input.durationSec ?? 5,
+        aspect: input.aspectRatio ?? "9:16",
+        resolution,
         signal: input.signal,
       });
     } catch (error) {
@@ -268,7 +489,13 @@ export async function renderFalClip(input: {
   }
   if (!submitted.ok) {
     const message = await falResponseError(submitted);
-    console.error("Fal video submit rejected", submitted.status, message);
+    logFal("video submit", submitted.status, message);
+    if (submitted.status === 401 || submitted.status === 403) {
+      return { error: "Fal.ai rejected the API key. Check FAL_KEY." };
+    }
+    if (submitted.status === 402 || /credit|quota|exhausted|insufficient|billing|balance/i.test(message)) {
+      return { error: `Fal.ai credits are depleted. ${message}` };
+    }
     return { error: message };
   }
 
@@ -282,43 +509,52 @@ export async function renderFalClip(input: {
     return { error: "Fal.ai accepted the job without a status URL." };
   }
 
-  const started = Date.now();
-  const pollBudgetMs = input.pollBudgetMs ?? POLL_BUDGET_MS;
-  while (Date.now() - started < pollBudgetMs) {
-    if (input.signal.aborted) throw new DOMException("The operation was aborted.", "AbortError");
-    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-    const statusResponse = await fetch(statusUrl, {
-      headers: { Authorization: `Key ${key}` },
-      signal: input.signal,
-    });
-    if (!statusResponse.ok) {
-      const message = await falResponseError(statusResponse);
-      console.error("Fal video status failed", statusResponse.status, message);
-      continue;
-    }
-    const status = (await statusResponse.json()) as { status?: string; error?: unknown };
-    if (status.status === "FAILED") {
-      const message =
-        falErrorDetail(status.error) || falErrorDetail(status) || "Fal.ai could not finish this clip.";
-      console.error("Fal video job failed", message);
-      return { error: message };
-    }
-    if (status.status !== "COMPLETED") continue;
-    const resultResponse = await fetch(responseUrl, {
-      headers: { Authorization: `Key ${key}` },
-      signal: input.signal,
-    });
-    if (!resultResponse.ok) {
-      const message = await falResponseError(resultResponse);
-      console.error("Fal video result failed", resultResponse.status, message);
-      return { error: message };
-    }
-    const videoUrl = readVideoUrl(await resultResponse.json());
-    if (!videoUrl) break;
-    return { videoUrl };
+  const polled = await pollQueue({
+    key,
+    statusUrl,
+    responseUrl,
+    signal: input.signal,
+    pollBudgetMs: input.pollBudgetMs ?? POLL_BUDGET_MS,
+    scope: "video",
+  });
+  if ("pending" in polled) {
+    return { pending: true as const, statusUrl, responseUrl };
   }
+  if ("error" in polled) return polled;
+  const videoUrl = readVideoUrl(polled.payload);
+  if (!videoUrl) return { error: "Fal.ai finished without a video URL." };
+  return { videoUrl };
+}
 
-  return { error: "Fal.ai is still rendering this clip. Try again in a moment." };
+export async function continueFalClip(input: {
+  statusUrl: string;
+  responseUrl: string;
+  signal: AbortSignal;
+  pollBudgetMs?: number;
+}): Promise<{ videoUrl: string } | { pending: true } | { error: string }> {
+  if (!logApiKey("FAL_KEY")) {
+    return { error: "Fal.ai is not configured yet." };
+  }
+  const key = process.env.FAL_KEY?.trim() || falApiKey();
+  if (!key) {
+    return { error: "Fal.ai is not configured yet." };
+  }
+  const statusUrl = httpsUrl(input.statusUrl);
+  const responseUrl = httpsUrl(input.responseUrl);
+  if (!statusUrl || !responseUrl) return { error: "That render job could not be resumed." };
+  const polled = await pollQueue({
+    key,
+    statusUrl,
+    responseUrl,
+    signal: input.signal,
+    pollBudgetMs: input.pollBudgetMs ?? POLL_BUDGET_MS,
+    scope: "video",
+  });
+  if ("pending" in polled) return { pending: true };
+  if ("error" in polled) return polled;
+  const videoUrl = readVideoUrl(polled.payload);
+  if (!videoUrl) return { error: "Fal.ai finished without a video URL." };
+  return { videoUrl };
 }
 
 async function queueFal(input: {
@@ -327,8 +563,13 @@ async function queueFal(input: {
   signal: AbortSignal;
   pollBudgetMs: number;
 }): Promise<{ payload: unknown } | { error: string }> {
-  const key = falApiKey();
-  if (!key) return { error: "Fal.ai is not configured yet." };
+  if (!logApiKey("FAL_KEY")) {
+    return { error: "Fal.ai is not configured yet." };
+  }
+  const key = process.env.FAL_KEY?.trim() || falApiKey();
+  if (!key) {
+    return { error: "Fal.ai is not configured yet." };
+  }
   let submitted: Response;
   try {
     submitted = await fetch(`https://queue.fal.run/${input.model}`, {
@@ -349,7 +590,13 @@ async function queueFal(input: {
   }
   if (!submitted.ok) {
     const message = await falResponseError(submitted);
-    console.error("Fal job rejected", submitted.status, message);
+    logFal("job submit", submitted.status, message);
+    if (submitted.status === 401 || submitted.status === 403) {
+      return { error: "Fal.ai rejected the API key. Check FAL_KEY." };
+    }
+    if (submitted.status === 402 || /credit|quota|exhausted|insufficient|billing|balance/i.test(message)) {
+      return { error: `Fal.ai credits are depleted. ${message}` };
+    }
     return { error: message };
   }
   const queued = (await submitted.json()) as { status_url?: unknown; response_url?: unknown };
@@ -357,30 +604,17 @@ async function queueFal(input: {
   const responseUrl = httpsUrl(queued.response_url);
   if (!statusUrl || !responseUrl) return { error: "Fal.ai accepted the job without a status URL." };
 
-  const started = Date.now();
-  while (Date.now() - started < input.pollBudgetMs) {
-    if (input.signal.aborted) throw new DOMException("The operation was aborted.", "AbortError");
-    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-    const statusResponse = await fetch(statusUrl, {
-      headers: { Authorization: `Key ${key}` },
-      signal: input.signal,
-    });
-    if (!statusResponse.ok) continue;
-    const status = (await statusResponse.json()) as { status?: string; error?: unknown };
-    if (status.status === "FAILED") {
-      const message = falErrorDetail(status.error) || falErrorDetail(status) || "Fal.ai could not finish this job.";
-      console.error("Fal job failed", message);
-      return { error: message };
-    }
-    if (status.status !== "COMPLETED") continue;
-    const resultResponse = await fetch(responseUrl, {
-      headers: { Authorization: `Key ${key}` },
-      signal: input.signal,
-    });
-    if (!resultResponse.ok) return { error: await falResponseError(resultResponse) };
-    return { payload: await resultResponse.json() };
-  }
-  return { error: "Fal.ai is still working. Try the extension again in a moment." };
+  const polled = await pollQueue({
+    key,
+    statusUrl,
+    responseUrl,
+    signal: input.signal,
+    pollBudgetMs: input.pollBudgetMs,
+    scope: "job",
+  });
+  if ("pending" in polled) return { error: "Fal.ai is still working. Try the extension again in a moment." };
+  if ("error" in polled) return polled;
+  return { payload: polled.payload };
 }
 
 function readFrameUrl(payload: unknown) {
@@ -416,10 +650,138 @@ export async function mergeFalVideos(videoUrls: string[], signal: AbortSignal) {
     model: "fal-ai/ffmpeg-api/merge-videos",
     body: { video_urls: urls },
     signal,
-    pollBudgetMs: 15000,
+    pollBudgetMs: Math.min(50000, 12000 * urls.length),
   });
   if ("error" in queued) return queued;
   const videoUrl = readVideoUrl(queued.payload);
   if (!videoUrl) return { error: "Fal.ai did not return the joined video." };
   return { videoUrl };
+}
+
+export async function uploadAudio(
+  bytes: Uint8Array,
+  signal: AbortSignal,
+  contentType = "audio/mpeg",
+): Promise<{ fileUrl: string } | { error: string }> {
+  const key = falApiKey();
+  if (!key) return { error: "Fal.ai is not configured yet." };
+  const wav = contentType.includes("wav");
+  let initiated: Response;
+  try {
+    initiated = await fetch("https://rest.alpha.fal.ai/storage/upload/initiate", {
+      method: "POST",
+      headers: {
+        Authorization: `Key ${key}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        file_name: wav ? "cutvoice-narration.wav" : "cutvoice-narration.mp3",
+        content_type: wav ? "audio/wav" : "audio/mpeg",
+      }),
+      signal,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Fal storage could not be reached.";
+    return { error: message };
+  }
+  if (!initiated.ok) return { error: await falResponseError(initiated) };
+  const payload = (await initiated.json()) as {
+    upload_url?: unknown;
+    file_url?: unknown;
+    fileUrl?: unknown;
+    access_url?: unknown;
+  };
+  const uploadUrl = typeof payload.upload_url === "string" ? payload.upload_url : "";
+  const fileUrl =
+    issuedFileUrl(payload.file_url) ?? issuedFileUrl(payload.fileUrl) ?? issuedFileUrl(payload.access_url);
+  if (!uploadUrl.startsWith("https://") || !fileUrl) {
+    return { error: "Fal storage did not return an upload URL." };
+  }
+  const uploaded = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": wav ? "audio/wav" : "audio/mpeg" },
+    body: Buffer.from(bytes),
+    signal,
+  });
+  if (!uploaded.ok) return { error: await falResponseError(uploaded) };
+  return { fileUrl };
+}
+
+export async function lipSyncVideo(
+  videoUrl: string,
+  audioUrl: string,
+  signal: AbortSignal,
+  pollBudgetMs = 110000,
+) {
+  const video = httpsUrl(videoUrl);
+  const audio = issuedFileUrl(audioUrl) ?? httpsUrl(audioUrl);
+  if (!video || !audio) return { error: "Lip-sync needs the finished video and the dialogue audio." };
+  const queued = await queueFal({
+    model: "fal-ai/sync-lipsync/v2",
+    body: {
+      video_url: video,
+      audio_url: audio,
+      model: "lipsync-2",
+      sync_mode: "remap",
+    },
+    signal,
+    pollBudgetMs,
+  });
+  if ("error" in queued) return queued;
+  const synced = readVideoUrl(queued.payload);
+  if (!synced) return { error: "Fal.ai did not return the lip-synced video." };
+  return { videoUrl: synced };
+}
+
+export async function fitVerticalVideo(videoUrl: string, signal: AbortSignal, aspect: AspectRatio = "9:16") {
+  const video = httpsUrl(videoUrl);
+  if (!video) return { error: "The finished video cannot be resized." };
+  const { width, height } = frameSize(aspect);
+  const queued = await queueFal({
+    model: "fal-ai/workflow-utilities/scale-video",
+    body: {
+      video_url: video,
+      width,
+      height,
+      mode: "stretch",
+      codec: "libx264",
+      preset: "fast",
+      crf: 18,
+    },
+    signal,
+    pollBudgetMs: 25000,
+  });
+  if ("error" in queued) return queued;
+  const scaled = readVideoUrl(queued.payload);
+  if (!scaled) return { error: `Fal.ai did not return the ${width}x${height} video.` };
+  return { videoUrl: scaled };
+}
+
+export async function deliverFrame(videoUrl: string, signal: AbortSignal, aspect: AspectRatio = "9:16") {
+  const fitted = await fitVerticalVideo(videoUrl, signal, aspect);
+  if ("videoUrl" in fitted) return fitted.videoUrl;
+  const { width, height } = frameSize(aspect);
+  console.error(`[fal] ${width}x${height} scale skipped`, fitted.error);
+  return videoUrl;
+}
+
+export async function deliverPortrait(videoUrl: string, signal: AbortSignal) {
+  return deliverFrame(videoUrl, signal, "9:16");
+}
+
+export async function muxVideoAudio(videoUrl: string, audioUrl: string, signal: AbortSignal) {
+  const video = httpsUrl(videoUrl);
+  const audio = issuedFileUrl(audioUrl) ?? httpsUrl(audioUrl);
+  if (!video || !audio) return { error: "The narration could not be attached to this video." };
+  const queued = await queueFal({
+    model: "fal-ai/ffmpeg-api/merge-audio-video",
+    body: { video_url: video, audio_url: audio },
+    signal,
+    pollBudgetMs: 45000,
+  });
+  if ("error" in queued) return queued;
+  const merged = readVideoUrl(queued.payload);
+  if (!merged) return { error: "Fal.ai did not return the narrated video." };
+  return { videoUrl: merged };
 }

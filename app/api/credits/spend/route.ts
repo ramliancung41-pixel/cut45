@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SUPABASE_ACCESS_COOKIE } from "@/lib/auth-cookie";
-import { EXTEND_VIDEO_COST, IMAGE_GENERATION_COST, generationCreditCost } from "@/lib/credits";
+import { EXTEND_VIDEO_COST, generationCreditCost } from "@/lib/credits";
+import { imageModelCreditCost } from "@/lib/image-models";
 import { spendProfileCredits } from "@/lib/profiles";
 import { userFromAccessToken } from "@/lib/supabase/server";
 import { isVisualEngineId } from "@/lib/visual-engines";
@@ -18,6 +19,7 @@ export async function POST(request: NextRequest) {
     engine?: unknown;
     imageToVideo?: unknown;
     kind?: unknown;
+    imageModel?: unknown;
   } | null;
   const imageGeneration = body?.kind === "image";
   const videoExtension = body?.kind === "extend";
@@ -28,7 +30,7 @@ export async function POST(request: NextRequest) {
   }
 
   const cost = imageGeneration
-    ? IMAGE_GENERATION_COST
+    ? imageModelCreditCost(typeof body?.imageModel === "string" ? body.imageModel : null)
     : videoExtension
       ? EXTEND_VIDEO_COST
       : generationCreditCost(engine as "stock" | "budget" | "ultra", imageToVideo && engine !== "stock");

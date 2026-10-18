@@ -1,3 +1,4 @@
+import { isMockVideoUrl } from "@/lib/mock-video";
 import type { VisualEngineId } from "@/lib/visual-engines";
 
 export const VIDEO_DURATION_SEC = 45;
@@ -30,10 +31,12 @@ export type GenerateResult = {
   wordCount: number;
   audioLabel: string;
   audioSrc?: string;
+  narrationEmbedded?: boolean;
   frames: StoryFrame[];
   engine: VisualEngineId;
   creditsCharged: number;
   preview?: boolean;
+  mock?: boolean;
 };
 
 export type GenerateEvent =
@@ -55,16 +58,22 @@ export type GenerateEvent =
   | {
       type: "error";
       message: string;
+    }
+  | {
+      type: "rendering";
+      statusUrl: string;
+      responseUrl: string;
+      result: GenerateResult;
     };
 
 export function previewScript(topic: string) {
-  const subject = topic.replace(/\s+/g, " ").trim();
+  const subject = topic.replace(/["“”]/g, "").replace(/\s+/g, " ").trim();
   return [
-    `${subject} only looks obvious from the outside.`,
-    "The costly mistake is copying the surface and ignoring the constraint that actually decides the result.",
-    "One concrete check changes the outcome: name the limit, test it once, and keep the version that still works tomorrow.",
-    `That is the part of ${subject} worth remembering.`,
-  ].join(" ");
+    `Alex: "${subject} only looks obvious from the outside."`,
+    `Jordan: "The costly mistake is copying the surface and ignoring the real constraint."`,
+    `Alex: "Name the limit, test it once, and keep the version that still works."`,
+    `Jordan: "That is the part of ${subject} worth remembering."`,
+  ].join("\n");
 }
 
 export function countWords(text: string) {
@@ -139,29 +148,61 @@ export function chainVideoUrls(frames: StoryFrame[]) {
       host.endsWith(".fal.ai") ||
       host.endsWith(".fal.media") ||
       host.endsWith(".fal.run");
-    if (!fal || urls[urls.length - 1] === frame.src) continue;
+    if ((!fal && !isMockVideoUrl(frame.src)) || urls[urls.length - 1] === frame.src) continue;
     urls.push(frame.src);
   }
   return urls.slice(0, 12);
 }
 
+export function isMotionSrc(src: string) {
+  if (/\.(mp4|webm|mov)(\?|$)/i.test(src)) return true;
+  try {
+    const host = new URL(src).hostname;
+    return host.endsWith(".fal.media") || host.endsWith(".fal.run") || host === "fal.media";
+  } catch {
+    return false;
+  }
+}
+
+export function motionClip(src: string, caption: string, time = "0:00"): StoryFrame[] {
+  const label = caption.replace(/\s+/g, " ").trim().slice(0, 80);
+  return [{ time, caption: label || "Motion", term: "", src }];
+}
+
+export function sceneBlocks(frames: StoryFrame[]): StoryFrame[] {
+  const motion = frames.filter((frame) => isMotionSrc(frame.src));
+  const source = motion.length > 0 ? motion : frames;
+  const seen = new Set<string>();
+  const blocks: StoryFrame[] = [];
+  for (const frame of source) {
+    if (!frame.src || seen.has(frame.src)) continue;
+    seen.add(frame.src);
+    blocks.push(frame);
+  }
+  return blocks;
+}
+
 export function stitchExtension(previous: GenerateResult, extension: GenerateResult): GenerateResult {
   const durationSec = previous.durationSec + extension.durationSec;
   const script = `${previous.script.trim()}\n\n${extension.script.trim()}`;
-  const frames = extension.videoUrl
-    ? buildTimeline(script, extension.videoUrl, durationSec)
-    : [...previous.frames, ...shiftFrames(extension.frames, previous.durationSec)];
+  const nextBlocks = sceneBlocks(extension.frames).map((frame) => ({
+    ...frame,
+    time: formatTimecode(previous.durationSec),
+  }));
+  const frames = [...sceneBlocks(previous.frames), ...nextBlocks];
   return {
     ...previous,
     id: extension.id,
     durationSec,
     script,
     wordCount: countWords(script),
-    frames,
+    frames: frames.length > 0 ? frames : previous.frames,
     creditsCharged: previous.creditsCharged + extension.creditsCharged,
-    videoUrl: extension.videoUrl,
+    videoUrl: frames.length > 1 ? undefined : extension.videoUrl || previous.videoUrl,
     preview: false,
-    audioLabel: previous.audioLabel,
+    narrationEmbedded: Boolean(previous.narrationEmbedded || extension.narrationEmbedded),
+    audioLabel: extension.audioLabel || previous.audioLabel,
+    audioSrc: extension.narrationEmbedded ? undefined : extension.audioSrc || previous.audioSrc,
   };
 }
 
@@ -214,6 +255,16 @@ export function isGenerateEvent(value: unknown): value is GenerateEvent {
 
   if (event.type === "complete" || event.type === "error") {
     return true;
+  }
+
+  if (event.type === "rendering") {
+    const rendering = value as { statusUrl?: unknown; responseUrl?: unknown; result?: unknown };
+    return (
+      typeof rendering.statusUrl === "string" &&
+      typeof rendering.responseUrl === "string" &&
+      !!rendering.result &&
+      typeof rendering.result === "object"
+    );
   }
 
   if (event.type !== "progress") {

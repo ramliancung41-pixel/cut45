@@ -5,7 +5,7 @@ import { useCredits, type ArchiveProject } from "@/components/credit-provider";
 import { speakNarration, stopNarration } from "@/lib/browser-speech";
 import type { SavedGalleryItem } from "@/lib/gallery-store";
 import { saveGeneratedFile } from "@/lib/save-media";
-import { isVoiceId } from "@/lib/voices";
+import { resolveVoiceId } from "@/lib/voices";
 import type { VisualEngineId } from "@/lib/visual-engines";
 
 async function downloadProject(project: ArchiveProject) {
@@ -65,7 +65,7 @@ function rateLine(project: ArchiveProject) {
     return `${project.creditsCharged} credits`;
   }
   if (project.engine === "ultra") return "180 credits";
-  if (project.engine === "budget") return "45 credits";
+  if (project.engine === "budget") return "10 credits";
   return "0 credits";
 }
 
@@ -124,11 +124,12 @@ export function GalleryBoard() {
       void track.play();
       return;
     }
-    if (!isVoiceId(project.voiceId)) {
+    const voiceId = resolveVoiceId(project.voiceId);
+    if (!voiceId) {
       finish();
       return;
     }
-    speakNarration(project.script, project.voiceId, { onEnd: finish });
+    speakNarration(project.script, voiceId, { onEnd: finish });
   }
 
   if (listed.length === 0) {
@@ -162,10 +163,10 @@ export function GalleryBoard() {
               />
             ) : null}
             <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1 text-xs text-foreground">
+              <span className="rounded-full border border-line bg-panel px-2.5 py-1 text-xs text-foreground">
                 {project.prompt}
               </span>
-              <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 font-mono text-[11px] text-cyan-100">
+              <span className="rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 font-mono text-[11px] text-accent">
                 {project.kind === "image" ? "Still" : `${project.durationSec}s`}
               </span>
             </div>

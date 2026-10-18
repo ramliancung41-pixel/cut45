@@ -19,6 +19,7 @@ async function accountPayload(user: User) {
   ]);
   const balance = stored ?? (await ensureProfile(user.id, email));
   return {
+    id: user.id,
     email,
     tokens: balance,
     credits: balance,

@@ -3,21 +3,18 @@
 import { useEffect, useRef, useState } from "react";
 import { ViralSubtitles } from "@/components/viral-subtitles";
 import { primeSpeechVoices, speakNarration, stopNarration } from "@/lib/browser-speech";
-import { FRAME_LENGTH_SEC, VIDEO_DURATION_SEC, formatTimecode, type StoryFrame } from "@/lib/generate";
+import { type AspectRatio } from "@/lib/frame";
+import { VIDEO_DURATION_SEC, formatTimecode, isMotionSrc, sceneBlocks, type StoryFrame } from "@/lib/generate";
 import { isVoiceId } from "@/lib/voices";
 
 function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
 
-function activeFrameIndex(playhead: number, count: number) {
-  if (count <= 1) return 0;
-  return Math.min(count - 1, Math.floor(Math.min(playhead, 0.999) * count));
-}
-
-function narrationDurationMs(script: string) {
-  const words = script.trim().split(/\s+/).filter(Boolean).length;
-  return Math.max(12_000, Math.round((words / 155) * 60_000));
+function frameClass(aspect: AspectRatio) {
+  if (aspect === "16:9") return "aspect-video w-full";
+  if (aspect === "1:1") return "aspect-square w-full";
+  return "aspect-[9/16] w-full";
 }
 
 export function Storyboard({
@@ -26,31 +23,39 @@ export function Storyboard({
   voiceId,
   audioSrc,
   audioLabel,
+  narrationEmbedded = false,
   durationSec = VIDEO_DURATION_SEC,
+  videoUrl,
+  aspect = "9:16",
 }: {
   frames: StoryFrame[];
   script: string;
   voiceId: string;
   audioSrc?: string;
   audioLabel?: string;
+  narrationEmbedded?: boolean;
   durationSec?: number;
+  videoUrl?: string;
+  aspect?: AspectRatio;
 }) {
+  const scenes = sceneBlocks(frames);
+  const movieSrc = videoUrl?.startsWith("https://") ? videoUrl : scenes.length === 1 ? scenes[0]?.src ?? "" : "";
   const [playhead, setPlayhead] = useState(0);
   const [narrating, setNarrating] = useState(false);
-  const activeIndex = activeFrameIndex(playhead, frames.length);
-  const active = frames[activeIndex];
-  const unified =
-    durationSec > VIDEO_DURATION_SEC &&
-    frames.length > 0 &&
-    frames.every((frame) => frame.src === frames[0]?.src);
+  const [sceneIndex, setSceneIndex] = useState(0);
+  const activeIndex = movieSrc
+    ? Math.min(Math.max(scenes.length - 1, 0), Math.floor(Math.min(playhead, 0.999) * Math.max(scenes.length, 1)))
+    : sceneIndex;
+  const active = scenes[activeIndex];
+  const mainSrc = movieSrc || active?.src || "";
+  const sceneLength = Math.max(1, Math.round(durationSec / Math.max(scenes.length, 1)));
   const cardRefs = useRef<Array<HTMLElement | null>>([]);
   const playerRef = useRef<HTMLVideoElement>(null);
-  const thumbRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const rafRef = useRef(0);
-  const startedAtRef = useRef(0);
   const playingRef = useRef(false);
-  const durationRef = useRef(narrationDurationMs(script));
+  const sceneIndexRef = useRef(0);
+  const startedAtRef = useRef(0);
   const lastUiRef = useRef(0);
 
   useEffect(() => {
@@ -72,78 +77,81 @@ export function Storyboard({
   }, [activeIndex]);
 
   useEffect(() => {
-    if (!narrating) return;
+    sceneIndexRef.current = sceneIndex;
+    if (!playingRef.current || movieSrc) return;
     const player = playerRef.current;
-    const thumb = thumbRef.current;
-    if (player) void player.play().catch(() => undefined);
-    if (thumb) void thumb.play().catch(() => undefined);
-  }, [narrating, activeIndex, active?.src]);
+    if (!player) return;
+    try {
+      player.currentTime = 0;
+    } catch {
+      // The next scene may still be loading.
+    }
+    void player.play().catch(() => undefined);
+  }, [sceneIndex, movieSrc]);
 
   function stopPlayback(atEnd = false) {
     playingRef.current = false;
     window.cancelAnimationFrame(rafRef.current);
     stopNarration();
-    const audio = audioRef.current;
-    if (audio) {
-      audio.pause();
-      if (!atEnd) audio.currentTime = 0;
-    }
+    audioRef.current?.pause();
     playerRef.current?.pause();
-    thumbRef.current?.pause();
     setNarrating(false);
     if (atEnd) setPlayhead(1);
   }
 
   function tick(now: number) {
     if (!playingRef.current) return;
-    const audio = audioRef.current;
-    if (audio && Number.isFinite(audio.duration) && audio.duration > 0) {
-      durationRef.current = audio.duration * 1000;
+    const player = playerRef.current;
+    const duration = player && Number.isFinite(player.duration) ? player.duration : 0;
+    let progress = 0;
+    if (movieSrc && duration > 0) {
+      progress = Math.min(1, player!.currentTime / duration);
+    } else if (duration > 0 && scenes.length > 0) {
+      progress = Math.min(1, (sceneIndexRef.current + player!.currentTime / duration) / scenes.length);
+    } else {
+      progress = Math.min(1, (now - startedAtRef.current) / Math.max(1000, durationSec * 1000));
     }
-    const elapsed = now - startedAtRef.current;
-    const spoken =
-      audio && !audio.paused && Number.isFinite(audio.currentTime)
-        ? audio.currentTime * 1000
-        : elapsed;
-    const progress = Math.min(1, spoken / durationRef.current);
     if (now - lastUiRef.current > 80 || progress >= 1) {
       lastUiRef.current = now;
       setPlayhead(progress);
     }
-    const player = playerRef.current;
-    if (unified && player && Number.isFinite(player.duration) && player.duration > 0) {
-      const target = progress * player.duration;
-      if (Math.abs(player.currentTime - target) > 0.45) {
-        try {
-          player.currentTime = target;
-        } catch {
-          // Ignore a seek that arrives before the clip can be scrubbed.
-        }
-      }
-    }
-    if (progress >= 1) {
+    if ((movieSrc || duration === 0) && (player?.ended || progress >= 0.995)) {
       stopPlayback(true);
       return;
     }
     rafRef.current = window.requestAnimationFrame(tick);
   }
 
-  function playNarration() {
+  function onClipEnded() {
+    if (!playingRef.current || movieSrc) {
+      stopPlayback(true);
+      return;
+    }
+    if (sceneIndexRef.current < scenes.length - 1) {
+      setSceneIndex((index) => index + 1);
+      return;
+    }
+    stopPlayback(true);
+  }
+
+  function play() {
     playingRef.current = false;
     window.cancelAnimationFrame(rafRef.current);
+    stopNarration();
     audioRef.current?.pause();
     playerRef.current?.pause();
-    thumbRef.current?.pause();
-
-    durationRef.current = narrationDurationMs(script);
-    startedAtRef.current = performance.now();
-    lastUiRef.current = 0;
-    playingRef.current = true;
+    sceneIndexRef.current = 0;
+    setSceneIndex(0);
     setPlayhead(0);
     setNarrating(true);
+    playingRef.current = true;
+    startedAtRef.current = performance.now();
+    lastUiRef.current = 0;
 
     const player = playerRef.current;
+    const embedded = narrationEmbedded || (!audioSrc && isMotionSrc(mainSrc));
     if (player) {
+      player.muted = !embedded;
       try {
         player.currentTime = 0;
       } catch {
@@ -152,28 +160,27 @@ export function Storyboard({
       void player.play().catch(() => undefined);
     }
 
-    if (audioSrc && audioRef.current) {
+    if (!embedded && audioSrc && audioRef.current) {
       const audio = audioRef.current;
       audio.currentTime = 0;
       void audio.play().catch(() => {
         if (!playingRef.current || !isVoiceId(voiceId)) return;
         speakNarration(script, voiceId);
       });
-    } else if (isVoiceId(voiceId)) {
+    } else if (!embedded && !isMotionSrc(mainSrc) && isVoiceId(voiceId)) {
       speakNarration(script, voiceId);
     }
 
-    window.cancelAnimationFrame(rafRef.current);
     rafRef.current = window.requestAnimationFrame(tick);
   }
 
   return (
     <div className="mt-5">
-      {audioSrc ? <audio ref={audioRef} src={audioSrc} preload="auto" /> : null}
+      {audioSrc && !narrationEmbedded ? <audio ref={audioRef} src={audioSrc} preload="auto" /> : null}
 
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" onClick={playNarration} className="gen-cta">
-          Play narration
+        <button type="button" onClick={play} className="gen-cta">
+          Play
         </button>
         <button type="button" onClick={() => stopPlayback()} className="gen-ghost">
           Stop
@@ -181,23 +188,26 @@ export function Storyboard({
         {audioLabel ? <p className="text-sm text-muted">{audioLabel}</p> : null}
       </div>
 
-      {active ? (
-        <div className="gen-player relative mx-auto mt-4 w-52 sm:w-64">
-          <video
-            ref={playerRef}
-            key={`${activeIndex}-${active.src}`}
-            src={active.src}
-            muted
-            loop={!unified}
-            playsInline
-            autoPlay={narrating}
-            preload="auto"
-            className="aspect-[9/16] w-full rounded-[1.15rem] object-cover"
-          />
+      {mainSrc ? (
+        <div className={cn("gen-player relative mx-auto mt-4", aspect === "16:9" ? "w-full max-w-xl" : "w-52 sm:w-64")}>
+          {isMotionSrc(mainSrc) ? (
+            <video
+              ref={playerRef}
+              key={mainSrc}
+              src={mainSrc}
+              muted={!narrationEmbedded}
+              playsInline
+              preload="auto"
+              onEnded={onClipEnded}
+              className={cn(frameClass(aspect), "rounded-[1.15rem] object-cover")}
+            />
+          ) : (
+            <img src={mainSrc} alt="" className={cn(frameClass(aspect), "rounded-[1.15rem] object-cover")} />
+          )}
           <ViralSubtitles script={script} playhead={playhead} visible={narrating} />
           <p className="mt-2 text-center font-mono text-[11px] text-muted">
-            {active.time} · {active.caption}
-            {active.term ? ` · ${active.term}` : ""}
+            {formatTimecode(Math.min(durationSec, playhead * durationSec))} / {formatTimecode(durationSec)}
+            {active?.caption ? ` · ${active.caption}` : ""}
           </p>
         </div>
       ) : null}
@@ -209,30 +219,25 @@ export function Storyboard({
           className="absolute top-1 h-4 w-0.5 bg-accent"
           style={{ left: `${Math.min(playhead, 1) * 100}%` }}
         />
-        {frames.map((frame, index) => (
+        {scenes.map((frame, index) => (
           <span
-            key={frame.time}
+            key={`${frame.src}-${frame.time}`}
             className="absolute top-3 -translate-x-1/2"
-            style={{ left: `${(index / frames.length) * 100}%` }}
+            style={{ left: `${((index + 0.5) / Math.max(scenes.length, 1)) * 100}%` }}
           >
             <span className="mx-auto block h-2 w-px bg-muted" />
             <span className="mt-1 block font-mono text-[10px] text-muted">{frame.time}</span>
           </span>
         ))}
-        <span className="absolute top-3 right-0 translate-x-0">
-          <span className="ml-auto block h-2 w-px bg-muted" />
-          <span className="mt-1 block text-right font-mono text-[10px] text-muted">
-            {formatTimecode(durationSec)}
-          </span>
-        </span>
       </div>
 
       <div className="mt-3 flex gap-3 overflow-x-auto pb-2">
-        {frames.map((frame, index) => {
+        {scenes.map((frame, index) => {
           const activeCard = index === activeIndex;
+          const motion = isMotionSrc(frame.src);
           return (
             <figure
-              key={frame.time}
+              key={`${frame.src}-${frame.time}`}
               ref={(node) => {
                 cardRefs.current[index] = node;
               }}
@@ -242,22 +247,22 @@ export function Storyboard({
               )}
               aria-current={activeCard ? "true" : undefined}
             >
-              <video
-                ref={activeCard ? thumbRef : undefined}
-                key={activeCard ? `thumb-${index}-${frame.src}` : frame.src}
-                src={frame.src}
-                muted
-                playsInline
-                loop={activeCard}
-                autoPlay={activeCard && narrating}
-                preload={activeCard ? "auto" : "metadata"}
-                className="aspect-[9/16] w-full rounded-lg object-cover"
-              />
+              {motion ? (
+                <video
+                  src={frame.src}
+                  muted
+                  playsInline
+                  preload="metadata"
+                  className={cn(frameClass(aspect), "rounded-lg object-cover")}
+                />
+              ) : (
+                <img src={frame.src} alt="" className={cn(frameClass(aspect), "rounded-lg object-cover")} />
+              )}
               <figcaption className="mt-2 px-1 pb-1">
                 <span className="block font-mono text-[11px] text-foreground">{frame.time}</span>
                 <span className="mt-0.5 block text-xs leading-5 text-muted">
                   {frame.caption}
-                  <span className="text-muted/80"> · {FRAME_LENGTH_SEC}s</span>
+                  <span className="text-muted/80"> · {sceneLength}s</span>
                 </span>
               </figcaption>
             </figure>

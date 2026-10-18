@@ -6,14 +6,23 @@ import {
   VIDEO_DURATION_SEC,
   buildStoryboard,
   countWords,
+  motionClip,
   previewScript,
   type GenerateEvent,
 } from "@/lib/generate";
 import { SUPABASE_ACCESS_COOKIE } from "@/lib/auth-cookie";
-import { EXTEND_VIDEO_COST, generationCreditCost, generationHoldCost } from "@/lib/credits";
+import {
+  BUDGET_GENERATION_COST,
+  EXTEND_VIDEO_COST,
+  durationCreditCost,
+  generationCreditCost,
+  generationHoldCost,
+} from "@/lib/credits";
 import { refundProfileCredits, reserveGenerationCredits } from "@/lib/profiles";
 import { userFromAccessToken } from "@/lib/supabase/server";
+import { isAspectRatio, type AspectRatio } from "@/lib/frame";
 import { CLIP_DURATION_SEC } from "@/lib/scenes";
+import { logApiKey } from "@/lib/api-keys";
 import { falApiKey } from "@/lib/fal-key";
 import {
   extractLastFrame,
@@ -23,31 +32,68 @@ import {
   renderFalClip,
   type ReferenceImage,
 } from "@/lib/fal-video";
-import { imageLockedMotionPrompt, isMotionStyleId, PROMPT_MAX, videoMotionPrompt } from "@/lib/motion-styles";
+import {
+  imageLockedMotionPrompt,
+  isMotionStyleId,
+  PROMPT_MAX,
+  speakingMotionPrompt,
+  videoMotionPrompt,
+} from "@/lib/motion-styles";
 import { alignReferenceContext } from "@/lib/reference-context";
-import { getVoice, isVoiceId } from "@/lib/voices";
+import { getVoice, resolveVoiceId } from "@/lib/voices";
 import { isVisualEngineId, type VisualEngineId } from "@/lib/visual-engines";
+import {
+  DEFAULT_VIDEO_MODEL,
+  DEFAULT_VIDEO_RESOLUTION,
+  isVideoModelId,
+  isVideoResolution,
+  insufficientVideoCreditsMessage,
+  videoClipCreditCost,
+  videoModelEngine,
+  type VideoModelId,
+  type VideoResolution,
+} from "@/lib/video-models";
+import { isFalCreditError, isMockVideoUrl, pickMockVideo } from "@/lib/mock-video";
 
 const USE_PAID_VOICE = false;
+const MOCK_NOTICE =
+  "Fal.ai video rendering was skipped. A free 9:16 stock clip is loaded so dialogue and captions can still be tested.";
+
+function mockPicture(script: string) {
+  const videoUrl = pickMockVideo();
+  return { videoUrl, frames: motionClip(videoUrl, script) };
+}
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const FRAME_STEP_MS = 700;
 const AUDIO_STEP_MS = 600;
 const SCRIPT_CHAR_CAP = 1600;
 
-const SHORT_SCRIPT_PROMPT = `You write a 5-second faceless vertical video narration. Return only the spoken line.
+const DIALOGUE_RULES = `Return only direct character dialogue. Every line uses this form:
+Name: "spoken line"
 
-Pace: 12 to 20 words. One concrete hook about the topic. No title, labels, stage directions, hashtags, emojis, or markdown.`;
+Two named characters. The first speaker is character A and the second is character B. They alternate. No third-person narration, no stage directions, no title, no hashtags, no emojis, and no markdown.`;
 
-const SCRIPT_SYSTEM_PROMPT = `You write rapid-fire, highly engaging 45-second TikTok scripts for faceless videos. Analyze the topic, then return only the spoken script.
+const SHORT_SCRIPT_PROMPT = `You write a 5-second vertical video as on-camera character dialogue.
 
-Pace: about 110 to 130 words, said out loud in 45 seconds. Short sentences. No pauses for a host on camera.
+${DIALOGUE_RULES}
+Use exactly 2 lines. 12 to 20 spoken words total, not counting the names.`;
+
+const TEN_SECOND_SCRIPT_PROMPT = `You write a 10-second vertical video as on-camera character dialogue.
+
+${DIALOGUE_RULES}
+Use 4 lines. 22 to 32 spoken words total, not counting the names. Open on a hook and end on a payoff.`;
+
+const SCRIPT_SYSTEM_PROMPT = `You write a 45-second vertical video as on-camera character dialogue. Analyze the topic, then return only the dialogue.
+
+${DIALOGUE_RULES}
+Pace: about 110 to 130 spoken words, said out loud in 45 seconds. Short lines.
 
 Open on a specific hook about this topic. Then hit one concrete fact, the mistake people make, and one action they can take today. End on a line that pays off the hook.
 
-Do not open with "Hey guys", "Stop scrolling", or "In this video". No title, labels, stage directions, shot list, hashtags, emojis, or markdown. Output only the narration.`;
+Do not open with "Hey guys", "Stop scrolling", or "In this video".`;
 
 function sleep(ms: number, signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
@@ -120,6 +166,7 @@ function iteratorToStream(
         if (value) {
           const text = new TextDecoder().decode(value);
           if (text.includes('"type":"error"')) await release();
+          else if (text.includes('"type":"rendering"')) keep();
           else if (text.includes('"type":"complete"')) {
             if (text.includes('"preview":true') || text.includes('"creditsCharged":0')) await release();
             else keep();
@@ -167,6 +214,9 @@ type GeminiResponse = {
 };
 
 async function writeScript(topic: string, signal: AbortSignal, clipSec = VIDEO_DURATION_SEC) {
+  if (!logApiKey("GEMINI_API_KEY")) {
+    throw new Error("GEMINI_API_KEY is missing from the server environment.");
+  }
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY is missing from the server environment.");
@@ -185,7 +235,7 @@ async function writeScript(topic: string, signal: AbortSignal, clipSec = VIDEO_D
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         system_instruction: {
-          parts: [{ text: clipSec === CLIP_DURATION_SEC ? SHORT_SCRIPT_PROMPT : SCRIPT_SYSTEM_PROMPT }],
+          parts: [{ text: clipSec >= 10 && clipSec < 15 ? TEN_SECOND_SCRIPT_PROMPT : clipSec === CLIP_DURATION_SEC ? SHORT_SCRIPT_PROMPT : SCRIPT_SYSTEM_PROMPT }],
         },
         contents: [
           {
@@ -193,9 +243,11 @@ async function writeScript(topic: string, signal: AbortSignal, clipSec = VIDEO_D
             parts: [
               {
                 text:
-                  clipSec === CLIP_DURATION_SEC
-                    ? `Write the 5-second narration.\n\nTopic: ${topic}`
-                    : `Analyze this topic and write the 45-second TikTok script.\n\nTopic: ${topic}`,
+                  clipSec >= 10 && clipSec < 15
+                    ? `Write the 10-second character dialogue.\n\nTopic: ${topic}`
+                    : clipSec === CLIP_DURATION_SEC
+                      ? `Write the 5-second character dialogue.\n\nTopic: ${topic}`
+                      : `Analyze this topic and write the 45-second character dialogue.\n\nTopic: ${topic}`,
               },
             ],
           },
@@ -262,7 +314,7 @@ async function writeContinuation(topic: string, priorScript: string, signal: Abo
         system_instruction: {
           parts: [
             {
-              text: "You continue a 45-second faceless TikTok narration. Return only the next spoken section. About 110 to 130 words. Continue from the last line. Do not repeat earlier lines. No title, labels, stage directions, hashtags, or markdown.",
+              text: `You continue an on-camera character dialogue. Return only the next exchange in the form Name: "spoken line". Keep the same two character names. About 12 to 20 spoken words. Do not repeat earlier lines. ${DIALOGUE_RULES}`,
             },
           ],
         },
@@ -271,7 +323,7 @@ async function writeContinuation(topic: string, priorScript: string, signal: Abo
             role: "user",
             parts: [
               {
-                text: `Topic: ${topic}\n\nThe video already said:\n${prior}\n\nWrite the next 45 seconds.`,
+                text: `Topic: ${topic}\n\nThe characters already said:\n${prior}\n\nWrite the next exchange.`,
               },
             ],
           },
@@ -358,6 +410,10 @@ async function* runWorkflow(
   motionStyle: string | null,
   signal: AbortSignal,
   clipSec = VIDEO_DURATION_SEC,
+  mockMode = false,
+  aspect: AspectRatio = "9:16",
+  videoModel: VideoModelId = DEFAULT_VIDEO_MODEL,
+  resolution: VideoResolution = DEFAULT_VIDEO_RESOLUTION,
 ) {
   const lockPromise =
     referenceImage && engine !== "stock"
@@ -399,7 +455,7 @@ async function* runWorkflow(
     message: preview ? "Preview script ready" : "Script ready",
     detail: preview
       ? "Local preview while the Gemini free tier is limited"
-      : `${wordCount} words, paced for a ${clipSec}-second narration`,
+      : `${wordCount} words, paced for a ${clipSec}-second dialogue`,
   });
 
   yield encode({
@@ -426,7 +482,7 @@ async function* runWorkflow(
       }
     } else {
       await sleep(AUDIO_STEP_MS, signal);
-      audioLabel = `${voiceName} · browser voice · no speaker on screen`;
+      audioLabel = `${voiceName} · Character dialogue and lip-sync run after the picture is ready`;
     }
   } catch (error) {
     if (isAbortError(error)) throw error;
@@ -454,28 +510,72 @@ async function* runWorkflow(
 
   let frames = buildStoryboard(script);
   let creditsCharged = 0;
+  let mock = mockMode;
   let frameDetail = `${FRAME_COUNT} Wikimedia stock clips · 9:16 · ${FRAME_LENGTH_SEC} seconds each`;
 
-  if (engine === "stock") {
+  if (mockMode) {
+    const stock = mockPicture(script);
+    frames = stock.frames;
+    frameDetail = "Mock 9:16 stock clip";
+    yield encode({ type: "notice", message: MOCK_NOTICE });
+  } else if (engine === "stock") {
     await sleep(FRAME_STEP_MS, signal);
   } else {
     try {
       const lock = await lockPromise;
       const rendered = await renderFalClip({
         engine,
-        prompt: referenceImage
-          ? imageLockedMotionPrompt(topic, motionStyle, lock)
-          : videoMotionPrompt(topic, motionStyle),
+        videoModel,
+        resolution,
+        prompt: speakingMotionPrompt(
+          referenceImage
+            ? imageLockedMotionPrompt(topic, motionStyle, lock)
+            : videoMotionPrompt(topic, motionStyle),
+          script,
+        ),
         image: referenceImage,
+        durationSec: clipSec >= 10 ? 10 : 5,
+        aspectRatio: aspect,
         signal,
       });
       if ("videoUrl" in rendered) {
-        frames = frames.map((frame) => ({ ...frame, src: rendered.videoUrl }));
-        creditsCharged = generationCreditCost(engine, Boolean(referenceImage));
+        frames = motionClip(rendered.videoUrl, script);
+        creditsCharged = videoClipCreditCost(videoModel, resolution, clipSec);
         frameDetail = referenceImage
           ? "Image-to-video clip from Fal.ai · 9:16"
           : "Fal.ai motion clip · 9:16";
+      } else if ("pending" in rendered) {
+        yield encode({
+          type: "rendering",
+          statusUrl: rendered.statusUrl,
+          responseUrl: rendered.responseUrl,
+          result: {
+            id: `c45_${Date.now().toString(36)}`,
+            topic,
+            voiceId,
+            voiceName,
+            durationSec: clipSec,
+            script,
+            wordCount,
+            audioLabel,
+            audioSrc,
+            frames: motionClip("", script),
+            engine,
+            creditsCharged: videoClipCreditCost(videoModel, resolution, clipSec),
+            preview: false,
+          },
+        });
+        return;
+      } else if (isFalCreditError(rendered.error)) {
+        console.error("[fal] credits depleted; using a stock clip", rendered.error);
+        const stock = mockPicture(script);
+        frames = stock.frames;
+        mock = true;
+        creditsCharged = 0;
+        frameDetail = "Mock 9:16 stock clip";
+        yield encode({ type: "notice", message: MOCK_NOTICE });
       } else if (falApiKey()) {
+        console.error("[fal] video render failed", rendered.error);
         yield encode({ type: "error", message: rendered.error });
         return;
       } else {
@@ -529,6 +629,8 @@ async function* runWorkflow(
       engine,
       creditsCharged,
       preview,
+      mock,
+      videoUrl: frames.find((frame) => frame.src.startsWith("https://"))?.src,
     },
   });
 }
@@ -541,12 +643,14 @@ async function* runExtend(input: {
   priorVideoUrls: string[];
   motionStyle: string | null;
   signal: AbortSignal;
+  mockMode?: boolean;
+  aspect?: AspectRatio;
 }) {
   yield encode({
     type: "progress",
     step: "script",
     status: "started",
-    message: "Continuing the narration",
+    message: "Continuing the dialogue",
   });
 
   const lastVideo = input.priorVideoUrls[input.priorVideoUrls.length - 1];
@@ -555,18 +659,22 @@ async function* runExtend(input: {
     return;
   }
   let continuation: string;
-  let frameUrl: string;
+  let frameUrl = "";
+  let mock = Boolean(input.mockMode);
   try {
-    const [script, frame] = await Promise.all([
-      writeContinuation(input.topic, input.priorScript, input.signal),
-      extractLastFrame(lastVideo, input.signal),
-    ]);
-    continuation = script;
-    if ("error" in frame) {
-      yield encode({ type: "error", message: frame.error || "Could not read the last frame." });
-      return;
+    continuation = await writeContinuation(input.topic, input.priorScript, input.signal);
+    if (!mock) {
+      const frame = await extractLastFrame(lastVideo, input.signal);
+      if ("error" in frame) {
+        if (!isFalCreditError(frame.error ?? "")) {
+          yield encode({ type: "error", message: frame.error || "Could not read the last frame." });
+          return;
+        }
+        mock = true;
+      } else {
+        frameUrl = frame.imageUrl;
+      }
     }
-    frameUrl = frame.imageUrl;
   } catch (error) {
     if (isAbortError(error)) throw error;
     yield encode({
@@ -591,7 +699,7 @@ async function* runExtend(input: {
     message: GENERATE_STEPS[1].label,
   });
   await sleep(AUDIO_STEP_MS, input.signal);
-  const audioLabel = `${input.voiceName} · browser voice · no speaker on screen`;
+  const audioLabel = `${input.voiceName} · Character dialogue and lip-sync run after the picture is ready`;
   yield encode({
     type: "progress",
     step: "audio",
@@ -604,23 +712,100 @@ async function* runExtend(input: {
     type: "progress",
     step: "frames",
     status: "started",
-    message: "Rendering the next 45 seconds",
+    message: "Rendering the next scene",
   });
+
+  if (mock) {
+    const stock = mockPicture(continuation);
+    yield encode({ type: "notice", message: MOCK_NOTICE });
+    yield encode({ type: "progress", step: "frames", status: "completed", message: "Extension ready", detail: "Mock 9:16 stock clip" });
+    yield encode({
+      type: "complete",
+      result: {
+        id: `c45_${Date.now().toString(36)}`,
+        topic: input.topic,
+        voiceId: input.voiceId,
+        voiceName: input.voiceName,
+        durationSec: VIDEO_DURATION_SEC,
+        script: continuation,
+        wordCount: countWords(continuation),
+        audioLabel,
+        frames: stock.frames,
+        engine: "budget",
+        creditsCharged: 0,
+        mock: true,
+        videoUrl: stock.videoUrl,
+      },
+    });
+    return;
+  }
 
   const rendered = await renderFalClip({
     engine: "budget",
-    prompt: imageLockedMotionPrompt(
-      `${input.topic}. ${continuation.slice(0, 180)}`,
-      input.motionStyle,
-      "Continue from this exact frame. Keep the same character, face, clothing, colors, and setting.",
+    prompt: speakingMotionPrompt(
+      imageLockedMotionPrompt(
+        `${input.topic}. ${continuation.slice(0, 180)}`,
+        input.motionStyle,
+        "Continue from this exact frame. Keep the same character, face, clothing, colors, and setting.",
+      ),
+      continuation,
     ),
     image: null,
     startFrameUrl: frameUrl,
-    pollBudgetMs: 25000,
+    durationSec: 5,
+    aspectRatio: input.aspect ?? "9:16",
     signal: input.signal,
   });
+  if ("pending" in rendered) {
+    const frames = motionClip("", continuation);
+    yield encode({
+      type: "rendering",
+      statusUrl: rendered.statusUrl,
+      responseUrl: rendered.responseUrl,
+      result: {
+        id: `c45_${Date.now().toString(36)}`,
+        topic: input.topic,
+        voiceId: input.voiceId,
+        voiceName: input.voiceName,
+        durationSec: VIDEO_DURATION_SEC,
+        script: continuation,
+        wordCount: countWords(continuation),
+        audioLabel,
+        frames,
+        engine: "budget",
+        creditsCharged: durationCreditCost(VIDEO_DURATION_SEC) ?? EXTEND_VIDEO_COST,
+      },
+    });
+    return;
+  }
   if ("error" in rendered) {
-    yield encode({ type: "error", message: rendered.error });
+    if (!isFalCreditError(rendered.error)) {
+      console.error("[fal] video render failed", rendered.error);
+      yield encode({ type: "error", message: rendered.error });
+      return;
+    }
+    console.error("[fal] credits depleted; using a stock clip", rendered.error);
+    const stock = mockPicture(continuation);
+    yield encode({ type: "notice", message: MOCK_NOTICE });
+    yield encode({ type: "progress", step: "frames", status: "completed", message: "Extension ready", detail: "Mock 9:16 stock clip" });
+    yield encode({
+      type: "complete",
+      result: {
+        id: `c45_${Date.now().toString(36)}`,
+        topic: input.topic,
+        voiceId: input.voiceId,
+        voiceName: input.voiceName,
+        durationSec: VIDEO_DURATION_SEC,
+        script: continuation,
+        wordCount: countWords(continuation),
+        audioLabel,
+        frames: stock.frames,
+        engine: "budget",
+        creditsCharged: 0,
+        mock: true,
+        videoUrl: stock.videoUrl,
+      },
+    });
     return;
   }
 
@@ -630,7 +815,7 @@ async function* runExtend(input: {
     console.error("Fal video merge failed", joined.error);
   }
 
-  const frames = buildStoryboard(continuation).map((frame) => ({ ...frame, src: rendered.videoUrl }));
+  const frames = motionClip(rendered.videoUrl, continuation);
   yield encode({
     type: "progress",
     step: "frames",
@@ -652,7 +837,7 @@ async function* runExtend(input: {
       audioLabel,
       frames,
       engine: "budget",
-      creditsCharged: EXTEND_VIDEO_COST,
+      creditsCharged: durationCreditCost(VIDEO_DURATION_SEC) ?? EXTEND_VIDEO_COST,
       videoUrl,
     },
   });
@@ -668,10 +853,12 @@ async function* runScene(input: {
   priorVideoUrls: string[];
   motionStyle: string | null;
   signal: AbortSignal;
+  mockMode?: boolean;
+  aspect?: AspectRatio;
 }) {
   const script = cleanScript(input.narration);
   if (!script) {
-    yield encode({ type: "error", message: "That scene needs a narration." });
+    yield encode({ type: "error", message: "That scene needs dialogue." });
     return;
   }
 
@@ -679,7 +866,7 @@ async function* runScene(input: {
     type: "progress",
     step: "script",
     status: "completed",
-    message: "Scene narration ready",
+    message: "Scene dialogue ready",
     detail: `${countWords(script)} words`,
   });
   yield encode({
@@ -687,7 +874,7 @@ async function* runScene(input: {
     step: "audio",
     status: "completed",
     message: "Audio ready",
-    detail: `${input.voiceName} · browser voice · no speaker on screen`,
+    detail: `${input.voiceName} · Character dialogue and lip-sync run after the picture is ready`,
   });
   yield encode({
     type: "progress",
@@ -695,6 +882,31 @@ async function* runScene(input: {
     status: "started",
     message: input.priorVideoUrls.length > 0 ? "Continuing from the last frame" : "Rendering this scene",
   });
+
+  if (input.mockMode) {
+    const stock = mockPicture(script);
+    yield encode({ type: "notice", message: MOCK_NOTICE });
+    yield encode({ type: "progress", step: "frames", status: "completed", message: "Scene ready", detail: "Mock 9:16 stock clip" });
+    yield encode({
+      type: "complete",
+      result: {
+        id: `c45_${Date.now().toString(36)}`,
+        topic: input.topic,
+        voiceId: input.voiceId,
+        voiceName: input.voiceName,
+        durationSec: CLIP_DURATION_SEC,
+        script,
+        wordCount: countWords(script),
+        audioLabel: `${input.voiceName} · Character dialogue and lip-sync run after the picture is ready`,
+        frames: stock.frames,
+        engine: "budget",
+        creditsCharged: 0,
+        mock: true,
+        videoUrl: stock.videoUrl,
+      },
+    });
+    return;
+  }
 
   let startFrameUrl: string | null = null;
   if (input.priorVideoUrls.length > 0) {
@@ -713,40 +925,83 @@ async function* runScene(input: {
 
   const rendered = await renderFalClip({
     engine: "budget",
-    prompt: imageLockedMotionPrompt(
-      input.visualPrompt,
-      input.motionStyle,
-      startFrameUrl
-        ? "Continue from this exact frame. Keep the same character, face, clothing, colors, and setting."
-        : "Match the reference still when one is attached. Keep the subject consistent.",
+    prompt: speakingMotionPrompt(
+      imageLockedMotionPrompt(
+        input.visualPrompt,
+        input.motionStyle,
+        startFrameUrl
+          ? "Continue from this exact frame. Keep the same character, face, clothing, colors, and setting."
+          : "Match the reference still when one is attached. Keep the subject consistent.",
+      ),
+      script,
     ),
     image: startFrameUrl ? null : input.referenceImage,
     startFrameUrl,
-    pollBudgetMs: startFrameUrl ? 25000 : 40000,
+    durationSec: CLIP_DURATION_SEC,
+    aspectRatio: input.aspect ?? "9:16",
     signal: input.signal,
   });
+  if ("pending" in rendered) {
+    const frames = motionClip("", script);
+    yield encode({
+      type: "rendering",
+      statusUrl: rendered.statusUrl,
+      responseUrl: rendered.responseUrl,
+      result: {
+        id: `c45_${Date.now().toString(36)}`,
+        topic: input.topic,
+        voiceId: input.voiceId,
+        voiceName: input.voiceName,
+        durationSec: CLIP_DURATION_SEC,
+        script,
+        wordCount: countWords(script),
+        audioLabel: `${input.voiceName} · Character dialogue and lip-sync run after the picture is ready`,
+        frames,
+        engine: "budget",
+        creditsCharged: durationCreditCost(CLIP_DURATION_SEC) ?? BUDGET_GENERATION_COST,
+      },
+    });
+    return;
+  }
   if ("error" in rendered) {
-    yield encode({ type: "error", message: rendered.error });
+    if (!isFalCreditError(rendered.error)) {
+      console.error("[fal] video render failed", rendered.error);
+      yield encode({ type: "error", message: rendered.error });
+      return;
+    }
+    console.error("[fal] credits depleted; using a stock clip", rendered.error);
+    const stock = mockPicture(script);
+    yield encode({ type: "notice", message: MOCK_NOTICE });
+    yield encode({ type: "progress", step: "frames", status: "completed", message: "Scene ready", detail: "Mock 9:16 stock clip" });
+    yield encode({
+      type: "complete",
+      result: {
+        id: `c45_${Date.now().toString(36)}`,
+        topic: input.topic,
+        voiceId: input.voiceId,
+        voiceName: input.voiceName,
+        durationSec: CLIP_DURATION_SEC,
+        script,
+        wordCount: countWords(script),
+        audioLabel: `${input.voiceName} · Character dialogue and lip-sync run after the picture is ready`,
+        frames: stock.frames,
+        engine: "budget",
+        creditsCharged: 0,
+        mock: true,
+        videoUrl: stock.videoUrl,
+      },
+    });
     return;
   }
 
-  const joined =
-    input.priorVideoUrls.length > 0
-      ? await mergeFalVideos([...input.priorVideoUrls, rendered.videoUrl], input.signal)
-      : null;
-  const videoUrl = joined && "videoUrl" in joined ? joined.videoUrl : undefined;
-  if (joined && !videoUrl && "error" in joined) console.error("Fal scene merge failed", joined.error);
-
-  const creditsCharged = startFrameUrl
-    ? EXTEND_VIDEO_COST
-    : generationCreditCost("budget", Boolean(input.referenceImage));
-  const frames = buildStoryboard(script).map((frame) => ({ ...frame, src: rendered.videoUrl }));
+  const creditsCharged = durationCreditCost(CLIP_DURATION_SEC) ?? BUDGET_GENERATION_COST;
+  const frames = motionClip(rendered.videoUrl, script);
 
   yield encode({
     type: "progress",
     step: "frames",
     status: "completed",
-    message: videoUrl ? "Scene joined to the short" : "Scene ready",
+    message: "Scene ready",
   });
   yield encode({
     type: "complete",
@@ -758,21 +1013,30 @@ async function* runScene(input: {
       durationSec: CLIP_DURATION_SEC,
       script,
       wordCount: countWords(script),
-      audioLabel: `${input.voiceName} · browser voice · no speaker on screen`,
+      audioLabel: `${input.voiceName} · Character dialogue and lip-sync run after the picture is ready`,
       frames,
       engine: "budget",
       creditsCharged,
-      videoUrl,
+      videoUrl: rendered.videoUrl,
     },
   });
 }
 
 export async function POST(request: NextRequest) {
-  if (!process.env.GEMINI_API_KEY) {
+  const geminiReady = logApiKey("GEMINI_API_KEY");
+  const falReady = logApiKey("FAL_KEY");
+  const voiceReady = logApiKey("ELEVENLABS_API_KEY");
+  if (!geminiReady) {
     return Response.json(
       { error: "GEMINI_API_KEY must be set in .env.local." },
       { status: 500 },
     );
+  }
+  if (!falReady) {
+    return Response.json({ error: "FAL_KEY must be set in .env.local." }, { status: 500 });
+  }
+  if (!voiceReady) {
+    return Response.json({ error: "ELEVENLABS_API_KEY must be set in .env.local." }, { status: 500 });
   }
 
   let body: unknown;
@@ -797,6 +1061,10 @@ export async function POST(request: NextRequest) {
           narration?: unknown;
           visualPrompt?: unknown;
           durationSec?: unknown;
+          mockMode?: unknown;
+          aspect?: unknown;
+          videoModel?: unknown;
+          resolution?: unknown;
         })
       : {};
   const topic = typeof record.topic === "string" ? record.topic.trim() : "";
@@ -808,10 +1076,26 @@ export async function POST(request: NextRequest) {
   const priorVideoUrls = Array.isArray(record.priorVideoUrls)
     ? record.priorVideoUrls.filter((item): item is string => typeof item === "string").slice(0, 12)
     : [];
-  const voice = typeof record.voice === "string" ? record.voice : "";
-  const engine = typeof record.engine === "string" ? record.engine : "";
+  const voice = typeof record.voice === "string" ? resolveVoiceId(record.voice) : null;
+  const requestedEngine = typeof record.engine === "string" ? record.engine : "";
+  const videoModel = typeof record.videoModel === "string" && isVideoModelId(record.videoModel)
+    ? record.videoModel
+    : requestedEngine === "ultra"
+      ? "runway"
+      : DEFAULT_VIDEO_MODEL;
+  const engine = isVideoModelId(typeof record.videoModel === "string" ? record.videoModel : "")
+    ? videoModelEngine(videoModel)
+    : isVisualEngineId(requestedEngine)
+      ? requestedEngine
+      : videoModelEngine(videoModel);
+  const resolution =
+    typeof record.resolution === "string" && isVideoResolution(record.resolution)
+      ? record.resolution
+      : DEFAULT_VIDEO_RESOLUTION;
   const referenceImage = parseReferenceImage(record.referenceImage);
   const motionStyle = typeof record.motionStyle === "string" ? record.motionStyle : "";
+  const mockMode = record.mockMode === true;
+  const aspect: AspectRatio = typeof record.aspect === "string" && isAspectRatio(record.aspect) ? record.aspect : "9:16";
 
   if (topic.length < 3) {
     return Response.json(
@@ -827,7 +1111,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!isVoiceId(voice)) {
+  if (!voice) {
     return Response.json({ error: "Select a voice style." }, { status: 400 });
   }
 
@@ -855,16 +1139,16 @@ export async function POST(request: NextRequest) {
     if (priorScript.length < 20) {
       return Response.json({ error: "The current script is too short to extend." }, { status: 400 });
     }
-    if (priorVideoUrls.length === 0 || priorVideoUrls.some((url) => !falMediaUrl(url))) {
+    if (priorVideoUrls.length === 0 || priorVideoUrls.some((url) => !falMediaUrl(url) && !isMockVideoUrl(url))) {
       return Response.json({ error: "Extend a finished Studio Fast Motion video." }, { status: 400 });
     }
   }
 
   if (scene) {
     if (narration.length < 20 || visualPrompt.length < 12) {
-      return Response.json({ error: "Each scene needs narration and a visual prompt." }, { status: 400 });
+      return Response.json({ error: "Each scene needs dialogue and a visual prompt." }, { status: 400 });
     }
-    if (priorVideoUrls.some((url) => !falMediaUrl(url))) {
+    if (priorVideoUrls.some((url) => !falMediaUrl(url) && !isMockVideoUrl(url))) {
       return Response.json({ error: "The previous scene cannot be continued." }, { status: 400 });
     }
   }
@@ -877,6 +1161,8 @@ export async function POST(request: NextRequest) {
     engine,
     imageToVideo: Boolean(referenceImage) && engine !== "stock",
     durationSec,
+    videoModel,
+    resolution,
   });
   let hold: { userId: string; cost: number } | null = null;
   if (holdQuote.clipCost > 0) {
@@ -893,10 +1179,9 @@ export async function POST(request: NextRequest) {
     );
     if (!reserved.ok) {
       if (reserved.reason === "insufficient") {
-        return NextResponse.json(
-          { error: "Insufficient credits", upgradeRequired: true },
-          { status: 402 },
-        );
+        const message =
+          extend || scene ? "Insufficient credits" : insufficientVideoCreditsMessage(resolution, durationSec ?? 5);
+        return NextResponse.json({ error: message, upgradeRequired: true }, { status: 402 });
       }
       return NextResponse.json({ error: "Could not update the credit balance." }, { status: 500 });
     }
@@ -915,6 +1200,8 @@ export async function POST(request: NextRequest) {
           priorVideoUrls,
           motionStyle: motionStyle || null,
           signal: request.signal,
+          mockMode,
+          aspect,
         })
       : extend
       ? runExtend({
@@ -925,6 +1212,8 @@ export async function POST(request: NextRequest) {
           priorVideoUrls,
           motionStyle: motionStyle || null,
           signal: request.signal,
+          mockMode,
+          aspect,
         })
       : runWorkflow(
       topic,
@@ -935,7 +1224,11 @@ export async function POST(request: NextRequest) {
       referenceImage,
       motionStyle || null,
       request.signal,
-      record.durationSec === CLIP_DURATION_SEC ? CLIP_DURATION_SEC : VIDEO_DURATION_SEC,
+      record.durationSec === 10 ? 10 : CLIP_DURATION_SEC,
+      mockMode,
+      aspect,
+      videoModel,
+      resolution,
     ),
     hold,
   );

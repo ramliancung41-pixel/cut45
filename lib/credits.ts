@@ -1,15 +1,17 @@
 import type { VisualEngineId } from "@/lib/visual-engines";
+import { videoClipCreditCost, type VideoModelId, type VideoResolution } from "@/lib/video-models";
 
 export const INITIAL_CREDITS = 0;
 export const FREE_TIER_CREDITS = 60;
 export const CHECKOUT_CONNECTING_MS = 2000;
 export const STOCK_GENERATION_COST = 0;
-export const BUDGET_GENERATION_COST = 45;
+export const CREDITS_PER_SECOND = 2;
+export const BUDGET_GENERATION_COST = 10;
 export const ULTRA_GENERATION_COST = 180;
-export const BUDGET_IMAGE_GENERATION_COST = 45;
+export const BUDGET_IMAGE_GENERATION_COST = 10;
 export const ULTRA_IMAGE_GENERATION_COST = 200;
 export const IMAGE_GENERATION_COST = 10;
-export const EXTEND_VIDEO_COST = 45;
+export const EXTEND_VIDEO_COST = 90;
 
 const GENERATION_COST: Record<VisualEngineId, number> = {
   stock: STOCK_GENERATION_COST,
@@ -25,11 +27,8 @@ export function paymentApprovedMessage(credits: number) {
 }
 
 export function durationCreditCost(durationSec: number) {
-  if (durationSec === 5) return BUDGET_GENERATION_COST;
-  if (durationSec === 15) return 135;
-  if (durationSec === 30) return 270;
-  if (durationSec === 60) return 540;
-  return null;
+  if (!Number.isFinite(durationSec) || durationSec <= 0) return null;
+  return Math.round(durationSec * CREDITS_PER_SECOND);
 }
 
 export function generationHoldCost(input: {
@@ -39,14 +38,26 @@ export function generationHoldCost(input: {
   engine: VisualEngineId;
   imageToVideo: boolean;
   durationSec?: number | null;
+  videoModel?: VideoModelId | null;
+  resolution?: VideoResolution | null;
 }) {
+  const clipSeconds = input.durationSec && input.durationSec >= 10 ? 10 : 5;
+  const singleSeconds =
+    !input.extend && !input.scene && input.engine === "budget" && input.durationSec && input.durationSec > 5 && input.durationSec <= 10
+      ? input.durationSec
+      : null;
+  const modelCost =
+    !input.extend && !input.scene
+      ? videoClipCreditCost(input.videoModel, input.resolution, clipSeconds)
+      : null;
   const clipCost = input.extend
-    ? EXTEND_VIDEO_COST
+    ? durationCreditCost(45) ?? EXTEND_VIDEO_COST
     : input.scene
-      ? input.continuation
-        ? EXTEND_VIDEO_COST
-        : generationCreditCost("budget", input.imageToVideo)
-      : generationCreditCost(input.engine, input.imageToVideo);
+      ? durationCreditCost(5) ?? BUDGET_GENERATION_COST
+      : modelCost ??
+        (singleSeconds
+        ? durationCreditCost(singleSeconds) ?? generationCreditCost(input.engine, input.imageToVideo)
+        : generationCreditCost(input.engine, input.imageToVideo));
   const scheduled =
     input.scene && !input.continuation && input.durationSec
       ? durationCreditCost(input.durationSec)

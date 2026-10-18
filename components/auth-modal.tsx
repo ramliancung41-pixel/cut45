@@ -37,7 +37,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
         role="dialog"
         aria-modal="true"
         aria-labelledby="auth-modal-title"
-        className="relative max-h-[92dvh] w-full max-w-[440px] overflow-y-auto rounded-3xl border border-gray-800 bg-[#0a0a0a]/95 px-5 py-8 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur sm:px-8 sm:py-10"
+        className="relative max-h-[92dvh] w-full max-w-[440px] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-900/80 px-5 py-8 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur sm:px-8 sm:py-10"
       >
         <button
           type="button"
@@ -52,11 +52,11 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
           <h2 id="auth-modal-title" className="mt-5 text-[1.75rem] font-medium tracking-tight text-white">
             Create with Cut45
           </h2>
-          <p className="mt-2 text-sm text-white/55">Sign up or sign in to start a video.</p>
+          <p className="mt-2 text-sm text-zinc-400">Sign in to continue, or create an account.</p>
         </div>
         <div className="mt-8">
           {supabase ? (
-            <Suspense fallback={<p className="text-center text-sm text-white/50">Loading…</p>}>
+            <Suspense fallback={<p className="text-center text-sm text-zinc-400">Loading…</p>}>
               <LoginForm supabase={supabase} />
             </Suspense>
           ) : (

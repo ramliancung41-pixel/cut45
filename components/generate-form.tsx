@@ -2,20 +2,22 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  FRAME_COUNT,
   GENERATE_STEPS,
-  VIDEO_DURATION_SEC,
-  buildStoryboard,
   chainVideoUrls,
-  countWords,
   isGenerateEvent,
-  previewScript,
   stitchExtension,
   type GenerateEvent,
   type GenerateResult,
   type GenerateStepId,
 } from "@/lib/generate";
-import { VOICES, getVoice, isVoiceId, type VoiceId } from "@/lib/voices";
+import { useRouter, useSearchParams } from "next/navigation";
+import { stashAgentHandoff, type AgentRunExtras } from "@/lib/agent-handoff";
+import { newAgentSessionId } from "@/lib/agent-sessions";
+import type { AgentSuggestion } from "@/lib/agent-suggestion";
+import { threadTitleFromPrompt } from "@/lib/copilot-history";
+import { FRAME_ASPECTS, frameCue, type AspectRatio } from "@/lib/frame";
+import { NARRATION_LANGUAGES, isNarrationLanguageId, type NarrationLanguageId } from "@/lib/narration";
+import { VOICES, getVoice, isVoiceId, voicesForGender, type VoiceGender, type VoiceId } from "@/lib/voices";
 import {
   VISUAL_ENGINES,
   type VisualEngineId,
@@ -23,14 +25,30 @@ import {
 import { useCredits } from "@/components/credit-provider";
 import { Storyboard } from "@/components/storyboard";
 import { useDefaultVoice } from "@/components/use-default-voice";
-import { EXTEND_VIDEO_COST, IMAGE_GENERATION_COST, generationCreditCost } from "@/lib/credits";
-import { IMAGE_STYLES, imageStyleName, isImageStyleId, type ImageStyleId } from "@/lib/image-styles";
+import { EXTEND_VIDEO_COST, IMAGE_GENERATION_COST } from "@/lib/credits";
+import { DEFAULT_IMAGE_ASPECT, imageAspectFrameClass, type ImageAspectId } from "@/lib/image-aspects";
+import { DEFAULT_IMAGE_MODEL, getImageModel, imageModelCreditCost, type ImageModelId } from "@/lib/image-models";
+import { imageStyleName, type ImageStyleId } from "@/lib/image-styles";
+import { ImageAspectMenu } from "@/components/image-aspect-menu";
+import { ImageModelMenu } from "@/components/image-model-menu";
+import { StyleMenu } from "@/components/style-menu";
+import { VideoDurationMenu, VideoModelMenu, VideoResolutionMenu } from "@/components/video-bar-menus";
+import {
+  DEFAULT_VIDEO_MODEL,
+  DEFAULT_VIDEO_RESOLUTION,
+  getVideoModel,
+  insufficientVideoCreditsMessage,
+  videoClipCreditCost,
+  videoModelEngine,
+  videoResolutionLabel,
+  type VideoModelId,
+  type VideoResolution,
+} from "@/lib/video-models";
 import { MOTION_STYLES, PROMPT_MAX, type MotionStyleId } from "@/lib/motion-styles";
 import { prepareReferenceImage } from "@/lib/prepare-reference-image";
 import { CopilotPanel } from "@/components/copilot-panel";
 import {
   CLIP_DURATION_SEC,
-  VIDEO_DURATIONS,
   movieCreditCost,
   sceneCountForDuration,
   type MovieScene,
@@ -57,11 +75,10 @@ const INITIAL_STEPS: StepView[] = GENERATE_STEPS.map((step) => ({
 }));
 
 const VOICE_NOTE: Record<VoiceId, string> = {
-  "warm-narrator": "Steady, close narration",
-  "energetic-host": "Bright pace for quick claims",
-  "calm-documentary": "Low, dry documentary tone",
-  "deep-cinematic": "Wide, low cinematic read",
-  "friendly-explainer": "Conversational walkthrough",
+  adam: "Male character voice",
+  marcus: "Male character voice",
+  rachel: "Female character voice",
+  bella: "Female character voice",
 };
 
 const ENGINE_NOTE: Record<VisualEngineId, string> = {
@@ -79,34 +96,6 @@ function isRecoverableFailure(message: string) {
   );
 }
 
-function wait(ms: number, signal: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
-    if (signal.aborted) {
-      reject(new DOMException("The operation was aborted.", "AbortError"));
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(new DOMException("The operation was aborted.", "AbortError"));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-function ImageIcon() {
-  return (
-    <svg viewBox="0 0 16 16" className="h-4 w-4 shrink-0 text-cyan-200" fill="none" aria-hidden>
-      <rect x="2" y="3" width="12" height="10" rx="1.6" stroke="currentColor" strokeWidth="1.3" />
-      <circle cx="6" cy="6.5" r="1" fill="currentColor" />
-      <path d="M3.5 11.5 6.2 8.8l1.8 1.7 2-2.2L12.5 11" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
 function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10_240 ? 1 : 0)} KB`;
@@ -117,7 +106,7 @@ function engineOffer(id: VisualEngineId, imageToVideo: boolean) {
   if (imageToVideo && id === "budget") {
     return {
       name: "Studio Fast Motion",
-      rate: "45 credits",
+      rate: "20 credits / 10s",
       note: "High quality render",
     };
   }
@@ -140,11 +129,126 @@ function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
 
-type StudioPicker = "voice" | "motion" | "model";
+type StudioPicker =
+  | "voice"
+  | "motion"
+  | "model"
+  | "aspect"
+  | "duration"
+  | "resolution"
+  | "style"
+  | "imageModel"
+  | "imageAspect";
 
-function voicePillLabel(id: VoiceId) {
-  const word = getVoice(id)?.name.split(" ")[0];
-  return `Voice Style: ${word || "Voice"}`;
+const PICKER_TITLE: Record<StudioPicker, string> = {
+  voice: "Voice selection",
+  motion: "Motion style",
+  model: "Video model",
+  aspect: "Aspect ratio",
+  duration: "Duration",
+  resolution: "Resolution",
+  style: "Style preset",
+  imageModel: "Image model",
+  imageAspect: "Aspect ratio",
+};
+
+const FLOATING_PICKERS: StudioPicker[] = [
+  "style",
+  "imageModel",
+  "imageAspect",
+  "model",
+  "duration",
+  "resolution",
+];
+
+type FeaturedToolId = "video" | "image" | "filters";
+
+const FEATURED_TOOLS: Array<{ id: FeaturedToolId; title: string; image: string; badge?: string; sample?: string }> = [
+  { id: "video", title: "Generate Video", badge: "Featured", image: "/home/tool-video.jpg" },
+  { id: "image", title: "Generate Image", image: "/home/tool-image.jpg", sample: "A neon city street at night" },
+  { id: "filters", title: "AI Filters", badge: "New", image: "/home/tool-filters.jpg" },
+];
+
+type ModelCard = {
+  id: string;
+  title: string;
+  note: string;
+  image: string;
+  badge?: string;
+  mode: "video" | "image";
+  style?: ImageStyleId;
+  motion?: MotionStyleId;
+};
+
+const MODEL_CARDS: ModelCard[] = [
+  {
+    id: "motion",
+    title: "Studio Fast Motion",
+    note: "Smooth 1080p clips from a single prompt.",
+    image: "/home/model-1.jpg",
+    badge: "Featured",
+    mode: "video",
+  },
+  {
+    id: "dialogue",
+    title: "Character Dialogue",
+    note: "Two voices with lip-synced scenes.",
+    image: "/home/model-2.jpg",
+    badge: "Trending",
+    mode: "video",
+  },
+  {
+    id: "portrait",
+    title: "Cinematic Portrait",
+    note: "Soft light and shallow depth for stills.",
+    image: "/home/model-3.jpg",
+    mode: "image",
+    style: "portrait",
+  },
+  {
+    id: "cyberpunk",
+    title: "Cyberpunk",
+    note: "Neon colour and rain-soaked streets.",
+    image: "/home/model-4.jpg",
+    mode: "image",
+    style: "cyberpunk",
+  },
+  {
+    id: "slowmo",
+    title: "Cinematic Slow-Mo",
+    note: "Dramatic slow motion with film grain.",
+    image: "/home/model-5.jpg",
+    mode: "video",
+    motion: "slowmo",
+  },
+];
+
+type SpeechLike = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start: () => void;
+  stop: () => void;
+  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+};
+
+function Glyph({ className, children }: { className?: string; children: React.ReactNode }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className={className ?? "h-4 w-4 shrink-0"}
+    >
+      {children}
+    </svg>
+  );
 }
 
 function motionPillLabel(id: MotionStyleId | "") {
@@ -154,23 +258,22 @@ function motionPillLabel(id: MotionStyleId | "") {
   return `Motion: ${name.split(" ")[0]}`;
 }
 
-function modelPillLabel(id: VisualEngineId) {
-  if (id === "stock") return "Engine: Stock";
-  if (id === "budget") return "Engine: Fast";
-  return "Engine: Ultra";
-}
-
 export function GenerateForm() {
   const { voice: storedVoice } = useDefaultVoice();
   const { credits, balanceReady, deductImageCredits, archiveProject, setAccountBalance } = useCredits();
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [mode, setMode] = useState<"video" | "image">("video");
   const [imageStyle, setImageStyle] = useState<ImageStyleId | "">("");
+  const [imageModel, setImageModel] = useState<ImageModelId>(DEFAULT_IMAGE_MODEL);
+  const [imageAspect, setImageAspect] = useState<ImageAspectId>(DEFAULT_IMAGE_ASPECT);
   const [imageResult, setImageResult] = useState<{ id: string; imageUrl: string; prompt: string } | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [topic, setTopic] = useState("");
   const [voiceOverride, setVoiceOverride] = useState<VoiceId | null>(null);
-  const [engine, setEngine] = useState<VisualEngineId>("stock");
+  const [narrationLanguage, setNarrationLanguage] = useState<NarrationLanguageId>("auto");
+  const [engine, setEngine] = useState<VisualEngineId>("budget");
+  const [videoModel, setVideoModel] = useState<VideoModelId>(DEFAULT_VIDEO_MODEL);
+  const [videoResolution, setVideoResolution] = useState<VideoResolution>(DEFAULT_VIDEO_RESOLUTION);
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
   const [referencePreview, setReferencePreview] = useState<string | null>(null);
   const [referenceName, setReferenceName] = useState<string | null>(null);
@@ -184,6 +287,7 @@ export function GenerateForm() {
   const [notice, setNotice] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState("Waiting for a topic.");
   const [running, setRunning] = useState(false);
+  const [mockMode, setMockMode] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const imageRunRef = useRef(false);
   const extendRunRef = useRef(false);
@@ -191,6 +295,7 @@ export function GenerateForm() {
   const filmRef = useRef<GenerateResult | null>(null);
   const [scenes, setScenes] = useState<MovieScene[]>([]);
   const [durationSec, setDurationSec] = useState<VideoDurationSec>(5);
+  const [aspect, setAspect] = useState<AspectRatio>("9:16");
   const [copilotOpen, setCopilotOpen] = useState(false);
   const [picker, setPicker] = useState<StudioPicker | null>(null);
   const [planning, setPlanning] = useState(false);
@@ -198,9 +303,37 @@ export function GenerateForm() {
   const previewRef = useRef<string | null>(null);
   const acceptIdRef = useRef(0);
   const referenceInputRef = useRef<HTMLInputElement>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const modelsRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<SpeechLike | null>(null);
+  const [listening, setListening] = useState(false);
+  const params = useSearchParams();
+  const query = params.toString();
+  const [seenQuery, setSeenQuery] = useState<string | null>(null);
   const outcomeRef = useRef<"idle" | "complete" | "error">("idle");
+  const pendingRenderRef = useRef<{ statusUrl: string; responseUrl: string; result: GenerateResult } | null>(null);
+  const finishedRef = useRef<GenerateResult | null>(null);
   const fallbackRef = useRef(false);
   const voice = voiceOverride ?? storedVoice;
+  const router = useRouter();
+
+  function handOffToAgent(suggestion: AgentSuggestion, extras: AgentRunExtras) {
+    const sessionId = newAgentSessionId();
+    const stamp = Date.now().toString(36);
+    stashAgentHandoff({
+      sessionId,
+      userMessageId: `msg_${stamp}u`,
+      assistantMessageId: `msg_${stamp}a`,
+      suggestion,
+      extras,
+    });
+    router.push(`/agent?chat=${sessionId}`);
+  }
+
+  function promptTitle(prompt: string, fallback: string) {
+    const title = threadTitleFromPrompt(prompt);
+    return title === "New chat" ? fallback : title;
+  }
 
   function requireCredits(cost: number, message: string) {
     if (!balanceReady) return false;
@@ -233,13 +366,98 @@ export function GenerateForm() {
     }
   }
 
-  function resetRun() {
-    outcomeRef.current = "idle";
-    fallbackRef.current = false;
-    setSteps(INITIAL_STEPS.map((step) => ({ ...step })));
-    setResult(null);
-    setError(null);
-    setNotice(null);
+  function selectGender(gender: VoiceGender) {
+    if (getVoice(voice)?.gender === gender) return;
+    const next = voicesForGender(gender)[0];
+    if (next) setVoiceOverride(next.id);
+  }
+
+  async function attachNarration(current: GenerateResult, signal: AbortSignal) {
+    if (current.preview || current.script.trim().length < 8) return current;
+    const direct = current.videoUrl?.startsWith("https://") ? current.videoUrl : null;
+    const sources = [
+      ...new Set(current.frames.map((frame) => frame.src).filter((src) => src.startsWith("https://"))),
+    ];
+    const videoUrl = direct ?? (sources.length === 1 ? sources[0] : null);
+    setStatusMessage("Recording character dialogue and lip-syncing.");
+    try {
+      const response = await fetch("/api/video/narrate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          script: current.script,
+          voice,
+          language: narrationLanguage,
+          ...(videoUrl ? { videoUrl } : {}),
+          ...(current.mock ? { mock: true } : {}),
+          aspect,
+        }),
+        signal,
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        videoUrl?: string;
+        audioSrc?: string;
+        audioLabel?: string;
+        embedded?: boolean;
+        notice?: string;
+        error?: string;
+      } | null;
+      if (!response.ok || !payload) {
+        setNotice(payload?.error ?? "Character dialogue could not be recorded.");
+        return current;
+      }
+      if (payload.notice) setNotice(payload.notice);
+      const nextUrl = payload.embedded && payload.videoUrl?.startsWith("https://") ? payload.videoUrl : null;
+      const voiceStyle = getVoice(voice);
+      return {
+        ...current,
+        voiceId: voice,
+        voiceName: voiceStyle?.name ?? current.voiceName,
+        audioSrc: payload.audioSrc ?? current.audioSrc,
+        audioLabel: payload.audioLabel ?? current.audioLabel,
+        narrationEmbedded: Boolean(nextUrl),
+        videoUrl: nextUrl ?? current.videoUrl,
+        frames: nextUrl
+          ? current.frames.map((frame) => (frame.src === videoUrl ? { ...frame, src: nextUrl } : frame))
+          : current.frames,
+      };
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      setNotice("Character dialogue could not be recorded.");
+      return current;
+    }
+  }
+
+  function publishNarration(spoken: GenerateResult, creditsCharged: number, engineLabel: string) {
+    const videoSrc = spoken.videoUrl || spoken.frames.find((frame) => frame.src.startsWith("https://"))?.src;
+    archiveProject({
+      id: spoken.id,
+      prompt: spoken.topic,
+      durationSec: spoken.durationSec,
+      engine: spoken.engine,
+      engineLabel,
+      voiceName: spoken.voiceName,
+      voiceId: spoken.voiceId,
+      script: spoken.script,
+      audioSrc: spoken.audioSrc,
+      videoSrc,
+      creditsCharged,
+      createdAt: new Date().toISOString(),
+    });
+    if (!videoSrc) return;
+    void fetch("/api/gallery", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: spoken.id,
+        prompt: spoken.topic,
+        script: spoken.script,
+        engine: spoken.engine,
+        voiceName: spoken.voiceName,
+        videoUrl: videoSrc,
+        credits: creditsCharged,
+      }),
+    }).catch(() => undefined);
   }
 
   function applyEvent(event: GenerateEvent) {
@@ -265,6 +483,18 @@ export function GenerateForm() {
     if (event.type === "notice") {
       setNotice((current) => (current ? `${current} ${event.message}` : event.message));
       setStatusMessage(event.message);
+      return;
+    }
+
+    if (event.type === "rendering") {
+      pendingRenderRef.current = {
+        statusUrl: event.statusUrl,
+        responseUrl: event.responseUrl,
+        result: event.result,
+      };
+      setError(null);
+      setStatusMessage("Fal.ai is still rendering this clip.");
+      console.info("Fal.ai queue is still rendering this clip.");
       return;
     }
 
@@ -308,6 +538,7 @@ export function GenerateForm() {
             }),
           }).catch(() => undefined);
         }
+        finishedRef.current = stitched;
         setResult(stitched);
         setStatusMessage(`Extended to ${stitched.durationSec}s. ${EXTEND_VIDEO_COST} credits used.`);
         return;
@@ -348,6 +579,7 @@ export function GenerateForm() {
           }),
         }).catch(() => undefined);
       }
+      finishedRef.current = event.result;
       setResult(event.result);
       setStatusMessage(
         event.result.preview
@@ -367,55 +599,9 @@ export function GenerateForm() {
     }
 
     outcomeRef.current = "error";
+    console.error("Video generation failed", event.message);
     setError(event.message);
     setStatusMessage(event.message);
-  }
-
-  async function runBrowserPreview(topicText: string, signal: AbortSignal) {
-    const script = previewScript(topicText);
-    const frames = buildStoryboard(script);
-    const voiceStyle = getVoice(voice);
-    setError(null);
-    setNotice(FALLBACK_NOTICE);
-    setStatusMessage(FALLBACK_NOTICE);
-
-    for (const step of GENERATE_STEPS) {
-      setSteps((current) =>
-        current.map((item) =>
-          item.id === step.id ? { ...item, status: "started", message: "Working…" } : item,
-        ),
-      );
-      await wait(380, signal);
-      setSteps((current) =>
-        current.map((item) =>
-          item.id === step.id
-            ? {
-                ...item,
-                status: "completed",
-                message: "Ready",
-                detail: step.id === "frames" ? `${FRAME_COUNT} stock preview frames` : item.detail,
-              }
-            : item,
-        ),
-      );
-    }
-
-    outcomeRef.current = "complete";
-    setResult({
-      id: `c45_${Date.now().toString(36)}`,
-      topic: topicText,
-      voiceId: voice,
-      voiceName: voiceStyle?.name ?? "Voice",
-      durationSec: VIDEO_DURATION_SEC,
-      script,
-      wordCount: countWords(script),
-      audioLabel: `${voiceStyle?.name ?? "Voice"} · browser preview`,
-      frames,
-      engine,
-      creditsCharged: 0,
-      preview: true,
-    });
-    setStatusMessage("Browser preview ready.");
   }
 
   function consumeChunk(chunk: string) {
@@ -461,27 +647,101 @@ export function GenerateForm() {
         break;
       }
     }
+    if (pendingRenderRef.current && !signal.aborted) {
+      await finishPendingRender(signal);
+    }
+  }
+
+  async function finishPendingRender(signal: AbortSignal) {
+    const pending = pendingRenderRef.current;
+    if (!pending) return;
+    pendingRenderRef.current = null;
+    setError(null);
+    setStatusMessage("Fal.ai is still rendering this clip.");
+    const started = Date.now();
+    while (Date.now() - started < 8 * 60 * 1000) {
+      if (signal.aborted) return;
+      let response: Response;
+      try {
+        response = await fetch("/api/video/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ statusUrl: pending.statusUrl, responseUrl: pending.responseUrl }),
+          signal,
+        });
+      } catch (error) {
+        if (signal.aborted) return;
+        console.error("Fal video status failed", error instanceof Error ? error.message : error);
+        continue;
+      }
+      const payload = (await response.json().catch(() => null)) as {
+        videoUrl?: string;
+        pending?: boolean;
+        error?: string;
+      } | null;
+      if (typeof payload?.videoUrl === "string" && payload.videoUrl.startsWith("https://")) {
+        console.info("Fal.ai finished rendering this clip.");
+        applyEvent({
+          type: "complete",
+          result: {
+            ...pending.result,
+            videoUrl: payload.videoUrl,
+            frames: [
+              {
+                time: "0:00",
+                caption: pending.result.frames[0]?.caption || pending.result.script.slice(0, 80),
+                term: "",
+                src: payload.videoUrl,
+              },
+            ],
+          },
+        });
+        return;
+      }
+      if (payload?.pending || (response.status >= 500 && !payload?.error)) {
+        setStatusMessage("Fal.ai is still rendering this clip.");
+        console.info("Fal.ai queue is still rendering this clip.");
+        continue;
+      }
+      const message = payload?.error || "Fal.ai could not finish this clip.";
+      console.error("Fal video status failed", message);
+      applyEvent({ type: "error", message });
+      return;
+    }
+    console.error("Fal video status timed out while the queue was still rendering.");
+    applyEvent({ type: "error", message: "Fal.ai is still rendering this clip. Try again in a moment." });
   }
 
   async function submitImage() {
     const trimmed = topic.trim();
-    if (!referencePreview && !referenceImage) {
-      setError("Upload an input image.");
-      return;
-    }
-    if (!referenceImage) {
+    if (referencePreview && !referenceImage) {
       setError("The input image is still loading.");
       return;
     }
-    if (trimmed.length < 3 && !imageStyle) {
-      setError("Write a style prompt or pick a preset.");
+    if (trimmed.length < 1) {
+      setError("Write a style prompt.");
       return;
     }
     if (trimmed.length > PROMPT_MAX) {
       setError(`Keep the prompt under ${PROMPT_MAX} characters.`);
       return;
     }
-    if (!requireCredits(IMAGE_GENERATION_COST, "Image generation costs 10 credits.")) return;
+    const imageCost = imageModelCreditCost(imageModel);
+    if (!requireCredits(imageCost, `${getImageModel(imageModel).name} costs ${imageCost} credits.`)) return;
+    if (trimmed.length >= 3) {
+      handOffToAgent(
+        {
+          kind: "image",
+          title: promptTitle(trimmed, "Generate Image"),
+          prompt: trimmed,
+          model: imageModel,
+          aspect: imageAspect,
+          ...(imageStyle ? { style: imageStyle } : {}),
+        },
+        referenceImage ? { referenceImage } : {},
+      );
+      return;
+    }
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -490,7 +750,7 @@ export function GenerateForm() {
     setError(null);
     setDownloadError(null);
     setImageResult(null);
-    setStatusMessage("Rendering the image.");
+    setStatusMessage(referenceImage ? "Rendering from your image." : "Rendering from your prompt.");
 
     try {
       const response = await fetch("/api/image", {
@@ -499,8 +759,10 @@ export function GenerateForm() {
         signal: controller.signal,
         body: JSON.stringify({
           prompt: trimmed,
+          model: imageModel,
+          aspect: imageAspect,
           style: imageStyle || undefined,
-          referenceImage,
+          ...(referenceImage ? { referenceImage } : {}),
         }),
       });
       const payload = (await response.json().catch(() => null)) as {
@@ -515,20 +777,20 @@ export function GenerateForm() {
       const id = payload.id || `img_${Date.now().toString(36)}`;
       const prompt = payload.prompt || trimmed;
       const styleLabel = imageStyle ? imageStyleName(imageStyle) : "Avatar Studio";
-      deductImageCredits();
+      deductImageCredits(imageCost, imageModel);
       setImageResult({ id, imageUrl: payload.imageUrl, prompt });
       archiveProject({
         id,
         prompt,
         durationSec: 0,
         engine: "image",
-        engineLabel: "Image-to-Image / Avatar Studio",
+        engineLabel: getImageModel(imageModel).name,
         voiceName: styleLabel,
         voiceId: "",
         script: prompt,
         imageSrc: payload.imageUrl,
         kind: "image",
-        creditsCharged: IMAGE_GENERATION_COST,
+        creditsCharged: imageCost,
         createdAt: new Date().toISOString(),
       });
       void fetch("/api/gallery", {
@@ -540,10 +802,10 @@ export function GenerateForm() {
           prompt,
           imageUrl: payload.imageUrl,
           styleName: styleLabel,
-          credits: IMAGE_GENERATION_COST,
+          credits: imageCost,
         }),
       }).catch(() => undefined);
-      setStatusMessage("Image ready. 10 credits used.");
+      setStatusMessage(`Image ready. ${imageCost} credits used.`);
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") {
         setStatusMessage("Stopped.");
@@ -562,9 +824,9 @@ export function GenerateForm() {
     await saveGeneratedFile(imageUrl, "cut45-image.png");
   }
 
-  async function downloadVideo(videoUrl: string) {
+  async function downloadVideo(videoUrl: string, filename = "cut45-video.mp4") {
     setDownloadError(null);
-    await saveGeneratedFile(videoUrl, "cut45-video.mp4");
+    await saveGeneratedFile(videoUrl, filename);
   }
 
   function planKey(value: string, seconds: VideoDurationSec) {
@@ -606,20 +868,24 @@ export function GenerateForm() {
     }
   }
 
-  async function renderFilm(sceneList: MovieScene[] = scenes) {
-    if (running || imageMode || sceneList.length === 0) return;
+  async function renderFilm(
+    sceneList: MovieScene[] = scenes,
+    options?: { referenceDataUrl?: string | null; forceBudget?: boolean },
+  ) {
+    if (running || sceneList.length === 0) return;
     if (!isVoiceId(voice)) {
       setError("Select a voice style.");
       return;
     }
-    if (engine !== "budget") {
+    if (!options?.forceBudget && engine !== "budget") {
       setError("Switch to Studio Fast Motion to render the scene chain.");
       return;
     }
-    const firstHasImage = Boolean(referenceImage);
+    const attachedReference = options?.referenceDataUrl ?? referenceImage;
+    const firstHasImage = Boolean(attachedReference);
     const cost = movieCreditCost(sceneList.length, firstHasImage);
     if (!requireCredits(cost, `This short costs ${cost} credits.`)) return;
-    if (referencePreview && !referenceImage) {
+    if (!options?.referenceDataUrl && referencePreview && !referenceImage) {
       setError("The reference image is still preparing.");
       return;
     }
@@ -641,9 +907,10 @@ export function GenerateForm() {
       for (let index = 0; index < sceneList.length; index += 1) {
         const scene = sceneList[index];
         const priorVideoUrls = accumulated ? chainVideoUrls(accumulated.frames) : [];
-        setStatusMessage(`Scene ${index + 1} of ${sceneList.length}.`);
+        setStatusMessage(`Rendering scene ${index + 1} of ${sceneList.length}.`);
         outcomeRef.current = "idle";
         filmRef.current = null;
+        const movieTopic = topic.trim().length >= 3 ? topic.trim() : sceneList.map((item) => item.title).join(". ");
         const response = await fetch("/api/generate", {
           method: "POST",
           headers: {
@@ -652,30 +919,63 @@ export function GenerateForm() {
           },
           body: JSON.stringify({
             scene: true,
-            topic: topic.trim(),
+            topic: movieTopic,
             voice,
             engine: "budget",
             narration: scene.narration,
-            visualPrompt: `${scene.visualPrompt} ${scene.referenceNote}`.trim(),
-            ...(index === 0 && referenceImage ? { referenceImage } : {}),
+            visualPrompt: [scene.visualPrompt, scene.motionPrompt, scene.referenceNote, "Keep the same character, face, costume, and colors in every scene."]
+              .filter(Boolean)
+              .join(" ")
+              .trim(),
+            ...(index === 0 && attachedReference ? { referenceImage: attachedReference } : {}),
             ...(priorVideoUrls.length > 0 ? { priorVideoUrls } : {}),
             ...(motionStyle ? { motionStyle } : {}),
+            ...(mockMode ? { mockMode: true } : {}),
             durationSec,
+            aspect,
           }),
           signal: controller.signal,
         });
         await readGenerateResponse(response);
         await readProgress(response, controller.signal);
-        const piece = (filmRef as { current: GenerateResult | null }).current;
+        let piece = (filmRef as { current: GenerateResult | null }).current;
         const sceneStatus = outcomeRef.current as "idle" | "complete" | "error";
         if (!piece || sceneStatus !== "complete") {
           throw new Error(`Scene ${index + 1} stopped before a clip was ready.`);
         }
+        setStatusMessage(`Recording dialogue for scene ${index + 1}.`);
+        piece = await attachNarration(piece, controller.signal);
+        filmRef.current = piece;
         accumulated = accumulated ? stitchExtension(accumulated, piece) : piece;
         setResult(accumulated);
         await syncBalance();
       }
       if (accumulated) {
+        const clipUrls = chainVideoUrls(accumulated.frames);
+        if (!mockMode && !accumulated.videoUrl && clipUrls.length >= 2) {
+          setStatusMessage("Stitching the final movie.");
+          const mergeResponse = await fetch("/api/video/merge", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ videoUrls: clipUrls, aspect }),
+            signal: controller.signal,
+          });
+          const merged = (await mergeResponse.json().catch(() => null)) as { videoUrl?: string; error?: string } | null;
+          if (mergeResponse.ok && merged?.videoUrl) {
+            accumulated = {
+              ...accumulated,
+              videoUrl: merged.videoUrl,
+              narrationEmbedded: true,
+              audioSrc: undefined,
+            };
+            setResult(accumulated);
+          } else {
+            setError(merged?.error ?? "The clips rendered, but the final movie could not be joined.");
+          }
+        } else if (accumulated.videoUrl && !accumulated.narrationEmbedded) {
+          accumulated = await attachNarration(accumulated, controller.signal);
+        }
+        setResult(accumulated);
         const urls = chainVideoUrls(accumulated.frames);
         const videoSrc = accumulated.videoUrl || urls[urls.length - 1];
         archiveProject({
@@ -687,6 +987,7 @@ export function GenerateForm() {
           voiceName: accumulated.voiceName,
           voiceId: accumulated.voiceId,
           script: accumulated.script,
+          audioSrc: accumulated.audioSrc,
           videoSrc,
           creditsCharged: movieCreditCost(sceneList.length, firstHasImage),
           createdAt: new Date().toISOString(),
@@ -706,7 +1007,13 @@ export function GenerateForm() {
             }),
           }).catch(() => undefined);
         }
-        setStatusMessage(`Short ready. ${accumulated.durationSec}s.`);
+        setStatusMessage(
+          accumulated.narrationEmbedded
+              ? `Final movie ready with character dialogue. ${accumulated.durationSec}s.`
+              : accumulated.videoUrl
+                ? `Final movie ready. ${accumulated.durationSec}s.`
+                : `Short ready. ${accumulated.durationSec}s.`,
+        );
       }
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") {
@@ -731,7 +1038,7 @@ export function GenerateForm() {
       setError("Extend a finished Studio Fast Motion video.");
       return;
     }
-    if (!requireCredits(EXTEND_VIDEO_COST, "Extend Video costs 45 credits.")) return;
+    if (!requireCredits(EXTEND_VIDEO_COST, "Extend Video costs 90 credits.")) return;
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -760,12 +1067,25 @@ export function GenerateForm() {
           priorScript: result.script,
           priorVideoUrls: urls,
           ...(motionStyle ? { motionStyle } : {}),
+          ...(mockMode ? { mockMode: true } : {}),
+          aspect,
         }),
         signal: controller.signal,
       });
       await readGenerateResponse(response);
       await readProgress(response, controller.signal);
-      if (outcomeRef.current === "idle") {
+      const extendStatus = outcomeRef.current as "idle" | "complete" | "error";
+      if (extendStatus === "complete" && finishedRef.current) {
+        const spoken = await attachNarration(finishedRef.current, controller.signal);
+        finishedRef.current = spoken;
+        setResult(spoken);
+        publishNarration(spoken, EXTEND_VIDEO_COST, "Extend Video");
+        setStatusMessage(
+          spoken.narrationEmbedded
+            ? `Extended to ${spoken.durationSec}s with character dialogue. ${EXTEND_VIDEO_COST} credits used.`
+            : `Extended to ${spoken.durationSec}s. ${EXTEND_VIDEO_COST} credits used.`,
+        );
+      } else if (extendStatus === "idle") {
         setError("The extension stopped before a video was ready.");
       }
     } catch (caught) {
@@ -791,7 +1111,7 @@ export function GenerateForm() {
       return;
     }
     if (engine !== "budget") {
-      setError("Videos longer than 5 seconds use Studio Fast Motion. Each 5-second clip costs 45 credits.");
+      setError("Videos longer than 10 seconds use Studio Fast Motion. Each 5-second scene costs 10 credits.");
       return;
     }
     if (referencePreview && !referenceImage) {
@@ -830,7 +1150,7 @@ export function GenerateForm() {
       return;
     }
 
-    if (durationSec > CLIP_DURATION_SEC) {
+    if (durationSec > 10) {
       await generateLongVideo(trimmed);
       return;
     }
@@ -842,94 +1162,26 @@ export function GenerateForm() {
 
     const imageToVideo = Boolean(referenceImage) && engine !== "stock";
     imageRunRef.current = imageToVideo;
-    const cost = generationCreditCost(engine, imageToVideo);
-    if (!requireCredits(cost, `${engineOffer(engine, imageToVideo).name} costs ${cost} credits.`)) return;
-
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    resetRun();
-    setRunning(true);
-    setStatusMessage("Starting generation.");
-
-    try {
-      const response = await fetch("/api/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
-        },
-        body: JSON.stringify({
-          topic: trimmed,
-          voice,
-          engine,
-          ...(referenceImage ? { referenceImage } : {}),
-          ...(motionStyle ? { motionStyle } : {}),
-          durationSec: CLIP_DURATION_SEC,
-        }),
-        signal: controller.signal,
-      });
-
-      if (response.status === 402) {
-        setUpgradeOpen(true);
-        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(payload?.error ?? "Insufficient credits");
-      }
-
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as {
-          error?: string;
-        } | null;
-        const message = payload?.error ?? "Could not start generation.";
-        if (response.status === 429 || response.status >= 500 || isRecoverableFailure(message)) {
-          await runBrowserPreview(trimmed, controller.signal);
-          return;
-        }
-        throw new Error(message);
-      }
-
-      const contentType = response.headers.get("content-type") ?? "";
-      if (!contentType.includes("text/event-stream")) {
-        throw new Error("The generator returned an unexpected response.");
-      }
-
-      await readProgress(response, controller.signal);
-
-      if (controller.signal.aborted) {
-        setNotice("Generation stopped.");
-        setStatusMessage("Generation stopped.");
-      } else if (fallbackRef.current || outcomeRef.current === "idle") {
-        await runBrowserPreview(trimmed, controller.signal);
-      }
-    } catch (caught) {
-      if (controller.signal.aborted || (caught instanceof Error && caught.name === "AbortError")) {
-        setNotice("Generation stopped.");
-        setStatusMessage("Generation stopped.");
-      } else {
-        const message =
-          caught instanceof Error ? caught.message : "Could not generate the video.";
-        if (isRecoverableFailure(message) || caught instanceof TypeError) {
-          try {
-            await runBrowserPreview(trimmed, controller.signal);
-          } catch {
-            if (!controller.signal.aborted) {
-              setNotice(FALLBACK_NOTICE);
-              setStatusMessage(FALLBACK_NOTICE);
-            }
-          }
-        } else {
-          setError(message);
-          setStatusMessage(message);
-        }
-      }
-    } finally {
-      if (abortRef.current === controller) {
-        abortRef.current = null;
-      }
-      setRunning(false);
-      void syncBalance();
-    }
+    const cost = videoClipCreditCost(videoModel, videoResolution, durationSec);
+    if (!requireCredits(cost, insufficientVideoCreditsMessage(videoResolution, durationSec))) return;
+    handOffToAgent(
+      {
+        kind: "video",
+        title: promptTitle(trimmed, "Generate Video"),
+        prompt: trimmed,
+        model: videoModel,
+        aspect,
+        durationSec: durationSec >= 10 ? 10 : 5,
+        resolution: videoResolution,
+      },
+      {
+        ...(referenceImage ? { referenceImage } : {}),
+        voice,
+        ...(motionStyle ? { motionStyle } : {}),
+        language: narrationLanguage,
+        ...(mockMode ? { mockMode: true } : {}),
+      },
+    );
   }
 
   function stop() {
@@ -961,7 +1213,7 @@ export function GenerateForm() {
     setReferenceName(file.name);
     setReferenceBytes(file.size);
     setReferenceImage(null);
-    setEngine("budget");
+    setEngine(videoModelEngine(videoModel));
     const acceptId = ++acceptIdRef.current;
     setError(null);
     try {
@@ -974,6 +1226,78 @@ export function GenerateForm() {
       setError(message);
       clearReference();
     }
+  }
+
+  async function renderCharacterSheet(prompt: string) {
+    if (!requireCredits(IMAGE_GENERATION_COST, "A character sheet costs 10 credits.")) {
+      throw new Error("A character sheet costs 10 credits.");
+    }
+    const response = await fetch("/api/image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    });
+    const payload = (await response.json().catch(() => null)) as {
+      id?: string;
+      imageUrl?: string;
+      prompt?: string;
+      error?: string;
+    } | null;
+    if (!response.ok || typeof payload?.imageUrl !== "string") {
+      throw new Error(payload?.error ?? "Could not render the character sheet.");
+    }
+    deductImageCredits(IMAGE_GENERATION_COST, DEFAULT_IMAGE_MODEL);
+    const id = payload.id || `img_${Date.now().toString(36)}`;
+    const sheetPrompt = payload.prompt || prompt;
+    archiveProject({
+      id,
+      prompt: sheetPrompt,
+      durationSec: 0,
+      engine: "image",
+      engineLabel: "Character reference sheet",
+      voiceName: "Co-Pilot",
+      voiceId: "",
+      script: sheetPrompt,
+      imageSrc: payload.imageUrl,
+      kind: "image",
+      creditsCharged: IMAGE_GENERATION_COST,
+      createdAt: new Date().toISOString(),
+    });
+    void fetch("/api/gallery", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: "image",
+        id,
+        prompt: sheetPrompt,
+        imageUrl: payload.imageUrl,
+        styleName: "Character reference sheet",
+        credits: IMAGE_GENERATION_COST,
+      }),
+    }).catch(() => undefined);
+    return payload.imageUrl;
+  }
+
+  async function attachCharacterSheet(imageUrl: string) {
+    const response = await fetch("/api/image/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageUrl }),
+    });
+    if (!response.ok) {
+      setError("Sign in to attach the character sheet to Video Generator.");
+      return null;
+    }
+    const blob = await response.blob();
+    const type = /^image\/(jpeg|png|webp)$/.test(blob.type) ? blob.type : "image/png";
+    const file = new File([blob], "character-sheet.png", { type });
+    replacePreview(URL.createObjectURL(file));
+    setReferenceName(file.name);
+    setReferenceBytes(file.size);
+    setEngine(videoModelEngine(videoModel));
+    const dataUrl = await prepareReferenceImage(file);
+    setReferenceImage(dataUrl);
+    return dataUrl;
   }
 
   function clearReference() {
@@ -1013,6 +1337,134 @@ export function GenerateForm() {
     }
   }
 
+  function closeStyleMenu() {
+    setPicker((current) => (current === "style" ? null : current));
+  }
+
+  function closeImageModelMenu() {
+    setPicker((current) => (current === "imageModel" ? null : current));
+  }
+
+  function closeImageAspectMenu() {
+    setPicker((current) => (current === "imageAspect" ? null : current));
+  }
+
+  function closeVideoModelMenu() {
+    setPicker((current) => (current === "model" ? null : current));
+  }
+
+  function closeVideoDurationMenu() {
+    setPicker((current) => (current === "duration" ? null : current));
+  }
+
+  function closeVideoResolutionMenu() {
+    setPicker((current) => (current === "resolution" ? null : current));
+  }
+
+  function selectVideoModel(next: VideoModelId) {
+    setVideoModel(next);
+    setEngine(videoModelEngine(next));
+    setPicker(null);
+    setError((current) => (current?.endsWith("credits.") ? null : current));
+  }
+
+  function switchMode(next: "video" | "image") {
+    setMode(next);
+    setPicker(null);
+    setError(null);
+  }
+
+  function focusPrompt() {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.setTimeout(() => promptRef.current?.focus(), 250);
+  }
+
+  function openTool(id: FeaturedToolId) {
+    if (id === "video") {
+      switchMode("video");
+    } else {
+      switchMode("image");
+      if (id === "image" && !topic.trim()) {
+        setTopic(FEATURED_TOOLS.find((tool) => tool.id === "image")?.sample ?? "");
+      }
+      if (id === "filters") setPicker("style");
+    }
+    focusPrompt();
+  }
+
+  function openModel(card: ModelCard) {
+    switchMode(card.mode);
+    if (card.style) setImageStyle(card.style);
+    if (card.mode === "video") {
+      setVideoModel(DEFAULT_VIDEO_MODEL);
+      setEngine("budget");
+      if (card.motion) setMotionStyle(card.motion);
+    }
+    focusPrompt();
+  }
+
+  function scrollModels(direction: number) {
+    const el = modelsRef.current;
+    el?.scrollBy({ left: direction * el.clientWidth * 0.8, behavior: "smooth" });
+  }
+
+  function toggleDictation() {
+    if (listening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+    const speechWindow = window as unknown as {
+      SpeechRecognition?: new () => SpeechLike;
+      webkitSpeechRecognition?: new () => SpeechLike;
+    };
+    const Recognition = speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
+    if (!Recognition) {
+      setError("Voice typing is not available in this browser.");
+      return;
+    }
+    const recognition = new Recognition();
+    recognition.lang = navigator.language || "en-US";
+    recognition.interimResults = false;
+    recognition.continuous = false;
+    recognition.onresult = (event) => {
+      const spoken = Array.from(event.results)
+        .map((result) => result[0]?.transcript ?? "")
+        .join(" ")
+        .trim();
+      if (!spoken) return;
+      setTopic((current) => `${current.trim()} ${spoken}`.trim().slice(0, PROMPT_MAX));
+      plannedTopicRef.current = "";
+    };
+    recognition.onend = () => {
+      setListening(false);
+      recognitionRef.current = null;
+    };
+    recognition.onerror = () => {
+      setListening(false);
+      recognitionRef.current = null;
+    };
+    recognitionRef.current = recognition;
+    setError(null);
+    setListening(true);
+    recognition.start();
+  }
+
+  useEffect(() => () => recognitionRef.current?.stop(), []);
+
+  if (seenQuery !== query) {
+    setSeenQuery(query);
+    const next = new URLSearchParams(query);
+    const requested = next.get("mode");
+    if (next.get("copilot") === "1") {
+      setMode("video");
+      setPicker(null);
+      setCopilotOpen(true);
+    } else {
+      if (requested === "video" || requested === "image") setMode(requested);
+      setPicker(next.get("tool") === "filters" ? "style" : null);
+    }
+  }
+
   useEffect(() => {
     if (!picker) return;
     function onKey(event: KeyboardEvent) {
@@ -1025,672 +1477,852 @@ export function GenerateForm() {
   const activeStep = steps.find((step) => step.status === "started");
   const imageMode = mode === "image";
   const previewSrc = referencePreview ?? referenceImage;
-  const imageReady = Boolean(previewSrc) && (topic.trim().length >= 3 || Boolean(imageStyle));
+  const imageReady = topic.trim().length >= 1;
+  const imageInputPending = imageMode && Boolean(previewSrc) && !referenceImage;
   const referenceAttached = !imageMode && Boolean(previewSrc);
   const referencePreparing = referenceAttached && !referenceImage;
-  const imageToVideo = referenceAttached && engine !== "stock";
   const clipCount = sceneCountForDuration(durationSec);
-  const longForm = !imageMode && durationSec > CLIP_DURATION_SEC;
+  const longForm = !imageMode && durationSec > 10;
   const longCost = movieCreditCost(clipCount, Boolean(referenceImage));
-  const runCost = generationCreditCost(engine, imageToVideo);
+  const runCost = videoClipCreditCost(videoModel, videoResolution, durationSec);
   const activeVideoCost = longForm ? longCost : runCost;
-  const engineChoices = (referenceAttached
-    ? VISUAL_ENGINES.filter((option) => option.id !== "stock")
-    : VISUAL_ENGINES
-  ).filter((option) => option.id !== "ultra");
-  const videoCostLabel = longForm
-    ? `${durationSec}s · ${clipCount} clips · ${longCost} credits`
-    : referenceAttached
-      ? `Reference image · ${runCost} credits`
-      : runCost === 0
-        ? "Free preview · 0 credits"
-        : `5s clip · ${runCost} credits`;
+  const videoCostLabel = `${durationSec}s clip • ${activeVideoCost} credits`;
+
+  const showVideoRun = !imageMode && (running || Boolean(result) || steps.some((step) => step.status !== "pending"));
+  const showImageRun = imageMode && (running || Boolean(imageResult));
+  const sendDisabled =
+    !balanceReady ||
+    running ||
+    referencePreparing ||
+    planning ||
+    imageInputPending ||
+    (imageMode ? !imageReady : topic.trim().length < 3);
+  const voiceGender = getVoice(voice)?.gender ?? "female";
+
+  function chip(id: StudioPicker, label: string, icon: React.ReactNode) {
+    return (
+      <button
+        key={id}
+        type="button"
+        disabled={running}
+        aria-expanded={picker === id}
+        aria-haspopup="dialog"
+        onClick={() => setPicker((current) => (current === id ? null : id))}
+        className="home-chip"
+      >
+        {icon}
+        <span className="truncate">{label}</span>
+        <Glyph className="h-3 w-3 text-muted">
+          <path d="m5 8 5 5 5-5" />
+        </Glyph>
+      </button>
+    );
+  }
 
   return (
-    <div className="grid items-start gap-6 max-md:pb-28 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+    <div className="pb-10">
       <UpgradeModal open={upgradeOpen} onClose={() => setUpgradeOpen(false)} />
-      <form onSubmit={onSubmit} className="gen-glass space-y-5 rounded-3xl p-4 max-md:pb-36 sm:space-y-7 sm:p-6">
-        <div role="tablist" aria-label="Generation mode" className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === "video"}
-            disabled={running}
-            onClick={() => {
-              setMode("video");
-              setError(null);
-            }}
-            className={cn("gen-pick text-left", mode === "video" && "gen-pick-on")}
-          >
-            <span className="min-w-0">
-              <span className="block text-[13px] font-medium tracking-tight sm:text-sm">Video Generator</span>
-              <span className="mt-1 block text-xs leading-5 text-muted sm:text-sm sm:leading-6">45-second faceless short</span>
-            </span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === "image"}
-            disabled={running}
-            onClick={() => {
-              setMode("image");
-              setPicker(null);
-              setError(null);
-            }}
-            className={cn("gen-pick text-left", mode === "image" && "gen-pick-on")}
-          >
-            <span className="min-w-0">
-              <span className="block text-[13px] font-medium tracking-tight sm:text-sm">Image-to-Image / Avatar Studio</span>
-              <span className="mt-1 block text-xs leading-5 text-muted sm:text-sm sm:leading-6">10 credits per still</span>
-            </span>
-          </button>
+      <h1 className="mx-auto max-w-lg text-center text-[1.9rem] leading-[1.12] font-bold tracking-[-0.035em] sm:text-[2.35rem]">
+        What would you like
+        <br />
+        to create today?
+      </h1>
+
+      <form onSubmit={onSubmit} className="mx-auto mt-6 w-full max-w-[640px]">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div role="tablist" aria-label="Generation mode" className="flex gap-0.5 rounded-lg border border-line bg-[var(--surface)] p-0.5">
+            {(["image", "video"] as const).map((id) => {
+              const selected = mode === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  aria-label={id === "video" ? "Video Generator" : "Image Generator"}
+                  title={id === "video" ? "Video" : "Image"}
+                  disabled={running}
+                  onClick={() => switchMode(id)}
+                  className={cn(
+                    "grid h-7 w-7 place-items-center rounded-md text-muted transition hover:text-foreground",
+                    selected && "bg-panel-raised text-foreground",
+                  )}
+                >
+                  {id === "video" ? (
+                    <Glyph>
+                      <rect x="2.5" y="5" width="11" height="10" rx="2" />
+                      <path d="m13.5 8.5 4-2.5v8l-4-2.5" />
+                    </Glyph>
+                  ) : (
+                    <Glyph>
+                      <rect x="3" y="3.5" width="14" height="13" rx="2" />
+                      <circle cx="7.5" cy="8" r="1.3" />
+                      <path d="m3.5 14.5 4-4 3 3 2-2 4 3.5" />
+                    </Glyph>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          <span className="flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-xs font-medium tabular-nums">
+            <Glyph className="h-3.5 w-3.5">
+              <circle cx="10" cy="10" r="7" />
+              <circle cx="10" cy="10" r="3" />
+            </Glyph>
+            {imageMode ? imageModelCreditCost(imageModel) : activeVideoCost} credits
+          </span>
         </div>
-        <div>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <label htmlFor="topic" className="text-sm font-medium tracking-tight">
+
+        <div
+          className={cn("gen-prompt", draggingImage && "gen-prompt-hot")}
+          onDragOver={(event) => {
+            event.preventDefault();
+            if (!running) setDraggingImage(true);
+          }}
+          onDragLeave={(event) => {
+            if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+            setDraggingImage(false);
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDraggingImage(false);
+            if (running) return;
+            const file = event.dataTransfer.files?.[0];
+            if (file) acceptReference(file);
+          }}
+        >
+          {previewSrc ? (
+            <div className="flex items-center gap-3 px-4 pt-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={previewSrc} alt="" className="h-14 w-11 shrink-0 rounded-lg object-cover ring-1 ring-line" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-medium">
+                  {referenceName ?? (imageMode ? "Input image" : "Character reference")}
+                </p>
+                <p className="mt-0.5 text-[11px] text-muted">
+                  {referenceBytes == null ? (imageMode ? "Input image" : "Character reference") : formatFileSize(referenceBytes)}
+                  {referencePreparing || imageInputPending ? " · Preparing" : " · Ready"}
+                </p>
+              </div>
+              <button type="button" onClick={() => referenceInputRef.current?.click()} disabled={running} className="home-chip">
+                Change
+              </button>
+              <button type="button" onClick={clearReference} disabled={running} className="home-chip">
+                Remove
+              </button>
+            </div>
+          ) : null}
+          <div className="relative">
+            <label htmlFor="topic" className="sr-only">
               {imageMode ? "Style prompt" : "Movie topic"}
             </label>
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              {imageMode ? null : (
-              <button
-                type="button"
-                onClick={() => setCopilotOpen(true)}
-                disabled={running}
-                className="gen-enhance"
-              >
-                AI Co-Pilot · Free
-              </button>
-              )}
-              {imageMode ? null : (
-              <button
-                type="button"
-                onClick={() => void enhancePrompt()}
-                disabled={running || enhancing || topic.trim().length < 3}
-                className="gen-enhance"
-              >
-                {enhancing ? "Enhancing…" : "✨ Auto-Enhance Prompt"}
-              </button>
-              )}
-              <span className="font-mono text-[11px] text-muted">
-                {topic.trim().length}/{PROMPT_MAX}
-              </span>
-            </div>
-          </div>
-          <div
-            className={cn("gen-prompt mt-3", draggingImage && "gen-prompt-hot")}
-            onDragOver={(event) => {
-              event.preventDefault();
-              if (!running) setDraggingImage(true);
-            }}
-            onDragLeave={(event) => {
-              if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-              setDraggingImage(false);
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              setDraggingImage(false);
-              if (running) return;
-              const file = event.dataTransfer.files?.[0];
-              if (file) acceptReference(file);
-            }}
-          >
             <textarea
+              ref={promptRef}
               id="topic"
               name="topic"
-              rows={4}
+              rows={3}
               maxLength={PROMPT_MAX}
               value={topic}
               disabled={running}
-              placeholder={imageMode ? "Transform into a 3D Pixar character" : "Why night markets stay cheap"}
+              placeholder={imageMode ? "Describe the image you're imagining" : "Describe the video you're imagining"}
               onChange={(event) => {
                 setTopic(event.target.value);
                 if (!plannedTopicRef.current.startsWith(`${event.target.value.trim()}|`)) {
                   plannedTopicRef.current = "";
                 }
               }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+                event.preventDefault();
+                if (!sendDisabled) event.currentTarget.form?.requestSubmit();
+              }}
               onBlur={(event) => {
                 const value = event.currentTarget.value;
-                if (!imageMode && durationSec > CLIP_DURATION_SEC && value.trim().length >= 12) {
+                if (!imageMode && durationSec > 10 && value.trim().length >= 12) {
                   void planScenes(value, durationSec);
                 }
               }}
-              className="w-full resize-y bg-transparent px-4 py-3 text-base leading-7 text-foreground outline-none placeholder:text-muted/60"
+              className="block min-h-[96px] w-full resize-none bg-transparent px-4 pt-3.5 pr-12 pb-2 text-sm leading-6 text-foreground outline-none placeholder:text-[#9a9aa1]"
             />
             {imageMode ? null : (
-              <div className="border-t border-white/10">
-                <div className="flex flex-wrap gap-2 px-3 py-2.5">
-                  {(
-                    [
-                      ["voice", voicePillLabel(voice)],
-                      ["motion", motionPillLabel(motionStyle)],
-                      ["model", modelPillLabel(engine)],
-                    ] as const
-                  ).map(([id, label]) => (
-                    <button
-                      key={id}
-                      type="button"
-                      disabled={running}
-                      aria-expanded={picker === id}
-                      onClick={() => setPicker((current) => (current === id ? null : id))}
-                      className={cn(
-                        "max-w-full rounded-full border px-3 py-1.5 text-xs font-medium",
-                        picker === id
-                          ? "border-cyan-300/70 bg-cyan-300/15 text-cyan-50"
-                          : "border-white/15 bg-black/30 text-foreground",
-                      )}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex flex-wrap gap-2 px-3 pb-2.5" role="radiogroup" aria-label="Video duration">
-                  {VIDEO_DURATIONS.map((seconds) => {
-                    const selected = durationSec === seconds;
-                    return (
-                      <button
-                        key={seconds}
-                        type="button"
-                        role="radio"
-                        aria-checked={selected}
-                        disabled={running}
-                        onClick={() => {
-                          setDurationSec(seconds);
-                          plannedTopicRef.current = "";
-                          setScenes([]);
-                        }}
-                        className={cn(
-                          "rounded-full border px-3 py-1.5 text-xs font-medium",
-                          selected
-                            ? "border-cyan-300/70 bg-cyan-300/15 text-cyan-50"
-                            : "border-white/15 bg-black/30 text-foreground",
-                        )}
-                      >
-                        {seconds}s
-                      </button>
-                    );
-                  })}
-                </div>
-                {picker ? (
-                  <div
-                    role="dialog"
-                    aria-label={
-                      picker === "voice" ? "Voice style" : picker === "motion" ? "Motion style" : "Engine"
-                    }
-                    className="border-t border-white/10 px-3 pb-3"
-                  >
-                    <div className="flex items-center justify-between gap-3 py-2">
-                      <p className="text-sm font-medium">
-                        {picker === "voice" ? "Voice style" : picker === "motion" ? "Motion style" : "Engine"}
-                      </p>
-                      <button
-                        type="button"
-                        aria-label="Close"
-                        onClick={() => setPicker(null)}
-                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/15 text-sm"
-                      >
-                        X
-                      </button>
-                    </div>
-                    <div className="grid gap-1.5">
-                      {picker === "voice"
-                        ? VOICES.map((option) => {
-                            const selected = voice === option.id;
-                            return (
-                              <button
-                                key={option.id}
-                                type="button"
-                                aria-pressed={selected}
-                                onClick={() => {
-                                  setVoiceOverride(option.id);
-                                  setPicker(null);
-                                }}
-                                className={cn(
-                                  "rounded-xl border px-3 py-2.5 text-left",
-                                  selected ? "border-cyan-300/70 bg-cyan-300/10" : "border-white/10 bg-black/20",
-                                )}
-                              >
-                                <span className="block text-sm font-medium">{option.name}</span>
-                                <span className="mt-0.5 block text-xs leading-5 text-muted">{VOICE_NOTE[option.id]}</span>
-                              </button>
-                            );
-                          })
-                        : null}
-                      {picker === "motion" ? (
-                        <>
-                          <button
-                            type="button"
-                            aria-pressed={motionStyle === ""}
-                            onClick={() => {
-                              setMotionStyle("");
-                              setPicker(null);
-                            }}
-                            className={cn(
-                              "rounded-xl border px-3 py-2.5 text-left text-sm",
-                              motionStyle === "" ? "border-cyan-300/70 bg-cyan-300/10" : "border-white/10 bg-black/20",
-                            )}
-                          >
-                            Default look
-                          </button>
-                          {MOTION_STYLES.map((style) => {
-                            const selected = motionStyle === style.id;
-                            return (
-                              <button
-                                key={style.id}
-                                type="button"
-                                aria-pressed={selected}
-                                onClick={() => {
-                                  setMotionStyle(style.id);
-                                  setPicker(null);
-                                }}
-                                className={cn(
-                                  "rounded-xl border px-3 py-2.5 text-left text-sm",
-                                  selected ? "border-cyan-300/70 bg-cyan-300/10" : "border-white/10 bg-black/20",
-                                )}
-                              >
-                                {style.name}
-                              </button>
-                            );
-                          })}
-                        </>
-                      ) : null}
-                      {picker === "model"
-                        ? engineChoices.map((option) => {
-                            const selected = engine === option.id;
-                            const offer = engineOffer(option.id, imageToVideo);
-                            return (
-                              <button
-                                key={option.id}
-                                type="button"
-                                aria-pressed={selected}
-                                onClick={() => {
-                                  setEngine(option.id);
-                                  setError((current) => (current?.endsWith("credits.") ? null : current));
-                                  setPicker(null);
-                                }}
-                                className={cn(
-                                  "rounded-xl border px-3 py-2.5 text-left",
-                                  selected ? "border-cyan-300/70 bg-cyan-300/10" : "border-white/10 bg-black/20",
-                                )}
-                              >
-                                <span className="block text-sm font-medium">{offer.name}</span>
-                                <span className="mt-0.5 block font-mono text-[11px] text-accent">{offer.rate}</span>
-                                <span className="mt-0.5 block text-xs leading-5 text-muted">{offer.note}</span>
-                              </button>
-                            );
-                          })
-                        : null}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            )}
-            <input
-              ref={referenceInputRef}
-              id="reference-image"
-              name="reference-image"
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              disabled={running}
-              onChange={onReferenceImage}
-              className="sr-only"
-            />
-            {imageMode && previewSrc ? (
-              <div className="border-t border-white/10 px-3 py-3">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={previewSrc}
-                  alt=""
-                  className="max-h-64 w-full rounded-2xl bg-black object-contain ring-1 ring-cyan-300/40"
-                />
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium tracking-tight">{referenceName}</p>
-                    <p className="mt-0.5 font-mono text-[11px] text-muted">
-                      {referenceBytes == null ? "Input image" : formatFileSize(referenceBytes)}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => referenceInputRef.current?.click()}
-                      disabled={running}
-                      className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-foreground transition hover:border-cyan-300/70 hover:text-cyan-100"
-                    >
-                      Change Image
-                    </button>
-                    <button
-                      type="button"
-                      onClick={clearReference}
-                      disabled={running}
-                      className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-foreground transition hover:border-cyan-300/70 hover:text-cyan-100"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : imageMode ? (
               <button
                 type="button"
-                disabled={running}
-                onClick={() => referenceInputRef.current?.click()}
-                title="Best stills are sharp 9:16 or 3:4, at least 720×1280, with the subject fully in frame and evenly lit."
-                className="gen-attach"
+                title="Auto-enhance prompt"
+                aria-label="Auto-enhance prompt"
+                onClick={() => void enhancePrompt()}
+                disabled={running || enhancing || topic.trim().length < 3}
+                className="absolute top-3 right-3 grid h-7 w-7 place-items-center rounded-full text-muted transition hover:bg-panel hover:text-foreground disabled:opacity-40"
               >
-                <ImageIcon />
-                <span className="min-w-0">
-                  <span className="block text-sm font-medium tracking-tight text-foreground">
-                    Upload Input Image
-                  </span>
-                  <span className="mt-0.5 block text-xs text-muted">
-                    Drop a JPEG, PNG, or WebP · sharp 9:16 or 3:4
-                  </span>
-                </span>
+                {enhancing ? (
+                  <Spinner />
+                ) : (
+                  <Glyph>
+                    <path d="M7.5 15h5M8 17.5h4" />
+                    <path d="M10 2.5a5 5 0 0 0-3 9c.6.5 1 1.2 1 2V14h4v-.5c0-.8.4-1.5 1-2a5 5 0 0 0-3-9Z" />
+                  </Glyph>
+                )}
               </button>
-            ) : null}
+            )}
           </div>
-        </div>
-
-        {imageMode ? null : (
-          <div>
-            <div className="flex flex-wrap items-end justify-between gap-2">
-              <p className="text-sm font-medium tracking-tight">Reference image</p>
-              <p className="font-mono text-[11px] tracking-wide text-accent">{videoCostLabel}</p>
-            </div>
-            <div
-              className={cn("gen-reference mt-3", draggingImage && "gen-prompt-hot")}
-              onDragOver={(event) => {
-                event.preventDefault();
-                if (!running) setDraggingImage(true);
-              }}
-              onDragLeave={(event) => {
-                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-                setDraggingImage(false);
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                setDraggingImage(false);
-                if (running) return;
-                const file = event.dataTransfer.files?.[0];
-                if (file) acceptReference(file);
-              }}
-            >
-              {previewSrc ? (
-                <div className="flex flex-col gap-4 p-3 sm:flex-row sm:items-center">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={previewSrc}
-                    alt=""
-                    className="h-40 w-full rounded-2xl bg-black object-cover ring-1 ring-cyan-300/40 sm:h-28 sm:w-24"
+          <div className="flex items-end gap-2 px-3 pb-3">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                aria-label={imageMode ? "Upload input image" : "Add character reference image"}
+                title={imageMode ? "Upload input image" : "Add character reference image"}
+                onClick={() => referenceInputRef.current?.click()}
+                disabled={running}
+                className="home-chip px-1.5"
+              >
+                <Glyph className="h-3.5 w-3.5">
+                  <path d="M10 4v12M4 10h12" />
+                </Glyph>
+              </button>
+              {imageMode ? (
+                <>
+                  <ImageModelMenu
+                    open={picker === "imageModel"}
+                    value={imageModel}
+                    onSelect={(next) => {
+                      setImageModel(next);
+                      setPicker(null);
+                      setError((current) => (current?.endsWith("credits.") ? null : current));
+                    }}
+                    onClose={closeImageModelMenu}
+                    trigger={chip(
+                      "imageModel",
+                      getImageModel(imageModel).shortName,
+                      <Glyph className="h-3.5 w-3.5">
+                        <rect x="3.5" y="3.5" width="13" height="13" rx="3" />
+                        <path d="M7.5 10h5M10 7.5v5" />
+                      </Glyph>,
+                    )}
                   />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium tracking-tight">{referenceName}</p>
-                    <p className="mt-1 font-mono text-[11px] text-muted">
-                      {referenceBytes == null ? "Reference image" : formatFileSize(referenceBytes)}
-                      {referencePreparing ? " · Preparing" : " · Ready"}
-                    </p>
-                    <p className="mt-2 text-xs leading-5 text-muted">
-                      Studio Fast Motion keeps this still as the subject.
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => referenceInputRef.current?.click()}
-                        disabled={running}
-                        className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-foreground transition hover:border-cyan-300/70 hover:text-cyan-100"
-                      >
-                        Change Image
-                      </button>
-                      <button
-                        type="button"
-                        onClick={clearReference}
-                        disabled={running}
-                        className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-foreground transition hover:border-cyan-300/70 hover:text-cyan-100"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                  <StyleMenu
+                    open={picker === "style"}
+                    value={imageStyle}
+                    onSelect={(next) => {
+                      setImageStyle(next);
+                      setPicker(null);
+                    }}
+                    onClose={closeStyleMenu}
+                    trigger={chip(
+                      "style",
+                      imageStyle ? imageStyleName(imageStyle) : "Style",
+                      <Glyph className="h-3.5 w-3.5">
+                        <path d="M10 2.5c.4 3.4 2.1 5.1 5.5 5.5-3.4.4-5.1 2.1-5.5 5.5-.4-3.4-2.1-5.1-5.5-5.5 3.4-.4 5.1-2.1 5.5-5.5Z" />
+                      </Glyph>,
+                    )}
+                  />
+                  <ImageAspectMenu
+                    open={picker === "imageAspect"}
+                    value={imageAspect}
+                    onSelect={(next) => {
+                      setImageAspect(next);
+                      setPicker(null);
+                    }}
+                    onClose={closeImageAspectMenu}
+                    trigger={chip(
+                      "imageAspect",
+                      imageAspect,
+                      <Glyph className="h-3.5 w-3.5">
+                        <rect x="3" y="5.5" width="14" height="9" rx="1.5" />
+                      </Glyph>,
+                    )}
+                  />
+                </>
               ) : (
+                <>
+                  <VideoModelMenu
+                    open={picker === "model"}
+                    value={videoModel}
+                    resolution={videoResolution}
+                    durationSec={durationSec >= 10 ? 10 : 5}
+                    onSelect={selectVideoModel}
+                    onClose={closeVideoModelMenu}
+                    trigger={chip(
+                      "model",
+                      getVideoModel(videoModel).shortName,
+                      <Glyph className="h-3.5 w-3.5">
+                        <rect x="3.5" y="3.5" width="13" height="13" rx="3" />
+                        <path d="M7.5 10h5M10 7.5v5" />
+                      </Glyph>,
+                    )}
+                  />
+                  {chip(
+                    "aspect",
+                    aspect,
+                    <Glyph className="h-3.5 w-3.5">
+                      <rect x="3" y="5.5" width="14" height="9" rx="1.5" />
+                    </Glyph>,
+                  )}
+                  <VideoDurationMenu
+                    open={picker === "duration"}
+                    value={durationSec >= 10 ? 10 : 5}
+                    model={videoModel}
+                    resolution={videoResolution}
+                    onSelect={(next) => {
+                      setDurationSec(next);
+                      plannedTopicRef.current = "";
+                      setScenes([]);
+                      setPicker(null);
+                    }}
+                    onClose={closeVideoDurationMenu}
+                    trigger={chip(
+                      "duration",
+                      `${durationSec >= 10 ? 10 : 5}s`,
+                      <Glyph className="h-3.5 w-3.5">
+                        <circle cx="10" cy="10.5" r="6.5" />
+                        <path d="M10 7v3.5l2.2 1.4M8 2.5h4" />
+                      </Glyph>,
+                    )}
+                  />
+                  <VideoResolutionMenu
+                    open={picker === "resolution"}
+                    value={videoResolution}
+                    model={videoModel}
+                    durationSec={durationSec >= 10 ? 10 : 5}
+                    onSelect={(next) => {
+                      setVideoResolution(next);
+                      setPicker(null);
+                    }}
+                    onClose={closeVideoResolutionMenu}
+                    trigger={chip(
+                      "resolution",
+                      videoResolutionLabel(videoResolution),
+                      <Glyph className="h-3.5 w-3.5">
+                        <rect x="2.5" y="4.5" width="15" height="11" rx="1.5" />
+                        <path d="M6 15.5h8" />
+                      </Glyph>,
+                    )}
+                  />
+                  {chip(
+                    "voice",
+                    getVoice(voice)?.name.split(" ")[0] ?? "Voice",
+                    <Glyph className="h-3.5 w-3.5">
+                      <path d="M4 8v4M7 5.5v9M10 3.5v13M13 6v8M16 8.5v3" />
+                    </Glyph>,
+                  )}
+                  {chip(
+                    "motion",
+                    motionStyle ? motionPillLabel(motionStyle).replace("Motion: ", "") : "Motion",
+                    <Glyph className="h-3.5 w-3.5">
+                      <path d="M3 13c3-6 5-6 7 0s4 6 7 0" />
+                    </Glyph>,
+                  )}
+                </>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                aria-label={listening ? "Stop voice typing" : "Voice typing"}
+                aria-pressed={listening}
+                title={listening ? "Stop voice typing" : "Speak your prompt"}
+                onClick={toggleDictation}
+                disabled={running}
+                className={cn(
+                  "grid h-8 w-8 place-items-center rounded-full text-muted transition hover:bg-panel hover:text-foreground disabled:opacity-40",
+                  listening && "bg-red-500/15 text-red-500 hover:bg-red-500/15 hover:text-red-500",
+                )}
+              >
+                <Glyph>
+                  <rect x="7.5" y="2.5" width="5" height="9.5" rx="2.5" />
+                  <path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5" />
+                </Glyph>
+              </button>
+              {running ? (
                 <button
                   type="button"
-                  disabled={running}
-                  onClick={() => referenceInputRef.current?.click()}
-                  className="gen-reference-empty"
+                  onClick={stop}
+                  aria-label="Stop generation"
+                  title="Stop"
+                  className="grid h-8 w-8 place-items-center rounded-full bg-foreground text-background"
                 >
-                  <ImageIcon />
-                  <span className="min-w-0 text-left">
-                    <span className="block text-sm font-medium tracking-tight text-foreground">
-                      Upload Reference Image / Character
-                    </span>
-                    <span className="mt-1 block text-xs leading-5 text-muted">
-                      Drop a JPEG, PNG, or WebP. A sharp 9:16 or 3:4 still, subject fully in frame.
-                    </span>
-                  </span>
+                  <span aria-hidden className="h-2.5 w-2.5 rounded-[2px] bg-background" />
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  aria-label={imageMode ? `Generate image, ${imageModelCreditCost(imageModel)} credits` : `Generate video, ${activeVideoCost} credits`}
+                  title={imageMode ? `Generate image • ${imageModelCreditCost(imageModel)} credits` : `Generate ${durationSec}s • ${activeVideoCost} credits`}
+                  disabled={sendDisabled}
+                  className="grid h-8 w-8 place-items-center rounded-full bg-foreground text-background transition hover:opacity-90 disabled:opacity-25"
+                >
+                  {planning ? (
+                    <Spinner />
+                  ) : (
+                    <Glyph>
+                      <path d="M10 16V4M5 9l5-5 5 5" />
+                    </Glyph>
+                  )}
                 </button>
               )}
             </div>
           </div>
-        )}
-
-        {imageMode ? (
-          <div>
-            <p className="text-sm font-medium tracking-tight">Style presets</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {IMAGE_STYLES.map((style) => {
-                const selected = imageStyle === style.id;
-                return (
+          {picker && !FLOATING_PICKERS.includes(picker) ? (
+            <div role="dialog" aria-label={PICKER_TITLE[picker]} className="border-t border-line px-3 py-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <p className="text-sm font-medium">{PICKER_TITLE[picker]}</p>
+                <button
+                  type="button"
+                  aria-label="Close"
+                  onClick={() => setPicker(null)}
+                  className="grid h-7 w-7 place-items-center rounded-full text-muted hover:bg-panel hover:text-foreground"
+                >
+                  <Glyph className="h-3.5 w-3.5">
+                    <path d="m5 5 10 10M15 5 5 15" />
+                  </Glyph>
+                </button>
+              </div>
+              {picker === "voice" ? (
+                <div className="grid gap-1.5">
+                  <p className="text-xs leading-5 text-muted">
+                    The first character uses this voice. The other character uses the opposite gender.
+                  </p>
+                  <div className="flex gap-1 rounded-lg bg-panel p-0.5" role="radiogroup" aria-label="Voice gender">
+                    {(["male", "female"] as const).map((gender) => (
+                      <button
+                        key={gender}
+                        type="button"
+                        role="radio"
+                        aria-checked={voiceGender === gender}
+                        onClick={() => selectGender(gender)}
+                        className={cn(
+                          "flex-1 rounded-md px-3 py-1.5 text-xs font-medium text-muted",
+                          voiceGender === gender && "bg-[var(--surface)] text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.12)]",
+                        )}
+                      >
+                        {gender === "male" ? "Male Voice" : "Female Voice"}
+                      </button>
+                    ))}
+                  </div>
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-muted">Language</span>
+                    <select
+                      aria-label="Narration language"
+                      value={narrationLanguage}
+                      onChange={(event) => {
+                        if (!isNarrationLanguageId(event.target.value)) return;
+                        setNarrationLanguage(event.target.value);
+                      }}
+                      className="gen-field gen-select w-full appearance-none rounded-lg px-3 py-2 text-sm outline-none"
+                    >
+                      {NARRATION_LANGUAGES.map((language) => (
+                        <option key={language.id} value={language.id}>
+                          {language.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {VOICES.filter((option) => option.gender === voiceGender).map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      aria-pressed={voice === option.id}
+                      onClick={() => {
+                        setVoiceOverride(option.id);
+                        setPicker(null);
+                      }}
+                      className="home-option"
+                    >
+                      <span className="block font-medium">{option.name}</span>
+                      <span className="mt-0.5 block text-xs leading-5 text-muted">{VOICE_NOTE[option.id]}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {picker === "motion" ? (
+                <div className="grid gap-1.5 sm:grid-cols-2">
                   <button
-                    key={style.id}
                     type="button"
-                    disabled={running}
-                    aria-pressed={selected}
-                    onClick={() => setImageStyle(selected ? "" : style.id)}
-                    className={cn(
-                      "rounded-full border px-3 py-1.5 text-sm transition",
-                      selected
-                        ? "border-cyan-300/70 bg-cyan-300/15 text-cyan-50"
-                        : "border-white/10 bg-black/30 text-foreground hover:border-cyan-300/40",
-                    )}
+                    aria-pressed={motionStyle === ""}
+                    onClick={() => {
+                      setMotionStyle("");
+                      setPicker(null);
+                    }}
+                    className="home-option"
                   >
-                    {style.name}
+                    Default look
                   </button>
-                );
-              })}
+                  {MOTION_STYLES.map((style) => (
+                    <button
+                      key={style.id}
+                      type="button"
+                      aria-pressed={motionStyle === style.id}
+                      onClick={() => {
+                        setMotionStyle(style.id);
+                        setPicker(null);
+                      }}
+                      className="home-option"
+                    >
+                      {style.name}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {picker === "aspect" ? (
+                <div className="grid grid-cols-3 gap-1.5" role="radiogroup" aria-label="Aspect ratio">
+                  {FRAME_ASPECTS.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={aspect === option.id}
+                      onClick={() => {
+                        setAspect(option.id);
+                        setPicker(null);
+                      }}
+                      className="home-option text-center"
+                    >
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "mx-auto mb-1.5 block rounded-[3px] border-[1.5px] border-current",
+                          option.id === "9:16" ? "h-6 w-3.5" : option.id === "1:1" ? "h-5 w-5" : "h-3.5 w-6",
+                        )}
+                      />
+                      <span className="block font-medium">{option.label}</span>
+                      <span className="block text-[11px] text-muted">{frameCue(option.id).split(" ")[0]}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
-          </div>
-        ) : null}
+          ) : null}
+          <input
+            ref={referenceInputRef}
+            id="reference-image"
+            name="reference-image"
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            disabled={running}
+            onChange={onReferenceImage}
+            className="sr-only"
+          />
+        </div>
 
-        {!imageMode && activeVideoCost > 0 && credits < activeVideoCost ? (
-          <p role="status" className="gen-alert">
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 px-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {imageMode ? null : (
+              <>
+                <button
+                  type="button"
+                  aria-expanded={copilotOpen}
+                  disabled={running}
+                  onClick={() => setCopilotOpen(true)}
+                  className="home-chip"
+                >
+                  <Glyph className="h-3.5 w-3.5 text-violet-600">
+                    <path d="M10 2.5c.4 3.4 2.1 5.1 5.5 5.5-3.4.4-5.1 2.1-5.5 5.5-.4-3.4-2.1-5.1-5.5-5.5 3.4-.4 5.1-2.1 5.5-5.5Z" />
+                  </Glyph>
+                  AI Co-Pilot · Free
+                </button>
+                <label
+                  className="home-chip cursor-pointer"
+                  title="Skip Fal.ai and load a free 9:16 stock clip. Dialogue and captions still run."
+                >
+                  <input
+                    type="checkbox"
+                    className="h-3 w-3 accent-black"
+                    checked={mockMode}
+                    disabled={running}
+                    onChange={(event) => setMockMode(event.target.checked)}
+                  />
+                  Use Mock Mode
+                </label>
+              </>
+            )}
+            {!imageMode && scenes.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => void renderFilm()}
+                disabled={!balanceReady || running || planning || engine !== "budget"}
+                className="home-chip"
+              >
+                {planning
+                  ? "Planning scenes…"
+                  : `Generate ${scenes.length * CLIP_DURATION_SEC}s film • ${movieCreditCost(scenes.length, Boolean(referenceImage))} credits`}
+              </button>
+            ) : null}
+          </div>
+          <p className="text-[11px] text-muted">
+            {running
+              ? statusMessage
+              : imageMode
+                ? `${imageModelCreditCost(imageModel)} credits per image`
+                : referencePreparing
+                  ? "Preparing the reference image"
+                  : planning
+                    ? "Writing scenes…"
+                    : videoCostLabel}
+          </p>
+        </div>
+
+        {balanceReady && !imageMode && activeVideoCost > 0 && credits < activeVideoCost ? (
+          <p role="status" className="gen-alert mt-3">
             {longForm
               ? `This ${durationSec}s video costs ${longCost} credits.`
-              : `${engineOffer(engine, imageToVideo).name} costs ${runCost} credits.`}
+              : insufficientVideoCreditsMessage(videoResolution, durationSec)}
           </p>
         ) : null}
-
         {error ? (
-          <p role="alert" className="gen-alert">
+          <p role="alert" className="gen-alert mt-3">
             {error}
           </p>
         ) : null}
-
-        <div className="studio-dock flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:gap-3">
-          <button
-            type="submit"
-            disabled={!balanceReady || running || referencePreparing || planning || (imageMode ? !imageReady : topic.trim().length < 3)}
-            className="gen-cta w-full md:w-auto"
-          >
-            {running ? "Generating…" : planning ? "Writing scenes…" : imageMode ? "Generate image" : longForm ? `Generate ${durationSec}s · ${longCost} credits` : "Generate Video"}
-          </button>
-          {!imageMode && scenes.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => void renderFilm()}
-              disabled={!balanceReady || running || planning || engine !== "budget"}
-              className="gen-ghost w-full md:w-auto"
-            >
-              {planning ? "Planning scenes…" : `Generate short film · ${movieCreditCost(scenes.length, Boolean(referenceImage))} credits`}
-            </button>
-          ) : null}
-          {running ? (
-            <button type="button" onClick={stop} className="gen-ghost">
-              Stop
-            </button>
-          ) : null}
-          <p className="text-xs text-muted">
-            {imageMode
-              ? "10 credits per image"
-              : referencePreparing
-                ? "Preparing the reference image"
-                : videoCostLabel}
-          </p>
-        </div>
       </form>
 
-      {imageMode ? (
-        <ImageResultPanel
-          running={running}
-          source={previewSrc}
-          result={imageResult}
-          statusMessage={statusMessage}
-          downloadError={downloadError}
-          onChange={() => referenceInputRef.current?.click()}
-          onRemove={clearReference}
-          onDownload={(imageUrl) => {
-            void downloadImage(imageUrl).catch(() => {
-              setDownloadError("Could not download that image.");
-            });
-          }}
-        />
-      ) : (
-      <section className="gen-glass rounded-3xl p-5 sm:p-6">
+      {imageMode ? null : (
         <p className="sr-only" aria-live="polite">
           {statusMessage}
         </p>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-accent">Timeline</p>
-            <h2 className="mt-1 text-lg font-semibold tracking-tight">Run</h2>
-          </div>
-          <p className="rounded-full border border-white/10 px-3 py-1 font-mono text-[11px] text-muted">
-            {result ? `${result.durationSec}s` : `${durationSec}s`} · 9:16 · no face
-          </p>
-        </div>
+      )}
 
-        <ol className="mt-6">
-          {steps.map((step, index) => (
-            <li key={step.id} className="relative flex gap-4 pb-6 last:pb-0">
-              {index < steps.length - 1 ? (
+      {showImageRun ? (
+        <div className="mx-auto mt-8 max-w-3xl">
+          <ImageResultPanel
+            running={running}
+            source={previewSrc}
+            aspect={imageAspect}
+            result={imageResult}
+            statusMessage={statusMessage}
+            downloadError={downloadError}
+            onChange={() => referenceInputRef.current?.click()}
+            onRemove={clearReference}
+            onDownload={(imageUrl) => {
+              void downloadImage(imageUrl).catch(() => {
+                setDownloadError("Could not download that image.");
+              });
+            }}
+          />
+        </div>
+      ) : null}
+
+      {showVideoRun ? (
+        <section className="gen-glass mx-auto mt-8 max-w-3xl rounded-2xl p-5 sm:p-6">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-base font-semibold tracking-tight">Generation</h2>
+            <p className="rounded-full border border-line px-3 py-1 text-[11px] text-muted">
+              {result ? `${result.durationSec}s` : `${durationSec}s`} · {aspect} · character dialogue
+            </p>
+          </div>
+
+          <ol className="mt-6">
+            {steps.map((step, index) => (
+              <li key={step.id} className="relative flex gap-4 pb-6 last:pb-0">
+                {index < steps.length - 1 ? (
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "gen-rail",
+                      (step.status === "completed" || step.status === "started") && "gen-rail-on",
+                    )}
+                  />
+                ) : null}
                 <span
                   aria-hidden
                   className={cn(
-                    "gen-rail",
-                    (step.status === "completed" || step.status === "started") && "gen-rail-on",
+                    "gen-step",
+                    step.status === "completed" && "gen-step-done",
+                    step.status === "started" && "gen-step-live",
                   )}
-                />
-              ) : null}
-              <span
-                aria-hidden
-                className={cn(
-                  "gen-step",
-                  step.status === "completed" && "gen-step-done",
-                  step.status === "started" && "gen-step-live",
-                )}
-              >
-                {step.status === "started" ? <Spinner /> : step.status === "completed" ? <Check /> : index + 1}
-              </span>
-              <div className="min-w-0 pt-1">
-                <p className="text-sm font-medium tracking-tight">{step.label}</p>
-                <p className={cn("mt-1 text-sm", step.status === "pending" ? "text-muted" : "text-foreground")}>
-                  {step.status === "started" ? "Working…" : step.message}
-                </p>
-                {step.detail ? <p className="mt-1 text-sm leading-6 text-muted">{step.detail}</p> : null}
-              </div>
-            </li>
-          ))}
-        </ol>
-
-        {notice ? (
-          <p role="status" className="gen-notice mt-2">
-            {notice}
-          </p>
-        ) : null}
-
-        <div className="mt-6 border-t border-white/10 pt-6">
-          {result ? (
-            <div>
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <h3 className="text-base font-semibold tracking-tight">
-                    {result.preview ? "Free-tier preview" : "Preview"} {result.id}
-                  </h3>
-                  <p className="mt-1 text-sm text-muted">
-                    {result.durationSec}s · {result.voiceName} · {result.frames.length} clips ·{" "}
-                    {result.creditsCharged} credits
+                >
+                  {step.status === "started" ? <Spinner /> : step.status === "completed" ? <Check /> : index + 1}
+                </span>
+                <div className="min-w-0 pt-1">
+                  <p className="text-sm font-medium tracking-tight">{step.label}</p>
+                  <p className={cn("mt-1 text-sm", step.status === "pending" ? "text-muted" : "text-foreground")}>
+                    {step.status === "started" ? "Working…" : step.message}
                   </p>
+                  {step.detail ? <p className="mt-1 text-sm leading-6 text-muted">{step.detail}</p> : null}
                 </div>
-                {result.preview ? (
-                  <span className="rounded-full border border-ok/30 bg-ok/10 px-3 py-1 text-xs text-ok">
-                    Fallback player
-                  </span>
-                ) : null}
-              </div>
-              <Storyboard
-                frames={result.frames}
-                script={result.script}
-                voiceId={result.voiceId}
-                audioSrc={result.audioSrc}
-                audioLabel={result.audioLabel}
-                durationSec={result.durationSec}
-              />
-              {(() => {
-                const clipUrl = result.videoUrl || chainVideoUrls(result.frames).at(-1);
-                if (!clipUrl) return null;
-                return (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void downloadVideo(clipUrl).catch(() => {
-                        setDownloadError("Could not download that video.");
-                      });
-                    }}
-                    className="gen-cta"
-                  >
-                    Download / Save
-                  </button>
-                );
-              })()}
-              {downloadError ? (
-                <p role="alert" className="gen-alert mt-3">
-                  {downloadError}
-                </p>
-              ) : null}
-              {chainVideoUrls(result.frames).length > 0 ? (
+              </li>
+            ))}
+          </ol>
+
+          {notice ? (
+            <p role="status" className="gen-notice mt-2">
+              {notice}
+            </p>
+          ) : null}
+
+          <div className="mt-6 border-t border-line pt-6">
+            {result ? (
+              <div>
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-semibold tracking-tight">
+                      {result.preview ? "Free-tier preview" : "Preview"} {result.id}
+                    </h3>
+                    <p className="mt-1 text-sm text-muted">
+                      {result.durationSec}s · {result.voiceName} · {Math.max(1, new Set(result.frames.map((frame) => frame.src)).size)} scenes ·{" "}
+                      {result.creditsCharged} credits
+                    </p>
+                  </div>
+                  {result.preview ? (
+                    <span className="rounded-full border border-ok/30 bg-ok/10 px-3 py-1 text-xs text-ok">
+                      Fallback player
+                    </span>
+                  ) : null}
+                </div>
+                <Storyboard
+                  frames={result.frames}
+                  script={result.script}
+                  voiceId={result.voiceId}
+                  audioSrc={result.audioSrc}
+                  audioLabel={result.audioLabel}
+                  narrationEmbedded={result.narrationEmbedded}
+                  durationSec={result.durationSec}
+                  videoUrl={result.videoUrl}
+                  aspect={aspect}
+                />
                 <div className="mt-4 flex flex-wrap items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => void extendVideo()}
-                    disabled={!balanceReady || running}
-                    className="gen-cta"
-                  >
-                    Extend Video (+45s)
-                  </button>
-                  <p className="text-xs text-muted">45 credits</p>
+                  {(() => {
+                    const clipUrl = result.videoUrl || chainVideoUrls(result.frames).at(-1);
+                    if (!clipUrl) return null;
+                    const finalMovie = Boolean(result.videoUrl) && result.durationSec > CLIP_DURATION_SEC;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void downloadVideo(clipUrl, finalMovie ? "cut45-movie.mp4" : "cut45-video.mp4").catch(() => {
+                            setDownloadError("Could not download that video.");
+                          });
+                        }}
+                        className="gen-cta"
+                      >
+                        {finalMovie ? "Download Final Movie" : "Download / Save"}
+                      </button>
+                    );
+                  })()}
+                  {chainVideoUrls(result.frames).length > 0 ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void extendVideo()}
+                        disabled={!balanceReady || running}
+                        className="gen-ghost"
+                      >
+                        Extend Video (+45s)
+                      </button>
+                      <p className="text-xs text-muted">45s clip • {EXTEND_VIDEO_COST} credits</p>
+                    </>
+                  ) : null}
                 </div>
+                {downloadError ? (
+                  <p role="alert" className="gen-alert mt-3">
+                    {downloadError}
+                  </p>
+                ) : null}
+                <h3 className="mt-5 text-sm font-medium tracking-tight">Script</h3>
+                <p className="mt-2 text-sm leading-7 text-foreground/90">{result.script}</p>
+              </div>
+            ) : (
+              <PreviewSkeleton running={running} label={activeStep?.label} />
+            )}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="mx-auto mt-14 max-w-[880px]" aria-labelledby="featured-tools">
+        <h2 id="featured-tools" className="text-base font-semibold tracking-tight">
+          Featured Tools
+        </h2>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          {FEATURED_TOOLS.map((tool) => (
+            <button
+              key={tool.id}
+              type="button"
+              disabled={running}
+              onClick={() => openTool(tool.id)}
+              className="home-card aspect-[16/10] disabled:cursor-not-allowed"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={tool.image} alt="" className="absolute inset-0 h-full w-full object-cover" />
+              {tool.sample ? (
+                <span className="absolute top-1/2 left-1/2 max-w-[85%] -translate-x-1/2 -translate-y-1/2 truncate rounded-full bg-black/55 px-3 py-1 text-[10px] text-white backdrop-blur">
+                  {tool.sample} →
+                </span>
               ) : null}
-              <h3 className="mt-5 text-sm font-medium tracking-tight">Script</h3>
-              <p className="mt-2 text-sm leading-7 text-foreground/90">{result.script}</p>
-            </div>
-          ) : (
-            <PreviewSkeleton running={running} label={activeStep?.label} />
-          )}
+              <span className="absolute inset-x-3 bottom-3 flex items-end justify-between gap-2">
+                <span className="min-w-0">
+                  {tool.badge ? (
+                    <span className="mb-1.5 inline-block rounded bg-lime-300 px-1.5 py-0.5 text-[9px] font-semibold text-black">
+                      {tool.badge}
+                    </span>
+                  ) : null}
+                  <span className="block truncate text-sm font-semibold">{tool.title}</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-1 rounded-full bg-white px-2.5 py-1 text-[10px] font-semibold text-black">
+                  Try Now
+                  <Glyph className="h-3 w-3">
+                    <path d="M6.5 13.5 13.5 6.5M8 6.5h5.5V12" />
+                  </Glyph>
+                </span>
+              </span>
+            </button>
+          ))}
         </div>
       </section>
-      )}
+
+      <section className="mt-12" aria-labelledby="explore-models">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h2 id="explore-models" className="text-base font-semibold tracking-tight">
+              Explore models
+            </h2>
+            <p className="mt-0.5 text-xs text-muted">The studio&apos;s video, voice, and image looks, ready to use.</p>
+          </div>
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              aria-label="Scroll models left"
+              onClick={() => scrollModels(-1)}
+              className="grid h-7 w-7 place-items-center rounded-full border border-line hover:bg-panel"
+            >
+              <Glyph className="h-3.5 w-3.5">
+                <path d="m12 5-5 5 5 5" />
+              </Glyph>
+            </button>
+            <button
+              type="button"
+              aria-label="Scroll models right"
+              onClick={() => scrollModels(1)}
+              className="grid h-7 w-7 place-items-center rounded-full border border-line hover:bg-panel"
+            >
+              <Glyph className="h-3.5 w-3.5">
+                <path d="m8 5 5 5-5 5" />
+              </Glyph>
+            </button>
+          </div>
+        </div>
+        <div ref={modelsRef} className="home-rows mt-3 flex snap-x snap-mandatory gap-3 overflow-x-auto pb-1">
+          {MODEL_CARDS.map((card) => (
+            <button
+              key={card.id}
+              type="button"
+              disabled={running}
+              onClick={() => openModel(card)}
+              className="home-card aspect-[4/3] w-[230px] shrink-0 snap-start disabled:cursor-not-allowed sm:w-[250px]"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={card.image} alt="" className="absolute inset-0 h-full w-full object-cover" />
+              {card.badge ? (
+                <span className="absolute top-2.5 left-2.5 rounded bg-black/70 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-white uppercase">
+                  {card.badge}
+                </span>
+              ) : null}
+              <span className="absolute inset-x-3 bottom-3">
+                <span className="block text-sm font-semibold">{card.title}</span>
+                <span className="mt-0.5 line-clamp-2 block text-[11px] leading-4 text-white/80">{card.note}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
       <CopilotPanel
-        open={copilotOpen && !imageMode}
+        open={copilotOpen}
         topic={topic}
         scenes={scenes}
         sceneCount={clipCount}
@@ -1700,6 +2332,38 @@ export function GenerateForm() {
           plannedTopicRef.current = next.length === clipCount ? planKey(topic, durationSec) : "";
           setScenes(next);
         }}
+        onRenderCharacterSheet={renderCharacterSheet}
+        onUseInVideo={(visualPrompt, imageUrl) => {
+          setMode("video");
+          setPicker(null);
+          plannedTopicRef.current = "";
+          setTopic(visualPrompt.slice(0, PROMPT_MAX));
+          setError(null);
+          setCopilotOpen(false);
+          if (imageUrl) void attachCharacterSheet(imageUrl);
+        }}
+        onGenerateMovie={async (sceneList, imageUrl) => {
+          const movieScenes = sceneList.slice(0, 4);
+          if (movieScenes.length < 2) {
+            setError("Plan at least two scenes before generating the full movie.");
+            return;
+          }
+          setMode("video");
+          setVideoModel(DEFAULT_VIDEO_MODEL);
+          setEngine("budget");
+          setPicker(null);
+          setCopilotOpen(false);
+          let reference = referenceImage;
+          if (imageUrl) {
+            const loaded = await attachCharacterSheet(imageUrl);
+            if (!loaded) return;
+            reference = loaded;
+          }
+          const movieTopic =
+            topic.trim().length >= 3 ? topic.trim() : movieScenes.map((scene) => scene.title).filter(Boolean).join(". ");
+          if (movieTopic) setTopic(movieTopic.slice(0, PROMPT_MAX));
+          await renderFilm(movieScenes, { referenceDataUrl: reference, forceBudget: true });
+        }}
       />
     </div>
   );
@@ -1708,6 +2372,7 @@ export function GenerateForm() {
 function ImageResultPanel({
   running,
   source,
+  aspect,
   result,
   statusMessage,
   downloadError,
@@ -1717,6 +2382,7 @@ function ImageResultPanel({
 }: {
   running: boolean;
   source: string | null;
+  aspect: ImageAspectId;
   result: { id: string; imageUrl: string; prompt: string } | null;
   statusMessage: string;
   downloadError: string | null;
@@ -1739,23 +2405,23 @@ function ImageResultPanel({
           <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-accent">Avatar Studio</p>
           <h2 className="mt-1 text-lg font-semibold tracking-tight">Image result</h2>
         </div>
-        <p className="rounded-full border border-white/10 px-3 py-1 font-mono text-[11px] text-muted">
-          Flux · 10 credits
+        <p className="rounded-full border border-line px-3 py-1 font-mono text-[11px] text-muted">
+          {aspect} · image
         </p>
       </div>
       <div className="mt-6 grid gap-4 sm:grid-cols-2">
         <figure>
           <figcaption className="mb-2 text-xs uppercase tracking-[0.16em] text-muted">Input</figcaption>
           {source ? (
-            <div className="overflow-hidden rounded-2xl bg-black ring-1 ring-white/10">
+            <div className="overflow-hidden rounded-2xl bg-black ring-1 ring-line">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={source} alt="" className="aspect-square w-full object-contain" />
-              <div className="flex gap-2 border-t border-white/10 p-2">
+              <div className="flex gap-2 border-t border-line p-2">
                 <button
                   type="button"
                   onClick={onChange}
                   disabled={running}
-                  className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-foreground transition hover:border-cyan-300/70 hover:text-cyan-100"
+                  className="rounded-full border border-line px-3 py-1.5 text-xs text-foreground transition hover:border-accent hover:text-accent"
                 >
                   Change Image
                 </button>
@@ -1763,21 +2429,21 @@ function ImageResultPanel({
                   type="button"
                   onClick={onRemove}
                   disabled={running}
-                  className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-foreground transition hover:border-cyan-300/70 hover:text-cyan-100"
+                  className="rounded-full border border-line px-3 py-1.5 text-xs text-foreground transition hover:border-accent hover:text-accent"
                 >
                   Remove
                 </button>
               </div>
             </div>
           ) : (
-            <div className="grid aspect-square place-items-center rounded-2xl border border-dashed border-white/15 px-4 text-center text-sm text-muted">
-              Upload an image
+            <div className="grid aspect-square place-items-center rounded-2xl border border-dashed border-line px-4 text-center text-sm text-muted">
+              No input image. The prompt is used on its own.
             </div>
           )}
         </figure>
         <figure>
           <figcaption className="mb-2 text-xs uppercase tracking-[0.16em] text-muted">Output</figcaption>
-          <div className="relative aspect-square overflow-hidden rounded-2xl bg-black ring-1 ring-cyan-300/20">
+          <div className={cn("relative overflow-hidden rounded-2xl bg-black ring-1 ring-line", imageAspectFrameClass(aspect))}>
             {result ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -1793,12 +2459,15 @@ function ImageResultPanel({
             {running || (result && !outputReady) ? (
               <div
                 role="status"
-                aria-label="Rendering image"
-                className="gen-skeleton gen-skeleton-live absolute inset-0 grid place-items-center"
+                aria-live="polite"
+                className="gen-skeleton gen-skeleton-live absolute inset-0 grid place-items-center gap-3 px-4 text-center"
               >
-                <span className="grid h-12 w-12 place-items-center rounded-full border border-white/15 bg-black/50 text-cyan-100">
+                <span className="grid h-12 w-12 place-items-center rounded-full border border-line bg-black/50 text-white">
                   <Spinner />
                 </span>
+                {running ? (
+                  <p className="max-w-[16rem] text-sm text-foreground">{statusMessage || "Rendering the image."}</p>
+                ) : null}
               </div>
             ) : null}
             {!running && !result ? (

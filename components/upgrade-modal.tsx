@@ -5,29 +5,32 @@ import { UpgradeNowButton } from "@/components/upgrade-now-button";
 
 const TIERS = [
   {
+    id: "topup" as const,
+    name: "Top-up Boost",
+    price: "$10",
+    cadence: "one-time",
+    credits: "150 credits",
+    detail: "15 five-second clips, character reference sheets, and the standard queue.",
+    label: "Buy Credits",
+  },
+  {
     id: "starter" as const,
-    name: "Starter",
+    name: "Starter Plan",
     price: "$15",
     cadence: "/mo",
     credits: "300 credits",
-    detail: "A monthly pack for draft shorts.",
+    detail: "3 full short movies, 30 five-second clips, character sheets, and priority rendering.",
+    featured: true,
+    label: "Start Now",
   },
   {
     id: "pro" as const,
-    name: "Pro",
+    name: "Pro Plan",
     price: "$40",
     cadence: "/mo",
     credits: "1,000 credits",
-    detail: "The monthly plan for regular Studio Fast Motion.",
-    featured: true,
-  },
-  {
-    id: "ultra" as const,
-    name: "Ultra",
-    price: "$120",
-    cadence: "/mo",
-    credits: "3,500 credits",
-    detail: "The largest monthly pack on the pricing page.",
+    detail: "10 full short movies, 100 five-second clips, 2x priority, and unlimited character sheets.",
+    label: "Start Now",
   },
 ];
 
@@ -60,7 +63,7 @@ export function UpgradeModal({ open, onClose }: { open: boolean; onClose: () => 
         role="dialog"
         aria-modal="true"
         aria-labelledby="upgrade-modal-title"
-        className="relative max-h-[92dvh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-white/10 bg-[#12100e] p-5 text-foreground shadow-[0_24px_80px_rgba(0,0,0,0.45)] sm:p-8"
+        className="relative max-h-[92dvh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-line bg-[var(--surface,#ffffff)] p-5 text-foreground shadow-[0_24px_80px_rgba(0,0,0,0.45)] sm:p-8"
       >
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -68,13 +71,13 @@ export function UpgradeModal({ open, onClose }: { open: boolean; onClose: () => 
               Upgrade your plan
             </h2>
             <p className="mt-2 max-w-xl text-sm leading-6 text-muted">
-              This render needs more credits. A 5s clip is 45, 15s is 135, 30s is 270, and 60s is 540.
+              This render needs more credits. A 5s clip is 10, 10s is 20, 15s is 30, 30s is 60, 45s is 90, and 60s is 120.
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border border-white/15 px-3 py-1.5 text-sm text-white/80 hover:text-white"
+            className="rounded-full border border-line px-3 py-1.5 text-sm text-muted hover:text-foreground"
           >
             Close
           </button>
@@ -85,9 +88,9 @@ export function UpgradeModal({ open, onClose }: { open: boolean; onClose: () => 
             <article
               key={tier.id}
               className={
-                tier.featured
+                "featured" in tier && tier.featured
                   ? "flex flex-col rounded-3xl border border-accent/70 bg-accent/10 p-5"
-                  : "flex flex-col rounded-3xl border border-white/10 bg-black/30 p-5"
+                  : "flex flex-col rounded-3xl border border-line bg-panel p-5"
               }
             >
               <h3 className="text-base font-semibold tracking-tight">{tier.name}</h3>
@@ -97,30 +100,13 @@ export function UpgradeModal({ open, onClose }: { open: boolean; onClose: () => 
               </p>
               <p className="mt-3 text-sm font-medium">{tier.credits}</p>
               <p className="mt-2 flex-1 text-sm leading-6 text-muted">{tier.detail}</p>
-              {tier.id === "ultra" ? (
-                <a
-                  href="/credits"
-                  className="mt-6 inline-flex h-11 items-center justify-center rounded-full border border-white/20 text-sm font-medium hover:bg-white/5"
-                >
-                  View plans
-                </a>
-              ) : (
-                <UpgradeNowButton
-                  plan={tier.id}
-                  className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-full bg-white text-sm font-medium text-black hover:bg-white/90 disabled:opacity-60"
-                />
-              )}
+              <UpgradeNowButton
+                plan={tier.id}
+                label={tier.label}
+                className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-full bg-foreground text-sm font-medium text-background hover:bg-foreground/90 disabled:opacity-60"
+              />
             </article>
           ))}
-        </div>
-
-        <div className="mt-6 flex flex-col items-start justify-between gap-3 rounded-2xl border border-white/10 px-4 py-4 sm:flex-row sm:items-center">
-          <p className="text-sm text-muted">Need a smaller pack? Buy 150 credits once.</p>
-          <UpgradeNowButton
-            plan="topup"
-            label="Buy 150 credits"
-            className="inline-flex h-11 items-center justify-center rounded-full border border-white/20 px-5 text-sm font-medium hover:bg-white/5 disabled:opacity-60"
-          />
         </div>
       </section>
     </div>

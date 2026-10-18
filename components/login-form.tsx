@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { Provider, Session, SupabaseClient } from "@supabase/supabase-js";
+import { Eye, EyeOff } from "lucide-react";
 import { useCredits } from "@/components/credit-provider";
 import { authServiceMessage, normalizeEmail, validateEmail, validatePassword } from "@/lib/auth";
 import { loginDestination } from "@/lib/billing";
@@ -33,7 +34,7 @@ function Field({
 }) {
   return (
     <div className="min-w-0 flex-1">
-      <label htmlFor={id} className="mb-2 block text-sm font-light text-white/70">
+      <label htmlFor={id} className="mb-2 block text-sm text-zinc-400">
         {label}
       </label>
       <input
@@ -47,7 +48,7 @@ function Field({
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? `${id}-error` : undefined}
         onChange={(event) => onChange(event.target.value)}
-        className="h-12 w-full rounded-xl border border-white/15 bg-[#121212] px-4 text-base font-light text-white outline-none transition-colors placeholder:text-white/30 focus:border-white/40"
+        className="h-12 w-full rounded-2xl border border-zinc-800 bg-zinc-950 px-4 text-base text-zinc-100 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-500"
       />
       {error ? (
         <p id={`${id}-error`} className="mt-1.5 text-sm text-[#ff9b8a]">
@@ -91,19 +92,19 @@ function GoogleMark() {
   return (
     <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4">
       <path
-        fill="#fff"
+        fill="#4285F4"
         d="M21.6 12.23c0-.74-.07-1.45-.19-2.14H12v4.05h5.38a4.6 4.6 0 0 1-2 3.02v2.5h3.24c1.9-1.75 2.98-4.32 2.98-7.43Z"
       />
       <path
-        fill="#fff"
+        fill="#34A853"
         d="M12 22c2.7 0 4.96-.9 6.62-2.44l-3.24-2.5c-.9.6-2.05.96-3.38.96-2.6 0-4.8-1.76-5.59-4.12H3.06v2.58A10 10 0 0 0 12 22Z"
       />
       <path
-        fill="#fff"
+        fill="#FBBC05"
         d="M6.41 13.9A6 6 0 0 1 6.1 12c0-.66.11-1.3.31-1.9V7.52H3.06A10 10 0 0 0 2 12c0 1.61.39 3.14 1.06 4.48l3.35-2.58Z"
       />
       <path
-        fill="#fff"
+        fill="#EA4335"
         d="M12 5.98c1.47 0 2.79.5 3.83 1.5l2.87-2.87C16.95 2.99 14.7 2 12 2A10 10 0 0 0 3.06 7.52l3.35 2.58C7.2 7.74 9.4 5.98 12 5.98Z"
       />
     </svg>
@@ -121,7 +122,7 @@ function FacebookMark() {
 function AppleMark() {
   return (
     <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4 fill-white">
-      <path d="M16.37 12.72c.03 2.4 2.1 3.2 2.13 3.21-.02.06-.33 1.14-1.1 2.26-.66.96-1.35 1.92-2.43 1.94-1.06.02-1.4-.63-2.62-.63-1.21 0-1.6.61-2.6.65-1.04.04-1.84-1.04-2.51-2-.1-.14-1.7-2.5-1.7-4.78 0-2.82 1.83-4.32 3.63-4.37 1.04-.02 2.02.7 2.62.7.6 0 1.72-.87 2.9-.74.49.02 1.88.2 2.77 1.5-.07.04-1.65 1-1.62 2.26ZM14.7 6.9c.55-.67.92-1.6.82-2.53-.79.03-1.75.53-2.32 1.2-.51.59-.96 1.54-.84 2.45.88.07 1.78-.45 2.34-1.12Z" />
+      <path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701" />
     </svg>
   );
 }
@@ -135,11 +136,12 @@ function openStudio(path: string) {
 export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
   const searchParams = useSearchParams();
   const { setAccountBalance } = useCredits();
-  const [mode, setMode] = useState<Mode>("create");
+  const [mode, setMode] = useState<Mode>("sign-in");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [firstNameError, setFirstNameError] = useState<string | null>(null);
   const [lastNameError, setLastNameError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
@@ -386,19 +388,42 @@ export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
           setEmailError(null);
         }}
       />
-      <Field
-        id="password"
-        label="Password"
-        type="password"
-        value={password}
-        autoComplete={mode === "create" ? "new-password" : "current-password"}
-        error={passwordError}
-        onChange={(value) => {
-          setPassword(value);
-          setPasswordError(null);
-        }}
-      />
-      <p className="text-xs font-light leading-5 text-white/45">
+      <div>
+        <label htmlFor="password" className="mb-2 block text-sm text-zinc-400">
+          Password
+        </label>
+        <div className="relative">
+          <input
+            id="password"
+            name="password"
+            type={showPassword ? "text" : "password"}
+            value={password}
+            autoComplete={mode === "create" ? "new-password" : "current-password"}
+            aria-invalid={passwordError ? true : undefined}
+            aria-describedby={passwordError ? "password-error" : undefined}
+            onChange={(event) => {
+              setPassword(event.target.value);
+              setPasswordError(null);
+            }}
+            className="h-12 w-full rounded-2xl border border-zinc-800 bg-zinc-950 px-4 pr-12 text-base text-zinc-100 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-500"
+          />
+          <button
+            type="button"
+            aria-label={showPassword ? "Hide password" : "Show password"}
+            aria-pressed={showPassword}
+            onClick={() => setShowPassword((current) => !current)}
+            className="absolute top-1/2 right-3 -translate-y-1/2 text-zinc-400 transition hover:text-zinc-200"
+          >
+            {showPassword ? <EyeOff className="h-4 w-4" aria-hidden /> : <Eye className="h-4 w-4" aria-hidden />}
+          </button>
+        </div>
+        {passwordError ? (
+          <p id="password-error" className="mt-1.5 text-sm text-[#ff9b8a]">
+            {passwordError}
+          </p>
+        ) : null}
+      </div>
+      <p className="text-xs leading-5 text-zinc-400">
         Use at least 8 characters, with a letter and a number.
       </p>
 
@@ -416,17 +441,23 @@ export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
       <button
         type="submit"
         disabled={pending}
-        className="mt-2 flex h-12 w-full items-center justify-center rounded-xl bg-white text-sm font-medium text-black transition-opacity enabled:hover:bg-white/90 disabled:cursor-wait disabled:opacity-60"
+        className="mt-2 flex h-12 w-full items-center justify-center rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-600 text-sm font-medium text-white transition hover:from-violet-500 hover:to-indigo-500 disabled:cursor-wait disabled:opacity-60"
       >
-        Continue
+        {mode === "sign-in" ? "Log in" : "Create account"}
       </button>
 
-      <div className="space-y-3 pt-1">
+      <div className="flex items-center gap-3 py-1" role="separator" aria-label="or">
+        <span className="h-px flex-1 border-t border-zinc-800" />
+        <span className="text-[11px] font-medium tracking-[0.16em] text-zinc-500 uppercase">OR</span>
+        <span className="h-px flex-1 border-t border-zinc-800" />
+      </div>
+
+      <div className="space-y-3">
         <button
           type="button"
           disabled={pending}
           onClick={() => void continueWithGoogle()}
-          className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-white/15 bg-transparent text-sm font-medium text-white transition-colors enabled:hover:bg-white/5 disabled:cursor-wait disabled:opacity-60"
+          className="flex h-12 w-full items-center justify-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-950 text-sm font-medium text-white transition hover:bg-zinc-900 disabled:cursor-wait disabled:opacity-60"
         >
           <GoogleMark />
           Continue with Google
@@ -435,7 +466,7 @@ export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
           type="button"
           disabled={pending}
           onClick={() => void continueWithFacebook()}
-          className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-white/15 bg-transparent text-sm font-medium text-white transition-colors enabled:hover:bg-white/5 disabled:cursor-wait disabled:opacity-60"
+          className="flex h-12 w-full items-center justify-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-950 text-sm font-medium text-white transition hover:bg-zinc-900 disabled:cursor-wait disabled:opacity-60"
         >
           <FacebookMark />
           Continue with Facebook
@@ -444,14 +475,14 @@ export function LoginForm({ supabase }: { supabase: SupabaseClient }) {
           type="button"
           disabled={pending}
           onClick={() => void continueWith("apple")}
-          className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-white/15 bg-transparent text-sm font-medium text-white transition-colors enabled:hover:bg-white/5 disabled:cursor-wait disabled:opacity-60"
+          className="flex h-12 w-full items-center justify-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-950 text-sm font-medium text-white transition hover:bg-zinc-900 disabled:cursor-wait disabled:opacity-60"
         >
           <AppleMark />
           Continue with Apple
         </button>
       </div>
 
-      <p className="pt-3 text-center text-sm font-light text-white/55">
+      <p className="pt-3 text-center text-sm text-zinc-400">
         {mode === "create" ? (
           <>
             Already have an account?{" "}

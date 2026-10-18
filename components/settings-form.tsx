@@ -49,7 +49,7 @@ export function SettingsForm() {
           >
             {VOICES.map((option) => (
               <option key={option.id} value={option.id}>
-                {option.name}
+                {option.name} · {option.gender === "male" ? "Male" : "Female"}
               </option>
             ))}
           </select>
@@ -58,11 +58,11 @@ export function SettingsForm() {
           </p>
         </div>
 
-        <dl className="mt-6 overflow-hidden rounded-2xl border border-white/10 bg-black/25">
+        <dl className="mt-6 overflow-hidden rounded-2xl border border-line bg-panel">
           {GENERAL.map(([label, value]) => (
             <div
               key={label}
-              className="flex items-center justify-between gap-4 border-t border-white/10 px-4 py-3 first:border-t-0"
+              className="flex items-center justify-between gap-4 border-t border-line px-4 py-3 first:border-t-0"
             >
               <dt className="text-sm text-muted">{label}</dt>
               <dd className="text-sm font-medium">{value}</dd>

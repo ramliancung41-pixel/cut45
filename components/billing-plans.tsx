@@ -31,7 +31,7 @@ export function BillingPlans() {
                 <h3 className="text-base font-semibold tracking-tight">{plan.name}</h3>
                 {plan.featured ? (
                   <span className="rounded-full bg-gradient-to-r from-cyan-300 to-orange-400 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-[#071018]">
-                    Pro
+                    Popular
                   </span>
                 ) : null}
               </div>

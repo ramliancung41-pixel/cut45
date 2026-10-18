@@ -55,7 +55,7 @@ type CreditContextValue = {
   connecting: boolean;
   startCheckout: (credits: number) => Promise<void>;
   deductForEngine: (engine: VisualEngineId, imageToVideo?: boolean) => void;
-  deductImageCredits: () => void;
+  deductImageCredits: (cost?: number, imageModel?: string) => void;
   deductExtendCredits: () => void;
   archiveProject: (project: ArchiveProject) => void;
   setAccountBalance: (tokens: number) => void;
@@ -178,17 +178,18 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
           })
           .catch(() => undefined);
       },
-      deductImageCredits() {
+      deductImageCredits(cost = IMAGE_GENERATION_COST, imageModel) {
         hydratedRef.current = true;
-        const next = Math.max(0, creditsRef.current - IMAGE_GENERATION_COST);
+        const charged = Math.max(1, Math.round(cost));
+        const next = Math.max(0, creditsRef.current - charged);
         creditsRef.current = next;
         setCredits(next);
         setLedger((rows) => [
           {
             id: `spend_${Date.now().toString(36)}`,
             when: "Now",
-            item: "Image-to-image",
-            change: `−${IMAGE_GENERATION_COST}`,
+            item: "Image generation",
+            change: `−${charged}`,
             balance: next,
           },
           ...rows,
@@ -196,7 +197,7 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
         void fetch("/api/credits/spend", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ kind: "image" }),
+          body: JSON.stringify({ kind: "image", imageModel }),
         })
           .then((response) => response.json())
           .then((payload: { credits?: number }) => {
@@ -274,7 +275,7 @@ export function CreditProvider({ children }: { children: React.ReactNode }) {
       {approval ? (
         <p
           role="status"
-          className="fixed right-4 bottom-4 z-50 max-w-sm rounded-2xl border border-ok/50 bg-[#1c2414] px-4 py-3 text-sm font-medium text-ok shadow-lg"
+          className="fixed right-4 bottom-4 z-50 max-w-sm rounded-2xl border border-ok/50 bg-white px-4 py-3 text-sm font-medium text-ok shadow-lg"
         >
           {approval}
         </p>

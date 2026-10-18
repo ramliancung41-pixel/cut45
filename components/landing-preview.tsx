@@ -1,77 +1,48 @@
-type VideoFrame = {
-  kind: "video";
-  src: string;
-  label: string;
-};
-
-type SceneFrame = {
-  kind: "scene";
-  src: string;
-  label: string;
-  alt: string;
-  motion: "preview-cruise" | "preview-descent";
-  rain?: boolean;
-};
-
-const FRAMES: Array<VideoFrame | SceneFrame> = [
+const SHOWCASES = [
   {
-    kind: "scene",
-    src: "/landing/cut45-cyberpunk-hypercar.png",
-    label: "0:00",
-    alt: "Glossy chrome hypercar on a rain-slicked street under pink and cyan neon.",
-    motion: "preview-cruise",
-    rain: true,
+    src: "/landing/cut45-pixar-robot.mp4",
+    label: "Cute 3D robot exploring a glowing bioluminescent forest.",
+    border: "from-cyan-300/80 via-amber-200/40 to-teal-400/70",
+    glow: "shadow-[0_0_42px_rgba(45,212,191,0.32)]",
   },
   {
-    kind: "video",
-    src: "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
-    label: "0:05",
+    src: "/landing/cut45-anime-magic.mp4",
+    label: "3D anime character leaping through glowing magic rings.",
+    border: "from-fuchsia-400/80 via-amber-200/35 to-violet-500/70",
+    glow: "shadow-[0_0_42px_rgba(217,70,239,0.32)]",
   },
   {
-    kind: "scene",
-    src: "/landing/cut45-colony-descent.png",
-    label: "0:10",
-    alt: "Futuristic colony ship descending over an alien surface beneath ringed moons.",
-    motion: "preview-descent",
+    src: "/landing/cut45-cyber-city.mp4",
+    label: "Cyberpunk character in a neon city with volumetric rain light.",
+    border: "from-cyan-300/80 via-fuchsia-400/40 to-blue-500/70",
+    glow: "shadow-[0_0_42px_rgba(34,211,238,0.32)]",
   },
   {
-    kind: "video",
-    src: "https://upload.wikimedia.org/wikipedia/commons/9/93/Axonal_nerve_fibers_in_a_brain_-_the_neural_network_that_is_us.webm",
-    label: "0:15",
+    src: "/landing/cut45-clay-diorama.mp4",
+    label: "Claymation miniature village on a floating island under studio light.",
+    border: "from-amber-200/80 via-white/30 to-emerald-300/70",
+    glow: "shadow-[0_0_42px_rgba(251,191,36,0.28)]",
   },
-];
+] as const;
 
 export function LandingPreview() {
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4">
-      {FRAMES.map((frame) => (
-        <figure key={frame.label} className="min-w-0">
-          <div className="relative aspect-[9/16] overflow-hidden rounded-2xl border border-gray-800 bg-black shadow-[0_24px_60px_rgba(0,0,0,0.45)]">
-            {frame.kind === "video" ? (
+    <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+      {SHOWCASES.map((frame) => (
+        <figure key={frame.src} className="min-w-0">
+          <div className={`rounded-2xl bg-gradient-to-br p-px ${frame.border} ${frame.glow}`}>
+            <div className="relative aspect-[9/16] overflow-hidden rounded-[15px] bg-black">
               <video
                 src={frame.src}
                 autoPlay
                 muted
                 loop
                 playsInline
-                preload="metadata"
+                preload="auto"
+                aria-label={frame.label}
                 className="h-full w-full object-cover"
               />
-            ) : (
-              <>
-                <img src={frame.src} alt={frame.alt} className={frame.motion} />
-                {frame.rain ? (
-                  <div aria-hidden className="preview-rain pointer-events-none absolute inset-0" />
-                ) : null}
-                <div
-                  aria-hidden
-                  className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/10 via-transparent to-black/35"
-                />
-              </>
-            )}
-            <figcaption className="absolute bottom-3 left-3 rounded-full border border-gray-800 bg-black/70 px-2.5 py-1 font-mono text-[11px] text-white backdrop-blur">
-              {frame.label}
-            </figcaption>
+            </div>
           </div>
         </figure>
       ))}

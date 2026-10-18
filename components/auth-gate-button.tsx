@@ -34,6 +34,10 @@ export function AuthGateButton({
       }
       return;
     }
+    if (plan === "starter" || plan === "pro" || plan === "topup") {
+      window.location.assign(`/api/billing/checkout?plan=${plan}`);
+      return;
+    }
     if (credits && credits > 0) {
       await startCheckout(credits);
       setChecking(false);

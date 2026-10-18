@@ -42,11 +42,11 @@ export default function DashboardPage() {
             <CreditFigure />
           </dd>
         </div>
-        <div className="border-t border-white/10 px-5 py-4 sm:border-t-0">
+        <div className="border-t border-line px-5 py-4 sm:border-t-0">
           <dt className="text-sm text-muted">Length</dt>
           <dd className="mt-1 text-2xl font-semibold tracking-tight">45s</dd>
         </div>
-        <div className="border-t border-white/10 px-5 py-4 sm:border-t-0">
+        <div className="border-t border-line px-5 py-4 sm:border-t-0">
           <dt className="text-sm text-muted">Picture</dt>
           <dd className="mt-1 text-2xl font-semibold tracking-tight">9:16</dd>
         </div>

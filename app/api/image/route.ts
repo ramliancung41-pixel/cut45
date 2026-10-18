@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { IMAGE_GENERATION_COST } from "@/lib/credits";
-import { renderFluxImage } from "@/lib/fal-image";
+import { renderStudioImage } from "@/lib/fal-image";
 import { parseReferenceImage } from "@/lib/fal-video";
+import { DEFAULT_IMAGE_ASPECT, isImageAspectId } from "@/lib/image-aspects";
+import { DEFAULT_IMAGE_MODEL, getImageModel, isImageModelId } from "@/lib/image-models";
 import { composeImagePrompt, isImageStyleId } from "@/lib/image-styles";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +12,8 @@ export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => null)) as {
     prompt?: unknown;
     style?: unknown;
+    model?: unknown;
+    aspect?: unknown;
     referenceImage?: unknown;
   } | null;
 
@@ -21,19 +24,31 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Choose a style preset from the list." }, { status: 400 });
   }
 
+  const modelValue = typeof body?.model === "string" ? body.model : DEFAULT_IMAGE_MODEL;
+  if (!isImageModelId(modelValue)) {
+    return NextResponse.json({ error: "Choose an image model from the list." }, { status: 400 });
+  }
+  const model = getImageModel(modelValue);
+  const aspectValue = typeof body?.aspect === "string" ? body.aspect : DEFAULT_IMAGE_ASPECT;
+  if (!isImageAspectId(aspectValue)) {
+    return NextResponse.json({ error: "Choose an aspect ratio from the list." }, { status: 400 });
+  }
+
   const composed = composeImagePrompt(prompt, style);
   if (composed.length < 3) {
     return NextResponse.json({ error: "Write a style prompt or pick a preset." }, { status: 400 });
   }
 
   const image = parseReferenceImage(body?.referenceImage);
-  if (image === "invalid" || !image) {
+  if (image === "invalid") {
     return NextResponse.json({ error: "Upload a JPEG, PNG, or WebP input image." }, { status: 400 });
   }
 
   try {
-    const rendered = await renderFluxImage({
+    const rendered = await renderStudioImage({
       prompt: composed,
+      model: model.id,
+      aspect: aspectValue,
       image,
       signal: request.signal,
     });
@@ -45,7 +60,10 @@ export async function POST(request: NextRequest) {
       id: `img_${Date.now().toString(36)}`,
       imageUrl: rendered.imageUrl,
       prompt: composed,
-      creditsCharged: IMAGE_GENERATION_COST,
+      model: model.id,
+      modelName: model.name,
+      aspect: aspectValue,
+      creditsCharged: model.credits,
     });
   } catch (error) {
     console.error("Fal image generation failed", error);

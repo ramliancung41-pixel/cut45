@@ -12,7 +12,7 @@ export default function LoginPage() {
   return (
     <div className="auth-stage">
       <div className="relative w-full max-w-[440px]">
-        <section className="rounded-3xl border border-white/10 bg-[#0a0a0a]/90 px-5 py-8 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur-sm sm:px-8 sm:py-10">
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-900/80 px-5 py-8 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur sm:px-8 sm:py-10">
           <div className="flex flex-col items-center text-center">
             <span
               aria-hidden
@@ -21,10 +21,11 @@ export default function LoginPage() {
             <h1 className="mt-5 text-[1.75rem] font-medium tracking-tight text-white sm:text-3xl">
               Create with Cut45
             </h1>
+            <p className="mt-2 text-sm text-zinc-400">Sign in to continue, or create an account.</p>
           </div>
           <div className="mt-8">
             {supabase ? (
-              <Suspense fallback={<p className="text-center text-sm text-white/50">Loading…</p>}>
+              <Suspense fallback={<p className="text-center text-sm text-zinc-400">Loading…</p>}>
                 <LoginForm supabase={supabase} />
               </Suspense>
             ) : (

@@ -80,13 +80,39 @@ export function VideoGenerationTest() {
       mark("voice", "done");
       mark("video", "running");
 
-      const filmed = await post({
+      let filmed = await post({
         step: "video",
         prompt: prompt.trim(),
         style,
         visualPrompt,
       });
+      const started = Date.now();
+      while (filmed.pending && filmed.statusUrl && filmed.responseUrl && Date.now() - started < 8 * 60 * 1000) {
+        console.info("Fal.ai queue is still rendering this clip.");
+        const status = await fetch("/api/video/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ statusUrl: filmed.statusUrl, responseUrl: filmed.responseUrl }),
+        });
+        const payload = (await status.json().catch(() => null)) as {
+          videoUrl?: string;
+          pending?: boolean;
+          error?: string;
+        } | null;
+        if (!status.ok && !payload?.pending) {
+          throw new Error(payload?.error || "Fal.ai could not finish this clip.");
+        }
+        if (typeof payload?.videoUrl === "string") {
+          filmed = { ...filmed, videoUrl: payload.videoUrl, pending: false };
+          break;
+        }
+        if (payload?.error) {
+          console.error("Fal video status failed", payload.error);
+          throw new Error(payload.error);
+        }
+      }
       const url = String(filmed.videoUrl ?? "");
+      if (!url) throw new Error("Fal.ai is still rendering this clip. Try again in a moment.");
       const credits = Number(filmed.credits);
       setVideoUrl(url);
       mark("video", "done");
@@ -107,6 +133,7 @@ export function VideoGenerationTest() {
       }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Generation failed.";
+      console.error("Video generation failed", message);
       setError(message);
       setSteps((current) => {
         const next = { ...current };

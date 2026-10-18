@@ -25,8 +25,6 @@ const STRIPE_PAYMENT_LINK_PRO = process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK_PRO?
 const STRIPE_PAYMENT_LINK_TOPUP =
   process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK_TOPUP?.trim() ?? "";
 
-const EXTRA_PLAN_GRANTS = { ultra: 3500 } as const;
-
 export function isBillingPlanId(plan: string | null): plan is BillingPlanId {
   return plan === "starter" || plan === "pro" || plan === "topup";
 }
@@ -58,9 +56,6 @@ export function stripeCheckoutDestination(plan: BillingPlanId, userId: string) {
 
 export function creditGrantForPlan(plan: string | null) {
   if (!plan) return null;
-  if (plan in EXTRA_PLAN_GRANTS) {
-    return EXTRA_PLAN_GRANTS[plan as keyof typeof EXTRA_PLAN_GRANTS];
-  }
   const match = BILLING_PLANS.find((item) => item.id === plan);
   return match?.creditGrant ?? null;
 }
@@ -81,15 +76,29 @@ export function loginDestination(params: {
 
 export const BILLING_PLANS: BillingPlan[] = [
   {
+    id: "topup",
+    name: "Top-up Boost",
+    price: "$10",
+    cadence: "one-time",
+    credits: "150 Credits",
+    volume: "15 x 5s video clips",
+    summary: "150 seconds of video, character reference sheets, and the standard queue.",
+    creditGrant: 150,
+    featured: false,
+    stripePaymentLink: STRIPE_PAYMENT_LINK_TOPUP,
+    stripePaymentLinkEnv: "NEXT_PUBLIC_STRIPE_PAYMENT_LINK_TOPUP",
+    checkoutHref: "/api/billing/checkout?plan=topup",
+  },
+  {
     id: "starter",
     name: "Starter Plan",
     price: "$15",
     cadence: "/mo",
     credits: "300 Credits",
-    volume: "~20-30 Draft Shorts",
-    summary: "A monthly pack for draft shorts on the free stock engine.",
+    volume: "3 x Full Short Movies",
+    summary: "Three 45-second movies, 30 five-second clips, character reference sheets, and priority rendering.",
     creditGrant: 300,
-    featured: false,
+    featured: true,
     stripePaymentLink: STRIPE_PAYMENT_LINK_STARTER,
     stripePaymentLinkEnv: "NEXT_PUBLIC_STRIPE_PAYMENT_LINK_STARTER",
     checkoutHref: "/api/billing/checkout?plan=starter",
@@ -100,26 +109,12 @@ export const BILLING_PLANS: BillingPlan[] = [
     price: "$40",
     cadence: "/mo",
     credits: "1,000 Credits",
-    volume: "~80-100 Premium Shorts",
-    summary: "The monthly plan sized for premium shorts once paid video is live.",
+    volume: "10 x Full Short Movies",
+    summary: "Ten full short movies, 100 five-second clips, a 2x priority queue, and unlimited character reference sheets.",
     creditGrant: 1000,
-    featured: true,
+    featured: false,
     stripePaymentLink: STRIPE_PAYMENT_LINK_PRO,
     stripePaymentLinkEnv: "NEXT_PUBLIC_STRIPE_PAYMENT_LINK_PRO",
     checkoutHref: "/api/billing/checkout?plan=pro",
-  },
-  {
-    id: "topup",
-    name: "Top-up Pack",
-    price: "$10",
-    cadence: "one-time",
-    credits: "150 Credits",
-    volume: "Pay-as-you-go",
-    summary: "A one-time pack you can buy whenever a run needs more credits.",
-    creditGrant: 150,
-    featured: false,
-    stripePaymentLink: STRIPE_PAYMENT_LINK_TOPUP,
-    stripePaymentLinkEnv: "NEXT_PUBLIC_STRIPE_PAYMENT_LINK_TOPUP",
-    checkoutHref: "/api/billing/checkout?plan=topup",
   },
 ];

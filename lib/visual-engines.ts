@@ -17,7 +17,7 @@ export const VISUAL_ENGINES: VisualEngine[] = [
   {
     id: "budget",
     name: "Studio Fast Motion",
-    rate: "45 credits",
+    rate: "20 credits / 10s",
     description: "High quality render",
   },
   {

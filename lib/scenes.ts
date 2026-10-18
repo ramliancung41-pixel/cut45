@@ -1,7 +1,7 @@
-import { BUDGET_GENERATION_COST, EXTEND_VIDEO_COST, BUDGET_IMAGE_GENERATION_COST } from "@/lib/credits";
+import { CREDITS_PER_SECOND } from "@/lib/credits";
 
 export const CLIP_DURATION_SEC = 5;
-export const VIDEO_DURATIONS = [5, 15, 30, 60] as const;
+export const VIDEO_DURATIONS = [5, 10, 15, 30, 45, 60] as const;
 export type VideoDurationSec = (typeof VIDEO_DURATIONS)[number];
 export const MOVIE_SCENE_COUNT = 3;
 export const MAX_MOVIE_SCENES = 12;
@@ -19,12 +19,12 @@ export type MovieScene = {
   narration: string;
   visualPrompt: string;
   referenceNote: string;
+  motionPrompt?: string;
 };
 
-export function movieCreditCost(sceneCount: number, firstHasImage: boolean) {
+export function movieCreditCost(sceneCount: number, _firstHasImage = false) {
   if (sceneCount <= 0) return 0;
-  const first = firstHasImage ? BUDGET_IMAGE_GENERATION_COST : BUDGET_GENERATION_COST;
-  return first + Math.max(0, sceneCount - 1) * EXTEND_VIDEO_COST;
+  return sceneCount * CLIP_DURATION_SEC * CREDITS_PER_SECOND;
 }
 
 export function parseMovieScenes(value: unknown, maxCount = MAX_MOVIE_SCENES): MovieScene[] | null {
@@ -36,15 +36,17 @@ export function parseMovieScenes(value: unknown, maxCount = MAX_MOVIE_SCENES): M
     const record = item as Record<string, unknown>;
     const title = typeof record.title === "string" ? record.title.trim().slice(0, 80) : "";
     const narration = typeof record.narration === "string" ? record.narration.trim().slice(0, 1200) : "";
-    const visualPrompt = typeof record.visualPrompt === "string" ? record.visualPrompt.trim().slice(0, 800) : "";
+    const visualPrompt = typeof record.visualPrompt === "string" ? record.visualPrompt.trim().slice(0, 1200) : "";
     const referenceNote =
       typeof record.referenceNote === "string" ? record.referenceNote.trim().slice(0, 240) : "";
+    const motionPrompt = typeof record.motionPrompt === "string" ? record.motionPrompt.trim().slice(0, 500) : "";
     if (title.length < 2 || narration.length < 20 || visualPrompt.length < 12) return null;
     scenes.push({
       title,
       narration,
       visualPrompt,
       referenceNote: referenceNote || "Keep the same subject, wardrobe, and lighting in every scene.",
+      ...(motionPrompt ? { motionPrompt } : {}),
     });
   }
   return scenes.length > 0 ? scenes : null;

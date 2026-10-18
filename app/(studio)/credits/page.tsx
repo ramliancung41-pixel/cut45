@@ -16,7 +16,7 @@ export default function CreditsPage() {
       <PageHeader
         eyebrow="Account"
         title="Credits & Billing"
-        description="Free stock costs 0 credits. Budget AI motion costs 45 credits. Ultra cinematic costs 180 credits. Starter adds 300 credits, Pro adds 1,000, and the top-up adds 150."
+        description="Studio Fast Motion costs 20 credits per 10 seconds. Ultra cinematic costs 180 credits. Starter adds 300 credits, Pro adds 1,000, and the top-up adds 150."
       />
 
       <div className="gen-glass rounded-3xl px-5 py-6">
@@ -25,7 +25,7 @@ export default function CreditsPage() {
           <CreditFigure />
         </p>
         <p className="mt-2 text-sm text-muted">
-          This is the live balance. Stock footage stays at 0 credits. Budget spends 45. Ultra spends 180.
+          This is the live balance. Studio Fast Motion spends 2 credits per second. Ultra spends 180.
         </p>
       </div>
 

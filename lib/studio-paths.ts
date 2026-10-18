@@ -6,6 +6,12 @@ const STUDIO_PATHS = [
   "/credits",
   "/gallery",
   "/settings",
+  "/editor",
+  "/agent",
+  "/workflows",
+  "/plugins",
+  "/assets",
+  "/brand",
 ] as const;
 
 export function isStudioPath(pathname: string) {
