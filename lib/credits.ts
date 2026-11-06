@@ -1,5 +1,4 @@
 import type { VisualEngineId } from "@/lib/visual-engines";
-import { videoClipCreditCost, type VideoModelId, type VideoResolution } from "@/lib/video-models";
 
 export const INITIAL_CREDITS = 0;
 export const FREE_TIER_CREDITS = 60;
@@ -38,26 +37,12 @@ export function generationHoldCost(input: {
   engine: VisualEngineId;
   imageToVideo: boolean;
   durationSec?: number | null;
-  videoModel?: VideoModelId | null;
-  resolution?: VideoResolution | null;
 }) {
-  const clipSeconds = input.durationSec && input.durationSec >= 10 ? 10 : 5;
-  const singleSeconds =
-    !input.extend && !input.scene && input.engine === "budget" && input.durationSec && input.durationSec > 5 && input.durationSec <= 10
-      ? input.durationSec
-      : null;
-  const modelCost =
-    !input.extend && !input.scene
-      ? videoClipCreditCost(input.videoModel, input.resolution, clipSeconds)
-      : null;
   const clipCost = input.extend
     ? durationCreditCost(45) ?? EXTEND_VIDEO_COST
     : input.scene
       ? durationCreditCost(5) ?? BUDGET_GENERATION_COST
-      : modelCost ??
-        (singleSeconds
-        ? durationCreditCost(singleSeconds) ?? generationCreditCost(input.engine, input.imageToVideo)
-        : generationCreditCost(input.engine, input.imageToVideo));
+      : generationCreditCost(input.engine, input.imageToVideo);
   const scheduled =
     input.scene && !input.continuation && input.durationSec
       ? durationCreditCost(input.durationSec)

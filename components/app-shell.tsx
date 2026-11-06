@@ -3,7 +3,7 @@
 import { Sora } from "next/font/google";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useCredits } from "@/components/credit-provider";
 import { useStudioAccount } from "@/components/profile-credit-bar";
 import { StudioChromeProvider } from "@/components/studio-chrome";
@@ -23,72 +23,34 @@ type RailItem = {
   newChat?: boolean;
 };
 
-const never = () => false;
-
-const RAIL_GROUPS: RailItem[][] = [
+const RAIL: RailItem[][] = [
   [
     {
       href: "/generator",
       label: "Home",
       icon: <HomeIcon />,
-      match: (pathname, mode) => pathname === "/generator" && !mode,
+      match: (pathname, mode) => (pathname === "/generator" || pathname === "/create") && mode !== "video",
     },
-    {
-      href: "/agent",
-      label: "Agent",
-      icon: <AgentIcon />,
-      match: (pathname) => pathname === "/agent",
-    },
-  ],
-  [
     {
       href: "/generator?mode=video",
-      label: "Video",
+      label: "45s Story",
       icon: <VideoIcon />,
       match: (pathname, mode) => pathname === "/generator" && mode === "video",
     },
-    {
-      href: "/generator?mode=image",
-      label: "Image",
-      icon: <ImageIcon />,
-      match: (pathname, mode) => pathname === "/generator" && mode === "image",
-    },
-    {
-      href: "/generator?mode=image&tool=filters",
-      label: "AI Filters",
-      icon: <FaceIcon />,
-      match: (pathname, mode) => pathname === "/generator" && mode === "filters",
-    },
   ],
   [
-    {
-      href: "/gallery",
-      label: "Gallery",
-      icon: <CompassIcon />,
-      match: (pathname) => pathname.startsWith("/gallery"),
-    },
     {
       href: "/credits",
       label: "Credits",
-      icon: <FolderIcon />,
-      match: (pathname) => pathname.startsWith("/credits"),
+      icon: <CoinTabIcon />,
+      match: (pathname) => pathname.startsWith("/credits") || pathname.startsWith("/pricing"),
     },
-  ],
-];
-
-const AGENT_RAIL: RailItem[][] = [
-  [{ href: "/agent", label: "New Chat", icon: <NewChatIcon />, match: never, newChat: true }],
-  [
-    { href: "/generator", label: "Home", icon: <HomeIcon />, match: never },
-    { href: "/agent", label: "Agent", icon: <AgentIcon />, match: (pathname) => pathname === "/agent" },
-    { href: "/generator?mode=video", label: "Tools", icon: <ToolsIcon />, match: never },
-    { href: "/workflows", label: "Workflows", icon: <WorkflowIcon />, match: (pathname) => pathname === "/workflows" },
-    { href: "/plugins", label: "Plugins", icon: <PluginIcon />, match: (pathname) => pathname === "/plugins" },
-  ],
-  [
-    { href: "/gallery", label: "Projects", icon: <FolderIcon />, match: never },
-    { href: "/assets", label: "Assets", icon: <ImageIcon />, match: (pathname) => pathname === "/assets" },
-    { href: "/brand", label: "Brand", icon: <BrandIcon />, match: (pathname) => pathname === "/brand" },
+    {
+      href: "/settings",
+      label: "Settings",
+      icon: <KeyIcon />,
+      match: (pathname) => pathname.startsWith("/settings"),
+    },
   ],
 ];
 
@@ -99,6 +61,29 @@ const sora = Sora({
   variable: "--font-studio",
 });
 
+const DESKTOP_QUERY = "(min-width: 1100px)";
+
+function subscribeDesktop(onChange: () => void) {
+  const query = window.matchMedia(DESKTOP_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+function useDesktop() {
+  return useSyncExternalStore(
+    subscribeDesktop,
+    () => window.matchMedia(DESKTOP_QUERY).matches,
+    () => false,
+  );
+}
+
+const MOBILE_TABS: Array<{ href: string; label: string; icon: React.ReactNode; match: (pathname: string) => boolean }> = [
+  { href: "/generator", label: "Create", icon: <SparkOutlineIcon />, match: (pathname) => pathname === "/generator" || pathname === "/create" },
+  { href: "/gallery", label: "Library", icon: <FolderIcon />, match: (pathname) => pathname.startsWith("/gallery") },
+  { href: "/pricing", label: "Credits", icon: <CoinTabIcon />, match: (pathname) => pathname.startsWith("/credits") },
+  { href: "/settings", label: "API key", icon: <KeyIcon />, match: (pathname) => pathname.startsWith("/settings") },
+];
+
 function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
@@ -106,13 +91,21 @@ function cn(...parts: Array<string | false | null | undefined>) {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [expanded, setExpanded] = useState(false);
+  const desktop = useDesktop();
+  const open = expanded || desktop;
   const [copilotOpen, setCopilotOpen] = useState(false);
   const { account, ready, signOut } = useStudioAccount();
   const [railPath, setRailPath] = useState(pathname);
   const agentPage = pathname === "/agent";
   const workspacePage = WORKSPACE_PATHS.includes(pathname);
-  const darkPage = workspacePage || pathname === "/generator" || pathname === "/create";
-  const groups = workspacePage ? AGENT_RAIL : RAIL_GROUPS;
+  const darkPage =
+    workspacePage ||
+    pathname === "/generator" ||
+    pathname === "/create" ||
+    pathname.startsWith("/gallery") ||
+    pathname.startsWith("/credits") ||
+    pathname.startsWith("/pricing");
+  const groups = RAIL;
 
   const railRef = useRef<HTMLElement>(null);
   const collapse = () => setExpanded(false);
@@ -140,36 +133,57 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <StudioChromeProvider value={setCopilotOpen}>
-      <div className={cn(sora.variable, "studio-type studio-light min-h-[100dvh] overflow-x-hidden", darkPage && "studio-dark")}>
+      <div className={cn(sora.variable, "studio-type studio-light min-h-[100dvh] overflow-x-clip", darkPage && "studio-dark")}>
         <div
           aria-hidden
           className={cn(
-            "fixed inset-0 z-40 bg-black/30 transition-opacity duration-200 md:hidden",
+            "fixed inset-0 z-40 bg-black/30 transition-opacity duration-200 min-[1100px]:hidden",
             expanded ? "opacity-100" : "pointer-events-none opacity-0",
           )}
         />
+        <button
+          type="button"
+          aria-label="Open menu"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(true)}
+          className="fixed top-2 left-2 z-30 grid h-11 w-11 place-items-center rounded-xl border border-line bg-[var(--surface)] text-foreground min-[700px]:hidden"
+        >
+          <PanelIcon />
+        </button>
         <aside
           ref={railRef}
-          data-expanded={expanded}
-          className={cn("studio-rail fixed inset-y-0 left-0 z-50 flex flex-col px-2 py-3", expanded ? "w-52" : "w-14")}
+          data-expanded={open}
+          className={cn(
+            "studio-rail fixed inset-y-0 left-0 z-50 flex-col px-2 py-3",
+            expanded
+              ? "flex w-[232px]"
+              : "hidden w-14 min-[700px]:flex min-[700px]:w-[84px] min-[1100px]:w-[232px]",
+          )}
         >
-          <button
-            type="button"
-            aria-label={expanded ? "Collapse sidebar" : "Expand sidebar"}
-            aria-expanded={expanded}
-            title={expanded ? "Collapse sidebar" : "Expand sidebar"}
-            onClick={() => setExpanded((value) => !value)}
-            className="rail-link"
-          >
-            <PanelIcon />
-            <span className="rail-label text-sm font-semibold tracking-tight text-foreground">Cut45</span>
-          </button>
-          <Suspense fallback={<RailLinks groups={groups} expanded={expanded} mode={null} pathname={pathname} onNavigate={collapse} />}>
-            <RailLinksWithQuery groups={groups} expanded={expanded} pathname={pathname} onNavigate={collapse} />
+          {desktop ? (
+            <Link href="/generator" className="rail-link">
+              <PanelIcon />
+              <span className="rail-label text-sm font-semibold tracking-tight text-foreground">Cut45</span>
+            </Link>
+          ) : (
+            <button
+              type="button"
+              aria-label={expanded ? "Collapse sidebar" : "Expand sidebar"}
+              aria-expanded={expanded}
+              title={expanded ? "Collapse sidebar" : "Expand sidebar"}
+              onClick={() => setExpanded((value) => !value)}
+              className="rail-link"
+            >
+              <PanelIcon />
+              <span className="rail-label text-sm font-semibold tracking-tight text-foreground">Cut45</span>
+            </button>
+          )}
+          <Suspense fallback={<RailLinks groups={groups} expanded={open} mode={null} pathname={pathname} onNavigate={collapse} />}>
+            <RailLinksWithQuery groups={groups} expanded={open} pathname={pathname} onNavigate={collapse} />
           </Suspense>
           {workspacePage ? (
             <Suspense fallback={null}>
-              <AgentRecents expanded={expanded} onExpand={() => setExpanded(true)} onNavigate={collapse} />
+              <AgentRecents expanded={open} onExpand={() => setExpanded(true)} onNavigate={collapse} />
             </Suspense>
           ) : null}
           <div className="mt-auto flex shrink-0 flex-col gap-2 pt-2">
@@ -180,15 +194,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 title="AI Co-Pilot"
                 className={cn(
                   "flex h-9 items-center gap-3 rounded-full bg-violet-600 text-white shadow-[0_6px_18px_rgba(124,58,237,0.35)] transition hover:bg-violet-700",
-                  expanded ? "px-2.5" : "w-9 justify-center self-center",
+                  open ? "px-2.5" : "w-9 justify-center self-center",
                 )}
               >
                 <SparkIcon />
-                {expanded ? <span className="text-sm font-medium">AI Co-Pilot</span> : null}
+                {open ? <span className="text-sm font-medium">AI Co-Pilot</span> : null}
               </Link>
             )}
             <AccountMenu
-              expanded={expanded}
+              expanded={open}
               name={account?.name ?? null}
               ready={ready}
               onSignOut={() => void signOut()}
@@ -196,7 +210,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </aside>
 
-        <div className="min-w-0 pl-14">
+        <div className="min-w-0 pb-[calc(4rem+env(safe-area-inset-bottom))] min-[700px]:pb-0 min-[700px]:pl-[84px] min-[1100px]:pl-[232px]">
           {copilotOpen || agentPage ? null : (
             <div className="pointer-events-none fixed top-3 right-4 z-30">
               <CreditPill dark={darkPage} />
@@ -210,6 +224,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </main>
           )}
         </div>
+        <MobileTabBar pathname={pathname} />
       </div>
     </StudioChromeProvider>
   );
@@ -417,12 +432,42 @@ function AgentRecents({
   );
 }
 
+function MobileTabBar({ pathname }: { pathname: string }) {
+  return (
+    <nav
+      aria-label="Primary"
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-[var(--surface)]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur min-[700px]:hidden"
+    >
+      <ul className="grid grid-cols-4">
+        {MOBILE_TABS.map((tab) => {
+          const active = tab.match(pathname);
+          return (
+            <li key={tab.label}>
+              <Link
+                href={tab.href}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "flex h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium",
+                  active ? "text-foreground" : "text-muted hover:text-foreground",
+                )}
+              >
+                {tab.icon}
+                {tab.label}
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
+  );
+}
+
 function CreditPill({ dark }: { dark: boolean }) {
   const { credits, balanceReady } = useCredits();
   if (!balanceReady) return null;
   return (
     <Link
-      href="/credits"
+      href="/pricing"
       className={cn(
         "pointer-events-auto flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold tabular-nums",
         dark
@@ -548,35 +593,6 @@ function VideoIcon() {
   );
 }
 
-function ImageIcon() {
-  return (
-    <Svg>
-      <rect x="3" y="3.5" width="14" height="13" rx="2" />
-      <circle cx="7.5" cy="8" r="1.3" />
-      <path d="m3.5 14.5 4-4 3 3 2-2 4 3.5" />
-    </Svg>
-  );
-}
-
-function FaceIcon() {
-  return (
-    <Svg>
-      <circle cx="10" cy="10" r="7" />
-      <path d="M7.2 12a3.5 3.5 0 0 0 5.6 0" />
-      <path d="M7.5 8h.01M12.5 8h.01" />
-    </Svg>
-  );
-}
-
-function CompassIcon() {
-  return (
-    <Svg>
-      <circle cx="10" cy="10" r="7" />
-      <path d="m12.8 7.2-1.6 4-4 1.6 1.6-4Z" />
-    </Svg>
-  );
-}
-
 function FolderIcon() {
   return (
     <Svg>
@@ -620,68 +636,38 @@ function TrashIcon() {
   );
 }
 
-function AgentIcon() {
-  return (
-    <Svg>
-      <path d="M10 3c.3 2.6 1.6 3.9 4.2 4.2-2.6.3-3.9 1.6-4.2 4.2-.3-2.6-1.6-3.9-4.2-4.2C8.4 6.9 9.7 5.6 10 3Z" />
-      <path d="M14.5 12c.2 1.3.8 1.9 2 2-1.2.2-1.8.8-2 2-.2-1.2-.8-1.8-2-2 1.2-.1 1.8-.7 2-2Z" />
-    </Svg>
-  );
-}
-
-function NewChatIcon() {
-  return (
-    <Svg>
-      <path d="M16.5 10.5V15a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 15V5A1.5 1.5 0 0 1 5 3.5h4.5" />
-      <path d="m12.5 4.5 3 3L10 13H7v-3Z" />
-    </Svg>
-  );
-}
-
-function ToolsIcon() {
-  return (
-    <Svg>
-      <rect x="3.5" y="3.5" width="5" height="5" rx="1.2" />
-      <rect x="11.5" y="3.5" width="5" height="5" rx="1.2" />
-      <rect x="3.5" y="11.5" width="5" height="5" rx="1.2" />
-      <rect x="11.5" y="11.5" width="5" height="5" rx="1.2" />
-    </Svg>
-  );
-}
-
-function WorkflowIcon() {
-  return (
-    <Svg>
-      <rect x="2.5" y="4" width="5" height="4" rx="1" />
-      <rect x="12.5" y="12" width="5" height="4" rx="1" />
-      <path d="M7.5 6h3a2 2 0 0 1 2 2v4" />
-    </Svg>
-  );
-}
-
-function PluginIcon() {
-  return (
-    <Svg>
-      <path d="M8 3.5v3M12 3.5v3M5.5 6.5h9v3a4.5 4.5 0 0 1-9 0ZM10 14v2.5" />
-    </Svg>
-  );
-}
-
-function BrandIcon() {
-  return (
-    <Svg>
-      <path d="M3.5 10.6V4.5a1 1 0 0 1 1-1h6.1l6 6a1 1 0 0 1 0 1.4l-5.2 5.2a1 1 0 0 1-1.4 0Z" />
-      <circle cx="7.2" cy="7.2" r="1.1" />
-    </Svg>
-  );
-}
-
 function SparkIcon() {
   return (
     <svg viewBox="0 0 20 20" className="h-4 w-4 shrink-0" fill="currentColor" aria-hidden>
       <path d="M10 2.5c.4 3.4 2.1 5.1 5.5 5.5-3.4.4-5.1 2.1-5.5 5.5-.4-3.4-2.1-5.1-5.5-5.5 3.4-.4 5.1-2.1 5.5-5.5Z" />
       <path d="M15.5 12.5c.2 1.6 1 2.4 2.5 2.5-1.5.2-2.3 1-2.5 2.5-.2-1.5-1-2.3-2.5-2.5 1.5-.1 2.3-.9 2.5-2.5Z" />
     </svg>
+  );
+}
+
+function SparkOutlineIcon() {
+  return (
+    <Svg>
+      <path d="M10 3c.4 3 1.9 4.6 5 5-3.1.4-4.6 2-5 5-.4-3-1.9-4.6-5-5 3.1-.4 4.6-2 5-5Z" />
+    </Svg>
+  );
+}
+
+function CoinTabIcon() {
+  return (
+    <Svg>
+      <circle cx="10" cy="10" r="7" />
+      <circle cx="10" cy="10" r="3" />
+    </Svg>
+  );
+}
+
+function KeyIcon() {
+  return (
+    <Svg>
+      <circle cx="7" cy="12.5" r="3.5" />
+      <path d="m9.5 10 6.5-6.5M13.5 6l2 2" />
+    </Svg>
   );
 }
 

@@ -92,7 +92,7 @@ export function VideoGenerationTest() {
         const status = await fetch("/api/video/status", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ statusUrl: filmed.statusUrl, responseUrl: filmed.responseUrl }),
+          body: JSON.stringify({ statusUrl: filmed.statusUrl, responseUrl: filmed.responseUrl, ticket: filmed.ticket }),
         });
         const payload = (await status.json().catch(() => null)) as {
           videoUrl?: string;

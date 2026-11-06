@@ -15,7 +15,6 @@ import {
   BUDGET_GENERATION_COST,
   EXTEND_VIDEO_COST,
   durationCreditCost,
-  generationCreditCost,
   generationHoldCost,
 } from "@/lib/credits";
 import { refundProfileCredits, reserveGenerationCredits } from "@/lib/profiles";
@@ -40,19 +39,23 @@ import {
   videoMotionPrompt,
 } from "@/lib/motion-styles";
 import { alignReferenceContext } from "@/lib/reference-context";
-import { getVoice, resolveVoiceId } from "@/lib/voices";
+import { DEFAULT_VOICE_ID, getVoice, resolveVoiceId, type VoiceId } from "@/lib/voices";
 import { isVisualEngineId, type VisualEngineId } from "@/lib/visual-engines";
 import {
   DEFAULT_VIDEO_MODEL,
   DEFAULT_VIDEO_RESOLUTION,
   isVideoModelId,
   isVideoResolution,
-  insufficientVideoCreditsMessage,
-  videoClipCreditCost,
+  INSUFFICIENT_CREDITS_MESSAGE,
   videoModelEngine,
+  wantsVoiceover,
   type VideoModelId,
   type VideoResolution,
 } from "@/lib/video-models";
+import { authorizeGenerationCredits, deductGenerationCredits, type VideoBilling } from "@/lib/video-billing";
+import { narrateClip } from "@/lib/narrate-clip";
+import { isNarrationLanguageId, type NarrationLanguageId } from "@/lib/narration";
+import { signRenderTicket } from "@/lib/render-ticket";
 import { isFalCreditError, isMockVideoUrl, pickMockVideo } from "@/lib/mock-video";
 
 const USE_PAID_VOICE = false;
@@ -65,7 +68,7 @@ function mockPicture(script: string) {
 }
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const FRAME_STEP_MS = 700;
 const AUDIO_STEP_MS = 600;
@@ -414,6 +417,8 @@ async function* runWorkflow(
   aspect: AspectRatio = "9:16",
   videoModel: VideoModelId = DEFAULT_VIDEO_MODEL,
   resolution: VideoResolution = DEFAULT_VIDEO_RESOLUTION,
+  billing: VideoBilling | null = null,
+  narration: { voiceId: VoiceId; language: NarrationLanguageId } | null = null,
 ) {
   const lockPromise =
     referenceImage && engine !== "stock"
@@ -482,7 +487,9 @@ async function* runWorkflow(
       }
     } else {
       await sleep(AUDIO_STEP_MS, signal);
-      audioLabel = `${voiceName} · Character dialogue and lip-sync run after the picture is ready`;
+      audioLabel = narration
+        ? `${voiceName} · ElevenLabs voiceover records once the picture is ready`
+        : "No voiceover selected";
     }
   } catch (error) {
     if (isAbortError(error)) throw error;
@@ -493,13 +500,16 @@ async function* runWorkflow(
     return;
   }
 
-  yield encode({
-    type: "progress",
-    step: "audio",
-    status: "completed",
-    message: "Audio ready",
-    detail: audioLabel,
-  });
+  const recordVoice = Boolean(narration) && !preview;
+  if (!recordVoice) {
+    yield encode({
+      type: "progress",
+      step: "audio",
+      status: "completed",
+      message: "Audio ready",
+      detail: audioLabel,
+    });
+  }
 
   yield encode({
     type: "progress",
@@ -510,6 +520,7 @@ async function* runWorkflow(
 
   let frames = buildStoryboard(script);
   let creditsCharged = 0;
+  let falRendered = false;
   let mock = mockMode;
   let frameDetail = `${FRAME_COUNT} Wikimedia stock clips · 9:16 · ${FRAME_LENGTH_SEC} seconds each`;
 
@@ -539,16 +550,29 @@ async function* runWorkflow(
         signal,
       });
       if ("videoUrl" in rendered) {
+        falRendered = true;
         frames = motionClip(rendered.videoUrl, script);
-        creditsCharged = videoClipCreditCost(videoModel, resolution, clipSec);
         frameDetail = referenceImage
           ? "Image-to-video clip from Fal.ai · 9:16"
           : "Fal.ai motion clip · 9:16";
       } else if ("pending" in rendered) {
+        if (!billing) {
+          yield encode({ type: "error", message: "Sign in before rendering a video." });
+          return;
+        }
         yield encode({
           type: "rendering",
           statusUrl: rendered.statusUrl,
           responseUrl: rendered.responseUrl,
+          ticket: signRenderTicket({
+            userId: billing.userId,
+            email: billing.email,
+            credits: preview ? 0 : billing.credits,
+            responseUrl: rendered.responseUrl,
+            ...(recordVoice && narration
+              ? { voice: { voiceId: narration.voiceId, language: narration.language, script, aspect } }
+              : {}),
+          }),
           result: {
             id: `c45_${Date.now().toString(36)}`,
             topic,
@@ -561,7 +585,7 @@ async function* runWorkflow(
             audioSrc,
             frames: motionClip("", script),
             engine,
-            creditsCharged: videoClipCreditCost(videoModel, resolution, clipSec),
+            creditsCharged: billing?.credits ?? 0,
             preview: false,
           },
         });
@@ -613,6 +637,61 @@ async function* runWorkflow(
     detail: frameDetail,
   });
 
+  const pictureUrl = frames.find((frame) => frame.src.startsWith("https://"))?.src ?? null;
+  let videoUrl = pictureUrl ?? undefined;
+  let narrationEmbedded = false;
+  let voiceOk = !recordVoice;
+  if (recordVoice && narration) {
+    try {
+      const narrated = await narrateClip({
+        script,
+        voiceId: narration.voiceId,
+        language: narration.language,
+        videoUrl: falRendered || mock ? pictureUrl : null,
+        aspect,
+        mock,
+        signal,
+      });
+      voiceOk = narrated.elevenLabs;
+      audioSrc = narrated.audioSrc;
+      audioLabel = narrated.audioLabel;
+      if (narrated.embedded && narrated.videoUrl) {
+        const voiced = narrated.videoUrl;
+        frames = frames.map((frame) => (frame.src === pictureUrl ? { ...frame, src: voiced } : frame));
+        videoUrl = voiced;
+        narrationEmbedded = true;
+      }
+      if (narrated.notice) yield encode({ type: "notice", message: narrated.notice });
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      console.error("[elevenlabs] voiceover failed", error instanceof Error ? error.message : error);
+      audioLabel = "Voiceover could not be recorded";
+    }
+    yield encode({
+      type: "progress",
+      step: "audio",
+      status: "completed",
+      message: voiceOk ? "Audio ready" : "Voiceover unavailable",
+      detail: audioLabel,
+    });
+  }
+
+  if (billing && falRendered && !preview) {
+    if (voiceOk) {
+      const charged = await deductGenerationCredits(billing);
+      if (!charged.ok) {
+        yield encode({ type: "error", message: charged.error });
+        return;
+      }
+      creditsCharged = billing.credits;
+    } else {
+      yield encode({
+        type: "notice",
+        message: "The ElevenLabs voiceover could not be recorded, so no credits were charged for this clip.",
+      });
+    }
+  }
+
   yield encode({
     type: "complete",
     result: {
@@ -625,12 +704,13 @@ async function* runWorkflow(
       wordCount,
       audioLabel,
       audioSrc,
+      narrationEmbedded,
       frames,
       engine,
       creditsCharged,
       preview,
       mock,
-      videoUrl: frames.find((frame) => frame.src.startsWith("https://"))?.src,
+      videoUrl,
     },
   });
 }
@@ -645,6 +725,7 @@ async function* runExtend(input: {
   signal: AbortSignal;
   mockMode?: boolean;
   aspect?: AspectRatio;
+  owner: { userId: string; email: string } | null;
 }) {
   yield encode({
     type: "progress",
@@ -762,6 +843,9 @@ async function* runExtend(input: {
       type: "rendering",
       statusUrl: rendered.statusUrl,
       responseUrl: rendered.responseUrl,
+      ...(input.owner
+        ? { ticket: signRenderTicket({ ...input.owner, credits: 0, responseUrl: rendered.responseUrl }) }
+        : {}),
       result: {
         id: `c45_${Date.now().toString(36)}`,
         topic: input.topic,
@@ -855,6 +939,7 @@ async function* runScene(input: {
   signal: AbortSignal;
   mockMode?: boolean;
   aspect?: AspectRatio;
+  owner: { userId: string; email: string } | null;
 }) {
   const script = cleanScript(input.narration);
   if (!script) {
@@ -947,6 +1032,9 @@ async function* runScene(input: {
       type: "rendering",
       statusUrl: rendered.statusUrl,
       responseUrl: rendered.responseUrl,
+      ...(input.owner
+        ? { ticket: signRenderTicket({ ...input.owner, credits: 0, responseUrl: rendered.responseUrl }) }
+        : {}),
       result: {
         id: `c45_${Date.now().toString(36)}`,
         topic: input.topic,
@@ -1051,6 +1139,7 @@ export async function POST(request: NextRequest) {
       ? (body as {
           topic?: unknown;
           voice?: unknown;
+          voiceId?: unknown;
           engine?: unknown;
           referenceImage?: unknown;
           motionStyle?: unknown;
@@ -1062,6 +1151,7 @@ export async function POST(request: NextRequest) {
           visualPrompt?: unknown;
           durationSec?: unknown;
           mockMode?: unknown;
+          language?: unknown;
           aspect?: unknown;
           videoModel?: unknown;
           resolution?: unknown;
@@ -1076,7 +1166,16 @@ export async function POST(request: NextRequest) {
   const priorVideoUrls = Array.isArray(record.priorVideoUrls)
     ? record.priorVideoUrls.filter((item): item is string => typeof item === "string").slice(0, 12)
     : [];
-  const voice = typeof record.voice === "string" ? resolveVoiceId(record.voice) : null;
+  const rawVoice =
+    typeof record.voice === "string"
+      ? record.voice
+      : typeof record.voiceId === "string"
+        ? record.voiceId
+        : "";
+  const voiceRequested = wantsVoiceover(rawVoice);
+  const voice = voiceRequested ? resolveVoiceId(rawVoice) : DEFAULT_VOICE_ID;
+  const language: NarrationLanguageId =
+    typeof record.language === "string" && isNarrationLanguageId(record.language) ? record.language : "auto";
   const requestedEngine = typeof record.engine === "string" ? record.engine : "";
   const videoModel = typeof record.videoModel === "string" && isVideoModelId(record.videoModel)
     ? record.videoModel
@@ -1154,38 +1253,58 @@ export async function POST(request: NextRequest) {
   }
 
   const durationSec = typeof record.durationSec === "number" ? record.durationSec : null;
-  const holdQuote = generationHoldCost({
-    extend,
-    scene,
-    continuation: priorVideoUrls.length > 0,
-    engine,
-    imageToVideo: Boolean(referenceImage) && engine !== "stock",
-    durationSec,
-    videoModel,
-    resolution,
-  });
+  const clipSec = record.durationSec === 10 ? 10 : CLIP_DURATION_SEC;
+  const accessToken = request.cookies.get(SUPABASE_ACCESS_COOKIE)?.value ?? "";
   let hold: { userId: string; cost: number } | null = null;
-  if (holdQuote.clipCost > 0) {
-    const accessToken = request.cookies.get(SUPABASE_ACCESS_COOKIE)?.value ?? "";
+  let owner: { userId: string; email: string } | null = null;
+  let billing: VideoBilling | null = null;
+
+  if (extend || scene) {
+    const holdQuote = generationHoldCost({
+      extend,
+      scene,
+      continuation: priorVideoUrls.length > 0,
+      engine,
+      imageToVideo: Boolean(referenceImage) && engine !== "stock",
+      durationSec,
+    });
+    if (holdQuote.clipCost > 0) {
+      const user = accessToken ? await userFromAccessToken(accessToken) : null;
+      if (!user?.email) {
+        return NextResponse.json({ error: "Sign in before spending credits." }, { status: 401 });
+      }
+      const reserved = await reserveGenerationCredits(user.id, user.email, holdQuote.required, holdQuote.clipCost);
+      if (!reserved.ok) {
+        if (reserved.reason === "insufficient") {
+          return NextResponse.json({ error: INSUFFICIENT_CREDITS_MESSAGE, upgradeRequired: true }, { status: 402 });
+        }
+        return NextResponse.json({ error: "Could not update the credit balance." }, { status: 500 });
+      }
+      hold = { userId: user.id, cost: holdQuote.clipCost };
+      owner = { userId: user.id, email: user.email };
+    }
+  } else {
     const user = accessToken ? await userFromAccessToken(accessToken) : null;
     if (!user?.email) {
       return NextResponse.json({ error: "Sign in before spending credits." }, { status: 401 });
     }
-    const reserved = await reserveGenerationCredits(
-      user.id,
-      user.email,
-      holdQuote.required,
-      holdQuote.clipCost,
-    );
-    if (!reserved.ok) {
-      if (reserved.reason === "insufficient") {
-        const message =
-          extend || scene ? "Insufficient credits" : insufficientVideoCreditsMessage(resolution, durationSec ?? 5);
-        return NextResponse.json({ error: message, upgradeRequired: true }, { status: 402 });
+    if (!mockMode && engine !== "stock") {
+      const checked = await authorizeGenerationCredits({
+        userId: user.id,
+        email: user.email,
+        modelName: videoModel,
+        duration: clipSec,
+        resolution,
+        voiceId: voiceRequested ? voiceStyle.id : null,
+      });
+      if (!checked.ok) {
+        return NextResponse.json(
+          { error: checked.error, upgradeRequired: checked.status === 402 },
+          { status: checked.status },
+        );
       }
-      return NextResponse.json({ error: "Could not update the credit balance." }, { status: 500 });
+      billing = checked.billing;
     }
-    hold = { userId: user.id, cost: holdQuote.clipCost };
   }
 
   const stream = iteratorToStream(
@@ -1202,6 +1321,7 @@ export async function POST(request: NextRequest) {
           signal: request.signal,
           mockMode,
           aspect,
+          owner,
         })
       : extend
       ? runExtend({
@@ -1214,6 +1334,7 @@ export async function POST(request: NextRequest) {
           signal: request.signal,
           mockMode,
           aspect,
+          owner,
         })
       : runWorkflow(
       topic,
@@ -1224,11 +1345,13 @@ export async function POST(request: NextRequest) {
       referenceImage,
       motionStyle || null,
       request.signal,
-      record.durationSec === 10 ? 10 : CLIP_DURATION_SEC,
+      clipSec,
       mockMode,
       aspect,
       videoModel,
       resolution,
+      billing,
+      voiceRequested ? { voiceId: voiceStyle.id, language } : null,
     ),
     hold,
   );

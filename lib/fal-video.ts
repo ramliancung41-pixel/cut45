@@ -197,7 +197,7 @@ function videoInput(
   imageUrl: string | null,
   durationSec: number,
   aspect: AspectRatio,
-  resolution: VideoResolution,
+  resolution: string,
 ) {
   const seconds = motionSeconds(durationSec);
 
@@ -236,10 +236,10 @@ function videoInput(
 
   if (model.includes("fast-svd")) {
     const size = frameSize(aspect);
+    const scale = (Number.parseInt(resolution, 10) || 1080) / Math.min(size.width, size.height);
     return {
       prompt,
-      resolution,
-      video_size: { width: size.width, height: size.height },
+      video_size: { width: Math.round(size.width * scale), height: Math.round(size.height * scale) },
       ...(imageUrl ? { image_url: imageUrl } : {}),
     };
   }
@@ -249,7 +249,6 @@ function videoInput(
       prompt,
       duration: seconds,
       ratio: aspect,
-      resolution,
       ...(imageUrl ? { image_url: imageUrl } : {}),
     };
   }
@@ -270,7 +269,7 @@ async function submitVideo(input: {
   imageUrl: string | null;
   durationSec: number;
   aspect: AspectRatio;
-  resolution: VideoResolution;
+  resolution: string;
   signal: AbortSignal;
 }) {
   return fetch(`https://queue.fal.run/${input.model}`, {
@@ -433,7 +432,9 @@ export async function renderFalClip(input: {
   const model = input.image || startFrame ? endpoints.image : endpoints.text;
   const resolution = input.videoModel
     ? videoRenderResolution(input.videoModel, input.resolution)
-    : input.resolution ?? DEFAULT_VIDEO_RESOLUTION;
+    : input.engine === "budget"
+      ? videoRenderResolution("ltx", input.resolution)
+      : input.resolution ?? DEFAULT_VIDEO_RESOLUTION;
   let imageUrl: string | null = startFrame;
   let storageUrl: string | null = startFrame;
   if (input.image && !imageUrl) {

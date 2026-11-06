@@ -31,6 +31,7 @@ import {
 import {
   parseAgentSuggestion,
   suggestionCreditCost,
+  suggestionHasVoice,
   suggestionModelName,
   suggestionResolution,
   type AgentSuggestion,
@@ -361,7 +362,7 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
   async function generate(message: AgentMessage) {
     const suggestion = message.suggestion;
     if (!suggestion) return;
-    const cost = suggestionCreditCost(suggestion);
+    const cost = suggestionCreditCost(suggestion, pluginStore.read().voiceover);
     if (balanceReady && credits < cost) {
       setUpgradeOpen(true);
       return;
@@ -466,7 +467,8 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
     extras: AgentRunExtras,
     signal: AbortSignal,
   ): Promise<Partial<Generation>> {
-    const speaker = extras.voice ?? voice;
+    const speaker =
+      suggestionHasVoice(suggestion, pluginStore.read().voiceover) && extras.voice !== "none" ? extras.voice ?? voice : "none";
     const response = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
@@ -474,6 +476,7 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
       body: JSON.stringify({
         topic: suggestion.prompt.slice(0, PROMPT_MAX),
         voice: speaker,
+        ...(extras.language ? { language: extras.language } : {}),
         engine: videoModelEngine(suggestion.model),
         videoModel: suggestion.model,
         resolution: suggestionResolution(suggestion),
@@ -491,7 +494,7 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
     }
 
     let finished: GenerateResult | null = null;
-    let pending: { statusUrl: string; responseUrl: string; result: GenerateResult } | null = null;
+    let pending: { statusUrl: string; responseUrl: string; ticket?: string; result: GenerateResult } | null = null;
     const reader = response.body?.getReader();
     if (!reader) throw new Error("The generator did not return a progress stream.");
     const decoder = new TextDecoder();
@@ -511,14 +514,10 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
       if (!isGenerateEvent(event)) return;
       if (event.type === "error") throw new Error(event.message || "The video could not be generated.");
       if (event.type === "progress") {
-        if (event.step === "audio" && event.status === "completed") {
-          patchStep(id, "audio", { status: "started", detail: "Voiceover records once the frames are ready" });
-        } else {
-          patchStep(id, event.step, {
-            status: event.status,
-            detail: event.detail ?? (event.status === "started" ? `${event.message}…` : event.message),
-          });
-        }
+        patchStep(id, event.step, {
+          status: event.status,
+          detail: event.detail ?? (event.status === "started" ? `${event.message}…` : event.message),
+        });
       }
       if (event.type === "complete") finished = event.result;
       if (event.type === "rendering") {
@@ -540,10 +539,24 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
 
     let result = finished as GenerateResult | null;
     let videoUrl = result?.videoUrl || result?.frames.find((frame) => frame.src.startsWith("https://"))?.src || "";
-    const queued = pending as { statusUrl: string; responseUrl: string; result: GenerateResult } | null;
+    const queued = pending as { statusUrl: string; responseUrl: string; ticket?: string; result: GenerateResult } | null;
     if (!videoUrl && queued) {
-      result = queued.result;
-      videoUrl = await pollRender(queued.statusUrl, queued.responseUrl, signal);
+      const done = await pollRender(queued.statusUrl, queued.responseUrl, queued.ticket, signal);
+      videoUrl = done.videoUrl;
+      result = {
+        ...queued.result,
+        videoUrl: done.videoUrl,
+        creditsCharged: done.creditsCharged ?? 0,
+        ...(done.audioSrc ? { audioSrc: done.audioSrc } : {}),
+        ...(done.audioLabel ? { audioLabel: done.audioLabel } : {}),
+        narrationEmbedded: Boolean(done.narrationEmbedded),
+      };
+      if (speaker !== "none") {
+        patchStep(id, "audio", {
+          status: done.audioSrc ? "completed" : "failed",
+          detail: done.audioSrc ? done.audioLabel ?? "Voiceover ready" : "The voiceover could not be recorded",
+        });
+      }
     }
     void syncBalance();
     if (!videoUrl || !result) throw new Error("The video finished without a playable clip.");
@@ -551,28 +564,19 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
       status: "completed",
       detail: `${result.mock ? "Mock stock clip" : "Fal.ai clip ready"} · ${suggestion.durationSec}s · ${suggestion.aspect}`,
     });
-    updateGeneration(id, { url: videoUrl, script: result.script });
 
-    let output: Partial<Generation> = { url: videoUrl, script: result.script };
-    if (result.preview || result.script.trim().length < 8) {
-      patchStep(id, "audio", { status: "completed", detail: "Preview clip without a voiceover" });
-    } else if (!pluginStore.read().voiceover) {
-      patchStep(id, "audio", { status: "completed", detail: "Voiceover is off in Plugins" });
-    } else {
-      patchStep(id, "audio", { status: "started", detail: "Recording voiceover with ElevenLabs" });
-      const voiced = await recordVoice(result, videoUrl, suggestion.aspect, speaker, extras.language, signal);
-      if (voiced) {
-        output = { ...output, ...voiced };
-        patchStep(id, "audio", {
-          status: "completed",
-          detail: `Voiceover ready · ${voiced.voiceLabel ?? "ElevenLabs"}${voiced.voiceEmbedded ? " · on the video" : ""}`,
-        });
-      } else {
-        patchStep(id, "audio", { status: "failed", detail: "The voiceover could not be recorded" });
-      }
+    const output: Partial<Generation> = {
+      url: videoUrl,
+      script: result.script,
+      ...(result.narrationEmbedded ? { voiceEmbedded: true } : {}),
+      ...(result.audioSrc ? { audioUrl: result.audioSrc } : {}),
+      ...(result.audioSrc && result.audioLabel ? { voiceLabel: result.audioLabel } : {}),
+    };
+    if (speaker === "none") {
+      patchStep(id, "audio", { status: "completed", detail: "No voiceover selected" });
     }
 
-    if (!result.mock) {
+    if (!result.mock && result.creditsCharged > 0) {
       const finalUrl = output.url ?? videoUrl;
       archiveProject({
         id,
@@ -604,61 +608,37 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
     return output;
   }
 
-  async function recordVoice(
-    result: GenerateResult,
-    videoUrl: string,
-    aspect: string,
-    speaker: string,
-    language: string | undefined,
-    signal: AbortSignal,
-  ): Promise<Partial<Generation> | null> {
-    try {
-      const response = await fetch("/api/video/narrate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal,
-        body: JSON.stringify({
-          script: result.script,
-          voice: speaker,
-          videoUrl,
-          aspect,
-          ...(language ? { language } : {}),
-          ...(result.mock ? { mock: true } : {}),
-        }),
-      });
-      const payload = (await response.json().catch(() => null)) as {
-        videoUrl?: string;
-        audioSrc?: string;
-        audioLabel?: string;
-        embedded?: boolean;
-      } | null;
-      if (!response.ok || !payload) return null;
-      const embeddedUrl = payload.embedded && payload.videoUrl?.startsWith("https://") ? payload.videoUrl : null;
-      return {
-        ...(embeddedUrl ? { url: embeddedUrl, voiceEmbedded: true } : {}),
-        ...(payload.audioSrc ? { audioUrl: payload.audioSrc } : {}),
-        ...(payload.audioLabel ? { voiceLabel: payload.audioLabel } : {}),
-      };
-    } catch (error) {
-      if (signal.aborted) throw error;
-      return null;
-    }
-  }
+  type FinishedRender = {
+    videoUrl: string;
+    creditsCharged?: number;
+    audioSrc?: string;
+    audioLabel?: string;
+    narrationEmbedded?: boolean;
+  };
 
-  async function pollRender(statusUrl: string, responseUrl: string, signal: AbortSignal) {
+  async function pollRender(
+    statusUrl: string,
+    responseUrl: string,
+    ticket: string | undefined,
+    signal: AbortSignal,
+  ): Promise<FinishedRender> {
     const started = Date.now();
     while (Date.now() - started < RENDER_POLL_MS) {
       const response = await fetch("/api/video/status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ statusUrl, responseUrl }),
+        body: JSON.stringify({ statusUrl, responseUrl, ticket }),
         signal,
       }).catch((error: unknown) => {
         if (signal.aborted) throw error;
         return null;
       });
-      const payload = (await response?.json().catch(() => null)) as { videoUrl?: string; pending?: boolean; error?: string } | null;
-      if (typeof payload?.videoUrl === "string" && payload.videoUrl.startsWith("https://")) return payload.videoUrl;
+      const payload = (await response?.json().catch(() => null)) as
+        | (Partial<FinishedRender> & { pending?: boolean; error?: string })
+        | null;
+      if (typeof payload?.videoUrl === "string" && payload.videoUrl.startsWith("https://")) {
+        return payload as FinishedRender;
+      }
       if (payload?.error && response && response.status < 500) throw new Error(payload.error);
       await sleep(3000, signal);
     }

@@ -3,11 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
   suggestionCreditCost,
+  suggestionHasVoice,
   suggestionModelName,
   suggestionResolution,
   type AgentSuggestion,
 } from "@/lib/agent-suggestion";
 import type { AgentMessage } from "@/lib/agent-sessions";
+import { pluginStore } from "@/lib/studio-prefs";
 import { imageStyleName } from "@/lib/image-styles";
 import { videoResolutionLabel } from "@/lib/video-models";
 
@@ -54,6 +56,7 @@ export function AgentChatPanel({
   onNewChat: () => void;
 }) {
   const [input, setInput] = useState("");
+  const plugins = pluginStore.useValue();
   const [dragging, setDragging] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -176,7 +179,8 @@ export function AgentChatPanel({
                     <GenerationCard
                       suggestion={message.suggestion}
                       status={cardStatus(message.id)}
-                      short={balanceReady && credits < suggestionCreditCost(message.suggestion)}
+                      withVoice={suggestionHasVoice(message.suggestion, plugins.voiceover)}
+                      short={balanceReady && credits < suggestionCreditCost(message.suggestion, plugins.voiceover)}
                       onGenerate={() => onGenerate(message)}
                       onUpgrade={onUpgrade}
                     />
@@ -308,19 +312,23 @@ function GenerationCard({
   suggestion,
   status,
   short,
+  withVoice,
   onGenerate,
   onUpgrade,
 }: {
   suggestion: AgentSuggestion;
   status: CardStatus;
   short: boolean;
+  withVoice: boolean;
   onGenerate: () => void;
   onUpgrade: () => void;
 }) {
   const video = suggestion.kind === "video";
-  const cost = suggestionCreditCost(suggestion);
+  const cost = suggestionCreditCost(suggestion, withVoice);
   const meta = video
-    ? `${suggestion.durationSec}s · ${videoResolutionLabel(suggestionResolution(suggestion))} · ${suggestion.aspect}`
+    ? `${suggestion.durationSec}s · ${videoResolutionLabel(suggestionResolution(suggestion))} · ${suggestion.aspect}${
+        withVoice ? " · voiceover" : ""
+      }`
     : [suggestion.aspect, suggestion.style ? imageStyleName(suggestion.style) : ""].filter(Boolean).join(" · ");
   const running = status === "running";
 

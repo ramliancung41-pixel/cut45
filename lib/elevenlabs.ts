@@ -18,7 +18,7 @@ export class ElevenLabsQuotaError extends Error {
   }
 }
 
-const VOICE_WAIT_MS = 8000;
+const VOICE_WAIT_MS = 60000;
 
 function voiceGender(elevenLabsVoiceId: string): "male" | "female" {
   return elevenLabsVoiceId === "21m00Tcm4TlvDq8ikWAM" || elevenLabsVoiceId === "EXAVITQu4vr4xnSDxMaL" ? "female" : "male";
@@ -63,7 +63,10 @@ export async function synthesizeSpeech(input: {
     return await renderElevenSpeech(input);
   } catch (error) {
     if (stoppedByUser(error, input.signal)) throw error;
-    console.error("[elevenlabs] voice request failed; using the local voice of that gender");
+    console.error(
+      "[elevenlabs] voice request failed; using the local voice of that gender",
+      error instanceof Error ? error.message : error,
+    );
     return synthesizeLocalSpeech([{ text: input.script, gender: voiceGender(input.elevenLabsVoiceId) }]);
   }
 }
@@ -116,11 +119,14 @@ async function renderElevenSpeech(input: {
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     if (response.status === 401 || response.status === 403) {
+      console.error(`[elevenlabs] 401 Unauthorized for voice ${input.elevenLabsVoiceId}`);
       throw new Error("ElevenLabs rejected the API key.");
     }
-    if (response.status === 402 || /quota|credit/i.test(detail)) {
+    if (response.status === 429 || response.status === 402 || /quota|credit/i.test(detail)) {
+      console.error(`[elevenlabs] ${response.status} quota or rate limit for voice ${input.elevenLabsVoiceId}`);
       throw new ElevenLabsQuotaError("ElevenLabs could not record this narration right now.");
     }
+    console.error(`[elevenlabs] voice request failed (${response.status}) ${detail.slice(0, 180)}`);
     throw new Error(`ElevenLabs could not render the voice (${response.status}).`);
   }
 

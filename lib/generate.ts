@@ -63,6 +63,7 @@ export type GenerateEvent =
       type: "rendering";
       statusUrl: string;
       responseUrl: string;
+      ticket?: string;
       result: GenerateResult;
     };
 

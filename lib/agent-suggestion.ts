@@ -16,6 +16,7 @@ import {
   getVideoModel,
   isVideoModelId,
   isVideoResolution,
+  VOICE_PREMIUM_CREDITS,
   videoClipCreditCost,
   videoClipDuration,
   type VideoClipDuration,
@@ -32,6 +33,7 @@ export type AgentSuggestion =
       aspect: AspectRatio;
       durationSec: VideoClipDuration;
       resolution?: VideoResolution;
+      voice?: "none";
     }
   | {
       kind: "image";
@@ -73,6 +75,7 @@ export function parseAgentSuggestion(value: unknown, maxPrompt: number): AgentSu
       ...(typeof record.resolution === "string" && isVideoResolution(record.resolution)
         ? { resolution: record.resolution }
         : {}),
+      ...(record.voice === "none" ? { voice: "none" as const } : {}),
     };
   }
 
@@ -95,9 +98,14 @@ export function suggestionModelName(suggestion: AgentSuggestion) {
   return suggestion.kind === "video" ? getVideoModel(suggestion.model).name : getImageModel(suggestion.model).name;
 }
 
-export function suggestionCreditCost(suggestion: AgentSuggestion) {
+export function suggestionHasVoice(suggestion: AgentSuggestion, voiceoverPlugin: boolean) {
+  return suggestion.kind === "video" && voiceoverPlugin && suggestion.voice !== "none";
+}
+
+export function suggestionCreditCost(suggestion: AgentSuggestion, voiceoverPlugin = false) {
   return suggestion.kind === "video"
-    ? videoClipCreditCost(suggestion.model, suggestionResolution(suggestion), suggestion.durationSec)
+    ? videoClipCreditCost(suggestion.model, suggestionResolution(suggestion), suggestion.durationSec) +
+        (suggestionHasVoice(suggestion, voiceoverPlugin) ? VOICE_PREMIUM_CREDITS : 0)
     : imageModelCreditCost(suggestion.model);
 }
 

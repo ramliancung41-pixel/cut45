@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { renderFalClip } from "@/lib/fal-video";
+import { signRenderTicket } from "@/lib/render-ticket";
 import { BUDGET_GENERATION_COST, ULTRA_GENERATION_COST } from "@/lib/credits";
 import { PROMPT_MAX } from "@/lib/motion-styles";
 import { getVoice } from "@/lib/voices";
@@ -67,7 +68,12 @@ export async function POST(request: Request) {
       });
       if ("pending" in rendered) {
         return NextResponse.json(
-          { pending: true, statusUrl: rendered.statusUrl, responseUrl: rendered.responseUrl },
+          {
+            pending: true,
+            statusUrl: rendered.statusUrl,
+            responseUrl: rendered.responseUrl,
+            ticket: signRenderTicket({ userId: "", email: "", credits: 0, responseUrl: rendered.responseUrl }),
+          },
           { status: 202 },
         );
       }

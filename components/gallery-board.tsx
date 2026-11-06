@@ -156,7 +156,6 @@ export function GalleryBoard() {
             ) : project.videoSrc ? (
               <video
                 src={project.videoSrc}
-                muted
                 playsInline
                 controls
                 className="mb-4 aspect-[9/16] w-full rounded-2xl bg-black object-cover"

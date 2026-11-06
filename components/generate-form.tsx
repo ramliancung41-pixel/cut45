@@ -37,7 +37,7 @@ import {
   DEFAULT_VIDEO_MODEL,
   DEFAULT_VIDEO_RESOLUTION,
   getVideoModel,
-  insufficientVideoCreditsMessage,
+  INSUFFICIENT_CREDITS_MESSAGE,
   videoClipCreditCost,
   videoModelEngine,
   videoResolutionLabel,
@@ -161,68 +161,6 @@ const FLOATING_PICKERS: StudioPicker[] = [
   "resolution",
 ];
 
-type FeaturedToolId = "video" | "image" | "filters";
-
-const FEATURED_TOOLS: Array<{ id: FeaturedToolId; title: string; image: string; badge?: string; sample?: string }> = [
-  { id: "video", title: "Generate Video", badge: "Featured", image: "/home/tool-video.jpg" },
-  { id: "image", title: "Generate Image", image: "/home/tool-image.jpg", sample: "A neon city street at night" },
-  { id: "filters", title: "AI Filters", badge: "New", image: "/home/tool-filters.jpg" },
-];
-
-type ModelCard = {
-  id: string;
-  title: string;
-  note: string;
-  image: string;
-  badge?: string;
-  mode: "video" | "image";
-  style?: ImageStyleId;
-  motion?: MotionStyleId;
-};
-
-const MODEL_CARDS: ModelCard[] = [
-  {
-    id: "motion",
-    title: "Studio Fast Motion",
-    note: "Smooth 1080p clips from a single prompt.",
-    image: "/home/model-1.jpg",
-    badge: "Featured",
-    mode: "video",
-  },
-  {
-    id: "dialogue",
-    title: "Character Dialogue",
-    note: "Two voices with lip-synced scenes.",
-    image: "/home/model-2.jpg",
-    badge: "Trending",
-    mode: "video",
-  },
-  {
-    id: "portrait",
-    title: "Cinematic Portrait",
-    note: "Soft light and shallow depth for stills.",
-    image: "/home/model-3.jpg",
-    mode: "image",
-    style: "portrait",
-  },
-  {
-    id: "cyberpunk",
-    title: "Cyberpunk",
-    note: "Neon colour and rain-soaked streets.",
-    image: "/home/model-4.jpg",
-    mode: "image",
-    style: "cyberpunk",
-  },
-  {
-    id: "slowmo",
-    title: "Cinematic Slow-Mo",
-    note: "Dramatic slow motion with film grain.",
-    image: "/home/model-5.jpg",
-    mode: "video",
-    motion: "slowmo",
-  },
-];
-
 type SpeechLike = {
   lang: string;
   interimResults: boolean;
@@ -304,7 +242,6 @@ export function GenerateForm() {
   const acceptIdRef = useRef(0);
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  const modelsRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<SpeechLike | null>(null);
   const [listening, setListening] = useState(false);
   const params = useSearchParams();
@@ -1163,7 +1100,7 @@ export function GenerateForm() {
     const imageToVideo = Boolean(referenceImage) && engine !== "stock";
     imageRunRef.current = imageToVideo;
     const cost = videoClipCreditCost(videoModel, videoResolution, durationSec);
-    if (!requireCredits(cost, insufficientVideoCreditsMessage(videoResolution, durationSec))) return;
+    if (!requireCredits(cost, INSUFFICIENT_CREDITS_MESSAGE)) return;
     handOffToAgent(
       {
         kind: "video",
@@ -1372,40 +1309,6 @@ export function GenerateForm() {
     setMode(next);
     setPicker(null);
     setError(null);
-  }
-
-  function focusPrompt() {
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    window.setTimeout(() => promptRef.current?.focus(), 250);
-  }
-
-  function openTool(id: FeaturedToolId) {
-    if (id === "video") {
-      switchMode("video");
-    } else {
-      switchMode("image");
-      if (id === "image" && !topic.trim()) {
-        setTopic(FEATURED_TOOLS.find((tool) => tool.id === "image")?.sample ?? "");
-      }
-      if (id === "filters") setPicker("style");
-    }
-    focusPrompt();
-  }
-
-  function openModel(card: ModelCard) {
-    switchMode(card.mode);
-    if (card.style) setImageStyle(card.style);
-    if (card.mode === "video") {
-      setVideoModel(DEFAULT_VIDEO_MODEL);
-      setEngine("budget");
-      if (card.motion) setMotionStyle(card.motion);
-    }
-    focusPrompt();
-  }
-
-  function scrollModels(direction: number) {
-    const el = modelsRef.current;
-    el?.scrollBy({ left: direction * el.clientWidth * 0.8, behavior: "smooth" });
   }
 
   function toggleDictation() {
@@ -2063,7 +1966,7 @@ export function GenerateForm() {
           <p role="status" className="gen-alert mt-3">
             {longForm
               ? `This ${durationSec}s video costs ${longCost} credits.`
-              : insufficientVideoCreditsMessage(videoResolution, durationSec)}
+              : INSUFFICIENT_CREDITS_MESSAGE}
           </p>
         ) : null}
         {error ? (
@@ -2225,102 +2128,6 @@ export function GenerateForm() {
         </section>
       ) : null}
 
-      <section className="mx-auto mt-14 max-w-[880px]" aria-labelledby="featured-tools">
-        <h2 id="featured-tools" className="text-base font-semibold tracking-tight">
-          Featured Tools
-        </h2>
-        <div className="mt-3 grid gap-3 sm:grid-cols-3">
-          {FEATURED_TOOLS.map((tool) => (
-            <button
-              key={tool.id}
-              type="button"
-              disabled={running}
-              onClick={() => openTool(tool.id)}
-              className="home-card aspect-[16/10] disabled:cursor-not-allowed"
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={tool.image} alt="" className="absolute inset-0 h-full w-full object-cover" />
-              {tool.sample ? (
-                <span className="absolute top-1/2 left-1/2 max-w-[85%] -translate-x-1/2 -translate-y-1/2 truncate rounded-full bg-black/55 px-3 py-1 text-[10px] text-white backdrop-blur">
-                  {tool.sample} →
-                </span>
-              ) : null}
-              <span className="absolute inset-x-3 bottom-3 flex items-end justify-between gap-2">
-                <span className="min-w-0">
-                  {tool.badge ? (
-                    <span className="mb-1.5 inline-block rounded bg-lime-300 px-1.5 py-0.5 text-[9px] font-semibold text-black">
-                      {tool.badge}
-                    </span>
-                  ) : null}
-                  <span className="block truncate text-sm font-semibold">{tool.title}</span>
-                </span>
-                <span className="flex shrink-0 items-center gap-1 rounded-full bg-white px-2.5 py-1 text-[10px] font-semibold text-black">
-                  Try Now
-                  <Glyph className="h-3 w-3">
-                    <path d="M6.5 13.5 13.5 6.5M8 6.5h5.5V12" />
-                  </Glyph>
-                </span>
-              </span>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="mt-12" aria-labelledby="explore-models">
-        <div className="flex items-end justify-between gap-3">
-          <div>
-            <h2 id="explore-models" className="text-base font-semibold tracking-tight">
-              Explore models
-            </h2>
-            <p className="mt-0.5 text-xs text-muted">The studio&apos;s video, voice, and image looks, ready to use.</p>
-          </div>
-          <div className="flex gap-1.5">
-            <button
-              type="button"
-              aria-label="Scroll models left"
-              onClick={() => scrollModels(-1)}
-              className="grid h-7 w-7 place-items-center rounded-full border border-line hover:bg-panel"
-            >
-              <Glyph className="h-3.5 w-3.5">
-                <path d="m12 5-5 5 5 5" />
-              </Glyph>
-            </button>
-            <button
-              type="button"
-              aria-label="Scroll models right"
-              onClick={() => scrollModels(1)}
-              className="grid h-7 w-7 place-items-center rounded-full border border-line hover:bg-panel"
-            >
-              <Glyph className="h-3.5 w-3.5">
-                <path d="m8 5 5 5-5 5" />
-              </Glyph>
-            </button>
-          </div>
-        </div>
-        <div ref={modelsRef} className="home-rows mt-3 flex snap-x snap-mandatory gap-3 overflow-x-auto pb-1">
-          {MODEL_CARDS.map((card) => (
-            <button
-              key={card.id}
-              type="button"
-              disabled={running}
-              onClick={() => openModel(card)}
-              className="home-card aspect-[4/3] w-[230px] shrink-0 snap-start disabled:cursor-not-allowed sm:w-[250px]"
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={card.image} alt="" className="absolute inset-0 h-full w-full object-cover" />
-              {card.badge ? (
-                <span className="absolute top-2.5 left-2.5 rounded bg-black/70 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-white uppercase">
-                  {card.badge}
-                </span>
-              ) : null}
-              <span className="absolute inset-x-3 bottom-3">
-                <span className="block text-sm font-semibold">{card.title}</span>
-                <span className="mt-0.5 line-clamp-2 block text-[11px] leading-4 text-white/80">{card.note}</span>
-              </span>
-            </button>
-          ))}
-        </div>
-      </section>
       <CopilotPanel
         open={copilotOpen}
         topic={topic}

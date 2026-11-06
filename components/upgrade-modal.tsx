@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { PricingGuideModal } from "@/components/PricingGuideModal";
 import { UpgradeNowButton } from "@/components/upgrade-now-button";
 
 const TIERS = [
@@ -35,8 +36,10 @@ const TIERS = [
 ];
 
 export function UpgradeModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [pricingOpen, setPricingOpen] = useState(false);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open || pricingOpen) return;
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") onClose();
     }
@@ -47,7 +50,7 @@ export function UpgradeModal({ open, onClose }: { open: boolean; onClose: () => 
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = previous;
     };
-  }, [open, onClose]);
+  }, [open, onClose, pricingOpen]);
 
   if (!open) return null;
 
@@ -71,8 +74,16 @@ export function UpgradeModal({ open, onClose }: { open: boolean; onClose: () => 
               Upgrade your plan
             </h2>
             <p className="mt-2 max-w-xl text-sm leading-6 text-muted">
-              This render needs more credits. A 5s clip is 10, 10s is 20, 15s is 30, 30s is 60, 45s is 90, and 60s is 120.
+              This render needs more credits. Video cost is the model rate per second × duration × resolution (360p 1×, 720p
+              1.5×, 1080p 2.2×), plus 20 credits for an ElevenLabs voiceover.
             </p>
+            <button
+              type="button"
+              onClick={() => setPricingOpen(true)}
+              className="mt-3 rounded-full border border-line px-3 py-1.5 text-xs font-medium text-foreground transition hover:bg-panel"
+            >
+              View pricing guide
+            </button>
           </div>
           <button
             type="button"
@@ -109,6 +120,7 @@ export function UpgradeModal({ open, onClose }: { open: boolean; onClose: () => 
           ))}
         </div>
       </section>
+      <PricingGuideModal open={pricingOpen} onClose={() => setPricingOpen(false)} />
     </div>
   );
 }

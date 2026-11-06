@@ -195,7 +195,6 @@ export function Storyboard({
               ref={playerRef}
               key={mainSrc}
               src={mainSrc}
-              muted={!narrationEmbedded}
               playsInline
               preload="auto"
               onEnded={onClipEnded}

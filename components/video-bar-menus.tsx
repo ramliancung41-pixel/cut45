@@ -9,6 +9,7 @@ import {
   VIDEO_MODELS,
   VIDEO_RESOLUTIONS,
   videoClipCreditCost,
+  videoRenderPlan,
   type VideoClipDuration,
   type VideoModelId,
   type VideoResolution,
@@ -257,6 +258,11 @@ export function VideoResolutionMenu({
                 <span className="mt-0.5 block text-[11px] text-white/45">
                   {option.note} · {videoClipCreditCost(model, option.id, durationSec)} credits
                 </span>
+                {videoRenderPlan(model, option.id).billed !== option.id ? (
+                  <span className="mt-0.5 block text-[10px] text-amber-200/70">
+                    Renders at {videoRenderPlan(model, option.id).billed} on this model
+                  </span>
+                ) : null}
               </span>
               <Tick />
             </button>

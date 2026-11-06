@@ -1,13 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SUPABASE_ACCESS_COOKIE } from "@/lib/auth-cookie";
-import { dialogueAudioLabel, parseDialogue } from "@/lib/dialogue";
 import { isMockVideoUrl } from "@/lib/mock-video";
-import { ElevenLabsQuotaError, synthesizeDialogue, synthesizeSpeech } from "@/lib/elevenlabs";
+import { ElevenLabsQuotaError } from "@/lib/elevenlabs";
 import { isAspectRatio, type AspectRatio } from "@/lib/frame";
-import { deliverFrame, falMediaUrl, lipSyncVideo, muxVideoAudio, uploadAudio } from "@/lib/fal-video";
+import { falMediaUrl } from "@/lib/fal-video";
+import { narrateClip } from "@/lib/narrate-clip";
 import { isNarrationLanguageId } from "@/lib/narration";
 import { userFromAccessToken } from "@/lib/supabase/server";
-import { getVoice, resolveVoiceId } from "@/lib/voices";
+import { resolveVoiceId } from "@/lib/voices";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -43,77 +43,17 @@ export async function POST(request: NextRequest) {
   if (requestedVideo && !videoUrl) {
     return NextResponse.json({ error: "The finished video cannot take a narration track." }, { status: 400 });
   }
-  const voice = getVoice(voiceId);
-  if (!voice) {
-    return NextResponse.json({ error: "Select a voice style." }, { status: 400 });
-  }
 
   try {
-    const turns = parseDialogue(script, voice.id);
-    const spoken = turns
-      ? await synthesizeDialogue({
-          turns,
-          language,
-          signal: request.signal,
-        })
-      : await synthesizeSpeech({
-          script,
-          elevenLabsVoiceId: voice.elevenLabsVoiceId,
-          language,
-          signal: request.signal,
-        });
-    const audioLabel = turns ? dialogueAudioLabel(turns) : `${voice.name} · ElevenLabs`;
-    const localVoice = spoken.audioSrc.startsWith("data:audio/wav");
-    const voiceNote = localVoice ? "ElevenLabs did not answer, so a local male and female voice was used." : undefined;
-    if (mock) {
-      return NextResponse.json({
-        audioSrc: spoken.audioSrc,
-        audioLabel,
-        videoUrl: videoUrl ?? undefined,
-        embedded: false,
-        mock: true,
-        notice: voiceNote ?? "Dialogue is on the voice track. The stock picture stays in the timeline at 0:00.",
-      });
-    }
-    if (!videoUrl) {
-      return NextResponse.json({ audioSrc: spoken.audioSrc, audioLabel, embedded: false, ...(voiceNote ? { notice: voiceNote } : {}) });
-    }
-
-    const mime = spoken.bytes[0] === 0x52 && spoken.bytes[1] === 0x49 ? "audio/wav" : "audio/mpeg";
-    const uploaded = await uploadAudio(spoken.bytes, request.signal, mime);
-    if ("error" in uploaded) {
-      return NextResponse.json({
-        audioSrc: spoken.audioSrc,
-        audioLabel,
-        embedded: false,
-        notice: voiceNote ?? uploaded.error,
-      });
-    }
-    const [muxed, synced] = await Promise.all([
-      muxVideoAudio(videoUrl, uploaded.fileUrl, request.signal),
-      turns ? lipSyncVideo(videoUrl, uploaded.fileUrl, request.signal, 45000) : Promise.resolve({ error: "" }),
-    ]);
-    const withSound = "videoUrl" in synced ? synced.videoUrl : "videoUrl" in muxed ? muxed.videoUrl : "";
-    if (!withSound) {
-      const reason = "error" in muxed ? muxed.error : "Dialogue audio is ready.";
-      return NextResponse.json({
-        audioSrc: spoken.audioSrc,
-        audioLabel,
-        embedded: false,
-        notice: voiceNote ?? reason,
-      });
-    }
+    const narrated = await narrateClip({ script, voiceId, language, videoUrl, aspect, mock, signal: request.signal });
     return NextResponse.json({
-      videoUrl: await deliverFrame(withSound, request.signal, aspect),
-      audioSrc: spoken.audioSrc,
-      audioLabel,
-      embedded: true,
-      ...("videoUrl" in synced ? { lipSynced: true } : {}),
-      ...(!("videoUrl" in synced) && turns
-        ? { notice: voiceNote ?? "Dialogue audio is on the video. Mouth sync could not be applied." }
-        : voiceNote
-          ? { notice: voiceNote }
-          : {}),
+      audioSrc: narrated.audioSrc,
+      audioLabel: narrated.audioLabel,
+      embedded: narrated.embedded,
+      ...(narrated.videoUrl ? { videoUrl: narrated.videoUrl } : {}),
+      ...(narrated.lipSynced ? { lipSynced: true } : {}),
+      ...(mock ? { mock: true } : {}),
+      ...(narrated.notice ? { notice: narrated.notice } : {}),
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
