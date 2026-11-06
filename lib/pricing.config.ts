@@ -3,12 +3,7 @@ import type { VideoModelId } from "@/lib/video-models";
 
 // Server billing (/api/generate, /api/video/status) reads these through lib/video-models.ts.
 export const VIDEO_RATE_MATRIX = {
-  Hunyuan: 3.6,
-  "LTX Video": 3.6,
-  SVD: 5,
-  "Pika 2.2": 12,
-  "Runway Gen-3 Turbo": 16,
-  "Runway Gen-2": 20,
+  Wan: 3,
 } as const;
 
 export type VideoRateKey = keyof typeof VIDEO_RATE_MATRIX;
@@ -17,8 +12,8 @@ export type PricedResolution = "360p" | "720p" | "1080p";
 
 export const RESOLUTION_MULTIPLIER: Record<PricedResolution, number> = {
   "360p": 1,
-  "720p": 1.5,
-  "1080p": 2.2,
+  "720p": 1,
+  "1080p": 1,
 };
 
 export const VOICE_PREMIUM_CREDITS = 20;
@@ -68,16 +63,9 @@ export type Tier = {
 };
 
 export const TIERS: readonly Tier[] = [
-  { id: "standard", label: "Standard", modelId: "ltx", modelLabel: "LTX Video", rateKey: "LTX Video", resolution: "360p" },
-  { id: "pro", label: "Pro", modelId: "pika", modelLabel: "Pika 2.2", rateKey: "Pika 2.2", resolution: "720p" },
-  {
-    id: "premium",
-    label: "Premium",
-    modelId: "runway",
-    modelLabel: "Runway Gen-3 Turbo",
-    rateKey: "Runway Gen-3 Turbo",
-    resolution: "720p",
-  },
+  { id: "standard", label: "Standard", modelId: "wan", modelLabel: "Wan", rateKey: "Wan", resolution: "720p" },
+  { id: "pro", label: "Pro", modelId: "wan", modelLabel: "Wan", rateKey: "Wan", resolution: "720p" },
+  { id: "premium", label: "Premium", modelId: "wan", modelLabel: "Wan", rateKey: "Wan", resolution: "720p" },
 ];
 
 export const DEFAULT_TIER_ID: TierId = "standard";
@@ -93,7 +81,7 @@ export const MUSIC_TRACK_AVAILABLE = false;
 export const PROMPT_IMPROVE_FREE_PER_DAY = 5;
 export const PROMPT_IMPROVE_CREDITS = 1;
 export const STITCHED_EXPORT_1080P_CREDITS = 0;
-export const NEW_USER_TRIAL_CREDITS = 20;
+export const NEW_USER_TRIAL_CREDITS = 0;
 
 export function tierById(id: TierId): Tier {
   return TIERS.find((tier) => tier.id === id) ?? TIERS[0];

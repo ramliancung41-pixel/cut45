@@ -2,7 +2,7 @@ create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   email text not null,
   tokens integer not null default 100,
-  credits integer not null default 60,
+  credits integer not null default 0,
   trial_claimed boolean not null default true,
   tier text not null default 'free',
   created_at timestamptz not null default now()
@@ -18,7 +18,7 @@ set search_path = public
 as $$
 begin
   insert into public.profiles (id, email, credits, trial_claimed, tier)
-  values (new.id, coalesce(new.email, ''), 60, true, 'free')
+  values (new.id, coalesce(new.email, ''), 0, true, 'free')
   on conflict (id) do nothing;
   return new;
 end;

@@ -16,7 +16,7 @@ export default function CreditsPage() {
       <PageHeader
         eyebrow="Account"
         title="Credits & Billing"
-        description="Studio Fast Motion costs 20 credits per 10 seconds. Ultra cinematic costs 180 credits. Starter adds 300 credits, Pro adds 1,000, and the top-up adds 150."
+        description="Wan costs 3 credits per second. A new account starts at 0 credits, so add credits before generating. Starter adds 300 credits, Pro adds 1,000, and the top-up adds 150."
       />
 
       <div className="gen-glass rounded-3xl px-5 py-6">

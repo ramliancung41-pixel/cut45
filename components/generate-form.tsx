@@ -106,7 +106,7 @@ function engineOffer(id: VisualEngineId, imageToVideo: boolean) {
   if (imageToVideo && id === "budget") {
     return {
       name: "Studio Fast Motion",
-      rate: "20 credits / 10s",
+      rate: "3 credits / second",
       note: "High quality render",
     };
   }
@@ -1396,6 +1396,7 @@ export function GenerateForm() {
   const sendDisabled =
     !balanceReady ||
     running ||
+    (!imageMode && credits < activeVideoCost) ||
     referencePreparing ||
     planning ||
     imageInputPending ||

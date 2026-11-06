@@ -8,7 +8,6 @@ import {
   DEFAULT_SCENE_SECONDS,
   MUSIC_TRACK_AVAILABLE,
   MUSIC_TRACK_CREDITS,
-  NEW_USER_TRIAL_CREDITS,
   PROMPT_IMPROVE_CREDITS,
   PROMPT_IMPROVE_FREE_PER_DAY,
   STITCHED_EXPORT_1080P_CREDITS,
@@ -54,8 +53,7 @@ export function CreditPacks({ afterPlans }: { afterPlans?: React.ReactNode }) {
           Credit plans
         </h2>
         <p className="mt-2 text-sm text-(--l-muted)">
-          Secure Stripe checkout. Credits expire after {CREDIT_EXPIRY_MONTHS} months. New accounts start with{" "}
-          {formatCredits(NEW_USER_TRIAL_CREDITS)} to try it out.
+          Secure Stripe checkout. Credits expire after {CREDIT_EXPIRY_MONTHS} months. New accounts start with 0 credits.
         </p>
         <div className="mt-5 grid gap-4 md:grid-cols-3">
           {CREDIT_PACKS.map((pack) => (

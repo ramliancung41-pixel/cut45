@@ -1,11 +1,11 @@
 -- Cut45 free tier. Account balances live on public.profiles (one row per auth.users id).
--- Existing balances stay as they are. New accounts receive 60 credits.
+-- Existing balances stay as they are. New accounts receive 0 credits.
 
 alter table public.profiles
-  add column if not exists credits integer not null default 60;
+  add column if not exists credits integer not null default 0;
 
 alter table public.profiles
-  alter column credits set default 60;
+  alter column credits set default 0;
 
 alter table public.profiles
   add column if not exists trial_claimed boolean not null default true;
@@ -21,7 +21,7 @@ set search_path = public
 as $$
 begin
   insert into public.profiles (id, email, credits, trial_claimed, tier)
-  values (new.id, coalesce(new.email, ''), 60, true, 'free')
+  values (new.id, coalesce(new.email, ''), 0, true, 'free')
   on conflict (id) do nothing;
   return new;
 end;

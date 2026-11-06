@@ -27,16 +27,6 @@ export { RESOLUTION_MULTIPLIER, VIDEO_RATE_MATRIX, VOICE_PREMIUM_CREDITS, type V
 type RenderPlan = Record<VideoResolution, { api: string; billed: VideoResolution }>;
 
 // Each model is billed for the resolution its Fal endpoint actually renders.
-const CAPPED_AT_720: RenderPlan = {
-  "360p": { api: "480p", billed: "360p" },
-  "720p": { api: "720p", billed: "720p" },
-  "1080p": { api: "720p", billed: "720p" },
-};
-const FROM_720: RenderPlan = {
-  "360p": { api: "720p", billed: "720p" },
-  "720p": { api: "720p", billed: "720p" },
-  "1080p": { api: "1080p", billed: "1080p" },
-};
 const ANY_SIZE: RenderPlan = {
   "360p": { api: "360p", billed: "360p" },
   "720p": { api: "720p", billed: "720p" },
@@ -45,80 +35,24 @@ const ANY_SIZE: RenderPlan = {
 
 export const VIDEO_MODELS = [
   {
-    id: "ltx",
-    name: "LTX Video",
-    shortName: "LTX Video",
+    id: "wan",
+    name: "Wan",
+    shortName: "Wan",
     badge: "LOW COST",
-    note: "Fast & budget-friendly",
+    note: "3 credits per second",
     tier: "budget" as const,
-    rateKey: "LTX Video" as const,
-    render: CAPPED_AT_720,
-    aliases: ["ltx video", "ltx"],
-    engine: "budget" as const,
-    textEndpoint: "fal-ai/ltx-video-13b-distilled",
-    imageEndpoint: "fal-ai/ltx-video-13b-distilled/image-to-video",
-  },
-  {
-    id: "hunyuan",
-    name: "Hunyuan Video",
-    shortName: "Hunyuan",
-    badge: "NEW",
-    note: "Open-source cinematic model",
-    tier: "budget" as const,
-    rateKey: "Hunyuan" as const,
-    render: CAPPED_AT_720,
-    aliases: ["hunyuan video", "hunyuan"],
-    engine: "budget" as const,
-    textEndpoint: "fal-ai/hunyuan-video",
-    imageEndpoint: "fal-ai/hunyuan-video-image-to-video",
-  },
-  {
-    id: "svd",
-    name: "Stable Video Diffusion",
-    shortName: "SVD",
-    badge: "LOW COST",
-    note: "Fast SVD turbo clips",
-    tier: "budget" as const,
-    rateKey: "SVD" as const,
+    rateKey: "Wan" as const,
     render: ANY_SIZE,
-    aliases: ["svd", "fast svd", "stable video diffusion"],
+    aliases: ["wan", "wan 2.1", "fal-ai/wan-2.1"],
     engine: "budget" as const,
-    textEndpoint: "fal-ai/fast-svd-lcm/text-to-video",
-    imageEndpoint: "fal-ai/fast-svd-lcm",
-  },
-  {
-    id: "pika",
-    name: "Pika 2.2",
-    shortName: "Pika 2.2",
-    badge: "TRENDING",
-    note: "5s and 10s clips",
-    tier: "premium" as const,
-    rateKey: "Pika 2.2" as const,
-    render: FROM_720,
-    aliases: ["pika 2.2", "pika"],
-    engine: "budget" as const,
-    textEndpoint: "fal-ai/pika/v2.2/text-to-video",
-    imageEndpoint: "fal-ai/pika/v2.2/image-to-video",
-  },
-  {
-    id: "runway",
-    name: "Runway Gen-3 Turbo",
-    shortName: "Runway",
-    badge: "HOT",
-    note: "Cinematic motion",
-    tier: "premium" as const,
-    rateKey: "Runway Gen-3 Turbo" as const,
-    render: FROM_720,
-    aliases: ["runway gen-3 turbo", "runway gen-3", "runway"],
-    engine: "ultra" as const,
-    textEndpoint: "fal-ai/runway-gen3/turbo/text-to-video",
-    imageEndpoint: "fal-ai/runway-gen3/turbo/image-to-video",
+    textEndpoint: "fal-ai/wan-t2v",
+    imageEndpoint: "fal-ai/wan-i2v",
   },
 ] as const;
 
 export type VideoModelId = (typeof VIDEO_MODELS)[number]["id"];
 
-export const DEFAULT_VIDEO_MODEL: VideoModelId = "ltx";
+export const DEFAULT_VIDEO_MODEL: VideoModelId = "wan";
 
 export function isVideoModelId(value: string): value is VideoModelId {
   return VIDEO_MODELS.some((model) => model.id === value);
@@ -132,8 +66,8 @@ export function isVideoClipDuration(value: number): value is VideoClipDuration {
   return VIDEO_CLIP_DURATIONS.includes(value as VideoClipDuration);
 }
 
-export function getVideoModel(id: string | null | undefined) {
-  return VIDEO_MODELS.find((model) => model.id === id) ?? VIDEO_MODELS[0];
+export function getVideoModel(_id: string | null | undefined) {
+  return VIDEO_MODELS[0];
 }
 
 export function videoModelEngine(id: string | null | undefined): Exclude<VisualEngineId, "stock"> {

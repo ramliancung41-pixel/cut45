@@ -1,10 +1,10 @@
 import type { VisualEngineId } from "@/lib/visual-engines";
 
 export const INITIAL_CREDITS = 0;
-export const FREE_TIER_CREDITS = 60;
+export const FREE_TIER_CREDITS = 0;
 export const CHECKOUT_CONNECTING_MS = 2000;
 export const STOCK_GENERATION_COST = 0;
-export const CREDITS_PER_SECOND = 2;
+export const CREDITS_PER_SECOND = 3;
 export const BUDGET_GENERATION_COST = 10;
 export const ULTRA_GENERATION_COST = 180;
 export const BUDGET_IMAGE_GENERATION_COST = 10;

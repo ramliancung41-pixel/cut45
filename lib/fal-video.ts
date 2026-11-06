@@ -15,15 +15,12 @@ export type ReferenceImage = {
   bytes: Buffer;
 };
 
+const WAN_TEXT = "fal-ai/wan-t2v";
+const WAN_IMAGE = "fal-ai/wan-i2v";
+
 const MODELS: Record<Exclude<VisualEngineId, "stock">, { text: string; image: string }> = {
-  budget: {
-    text: "fal-ai/ltx-video-13b-distilled",
-    image: "fal-ai/ltx-video-13b-distilled/image-to-video",
-  },
-  ultra: {
-    text: "fal-ai/luma-dream-machine/ray-2",
-    image: "fal-ai/luma-dream-machine/ray-2/image-to-video",
-  },
+  budget: { text: WAN_TEXT, image: WAN_IMAGE },
+  ultra: { text: WAN_TEXT, image: WAN_IMAGE },
 };
 
 const POLL_START_MS = 2000;
@@ -200,6 +197,16 @@ function videoInput(
   resolution: string,
 ) {
   const seconds = motionSeconds(durationSec);
+
+  if (model.includes("wan")) {
+    const aspectRatio = aspect === "9:16" || aspect === "1:1" || aspect === "16:9" ? aspect : "16:9";
+    return {
+      prompt,
+      resolution: "720p",
+      aspect_ratio: aspectRatio,
+      ...(imageUrl ? { image_url: imageUrl } : {}),
+    };
+  }
 
   if (model.includes("ltx-video")) {
     return {
@@ -433,7 +440,7 @@ export async function renderFalClip(input: {
   const resolution = input.videoModel
     ? videoRenderResolution(input.videoModel, input.resolution)
     : input.engine === "budget"
-      ? videoRenderResolution("ltx", input.resolution)
+      ? videoRenderResolution("wan", input.resolution)
       : input.resolution ?? DEFAULT_VIDEO_RESOLUTION;
   let imageUrl: string | null = startFrame;
   let storageUrl: string | null = startFrame;

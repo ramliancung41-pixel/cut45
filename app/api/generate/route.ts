@@ -44,7 +44,6 @@ import { isVisualEngineId, type VisualEngineId } from "@/lib/visual-engines";
 import {
   DEFAULT_VIDEO_MODEL,
   DEFAULT_VIDEO_RESOLUTION,
-  isVideoModelId,
   isVideoResolution,
   INSUFFICIENT_CREDITS_MESSAGE,
   videoModelEngine,
@@ -1176,17 +1175,8 @@ export async function POST(request: NextRequest) {
   const voice = voiceRequested ? resolveVoiceId(rawVoice) : DEFAULT_VOICE_ID;
   const language: NarrationLanguageId =
     typeof record.language === "string" && isNarrationLanguageId(record.language) ? record.language : "auto";
-  const requestedEngine = typeof record.engine === "string" ? record.engine : "";
-  const videoModel = typeof record.videoModel === "string" && isVideoModelId(record.videoModel)
-    ? record.videoModel
-    : requestedEngine === "ultra"
-      ? "runway"
-      : DEFAULT_VIDEO_MODEL;
-  const engine = isVideoModelId(typeof record.videoModel === "string" ? record.videoModel : "")
-    ? videoModelEngine(videoModel)
-    : isVisualEngineId(requestedEngine)
-      ? requestedEngine
-      : videoModelEngine(videoModel);
+  const videoModel = DEFAULT_VIDEO_MODEL;
+  const engine = videoModelEngine(videoModel);
   const resolution =
     typeof record.resolution === "string" && isVideoResolution(record.resolution)
       ? record.resolution
@@ -1265,7 +1255,7 @@ export async function POST(request: NextRequest) {
       scene,
       continuation: priorVideoUrls.length > 0,
       engine,
-      imageToVideo: Boolean(referenceImage) && engine !== "stock",
+      imageToVideo: Boolean(referenceImage),
       durationSec,
     });
     if (holdQuote.clipCost > 0) {
@@ -1288,23 +1278,21 @@ export async function POST(request: NextRequest) {
     if (!user?.email) {
       return NextResponse.json({ error: "Sign in before spending credits." }, { status: 401 });
     }
-    if (!mockMode && engine !== "stock") {
-      const checked = await authorizeGenerationCredits({
-        userId: user.id,
-        email: user.email,
-        modelName: videoModel,
-        duration: clipSec,
-        resolution,
-        voiceId: voiceRequested ? voiceStyle.id : null,
-      });
-      if (!checked.ok) {
-        return NextResponse.json(
-          { error: checked.error, upgradeRequired: checked.status === 402 },
-          { status: checked.status },
-        );
-      }
-      billing = checked.billing;
+    const checked = await authorizeGenerationCredits({
+      userId: user.id,
+      email: user.email,
+      modelName: videoModel,
+      duration: clipSec,
+      resolution,
+      voiceId: voiceRequested ? voiceStyle.id : null,
+    });
+    if (!checked.ok) {
+      return NextResponse.json(
+        { error: checked.error, upgradeRequired: checked.status === 402 },
+        { status: checked.status },
+      );
     }
+    billing = checked.billing;
   }
 
   const stream = iteratorToStream(

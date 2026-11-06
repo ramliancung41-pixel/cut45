@@ -12,12 +12,7 @@ import {
 export type PricingView = "video" | "voice" | "compare";
 
 const ROWS: Array<{ key: VideoRateKey; label: string; badge: string; tone: string }> = [
-  { key: "Hunyuan", label: "Hunyuan Video", badge: "Budget", tone: "bg-sky-400/15 text-sky-200" },
-  { key: "LTX Video", label: "LTX Video", badge: "Budget", tone: "bg-sky-400/15 text-sky-200" },
-  { key: "SVD", label: "SVD", badge: "Budget", tone: "bg-sky-400/15 text-sky-200" },
-  { key: "Pika 2.2", label: "Pika 2.2", badge: "Premium", tone: "bg-violet-400/15 text-violet-200" },
-  { key: "Runway Gen-3 Turbo", label: "Runway Gen-3 Turbo", badge: "Premium", tone: "bg-violet-400/15 text-violet-200" },
-  { key: "Runway Gen-2", label: "Runway Gen-2", badge: "Retired", tone: "bg-white/[0.06] text-zinc-400" },
+  { key: "Wan", label: "Wan", badge: "3 credits/sec", tone: "bg-sky-400/15 text-sky-200" },
 ];
 
 export function VoiceSwitch({ withVoice, onChange }: { withVoice: boolean; onChange: (next: boolean) => void }) {
@@ -159,12 +154,10 @@ export function PricingNotes() {
       </p>
       <p className="flex items-start gap-2 rounded-xl border border-amber-300/20 bg-amber-300/[0.05] px-3 py-2.5">
         <span aria-hidden className="text-amber-300">*</span>
-        Billed at the resolution the model actually renders: LTX and Hunyuan max out at 720p; Pika and Runway Gen-3 start at
-        720p.
+        Wan is billed at 3 credits per second.
       </p>
       <p className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5 sm:col-span-2">
-        Credits are only deducted after the video (and voiceover, when selected) finish successfully. Runway Gen-2 is retired
-        by Runway and listed for reference only.
+        Credits are checked before the Wan render starts. A zero balance cannot generate a video.
       </p>
     </div>
   );
