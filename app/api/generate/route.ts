@@ -43,8 +43,6 @@ import { DEFAULT_VOICE_ID, getVoice, resolveVoiceId, type VoiceId } from "@/lib/
 import { isVisualEngineId, type VisualEngineId } from "@/lib/visual-engines";
 import {
   DEFAULT_VIDEO_MODEL,
-  DEFAULT_VIDEO_RESOLUTION,
-  isVideoResolution,
   INSUFFICIENT_CREDITS_MESSAGE,
   videoModelEngine,
   wantsVoiceover,
@@ -152,6 +150,7 @@ function iteratorToStream(
     if (!hold || settled) return;
     settled = true;
     await refundProfileCredits(hold.userId, hold.cost);
+    console.error("[credits] generation did not finish; refunded", hold.cost);
   };
   const keep = () => {
     settled = true;
@@ -415,7 +414,7 @@ async function* runWorkflow(
   mockMode = false,
   aspect: AspectRatio = "9:16",
   videoModel: VideoModelId = DEFAULT_VIDEO_MODEL,
-  resolution: VideoResolution = DEFAULT_VIDEO_RESOLUTION,
+  resolution: VideoResolution = "720p",
   billing: VideoBilling | null = null,
   narration: { voiceId: VoiceId; language: NarrationLanguageId } | null = null,
 ) {
@@ -584,7 +583,7 @@ async function* runWorkflow(
             audioSrc,
             frames: motionClip("", script),
             engine,
-            creditsCharged: billing?.credits ?? 0,
+          creditsCharged: 0,
             preview: false,
           },
         });
@@ -598,7 +597,7 @@ async function* runWorkflow(
         frameDetail = "Mock 9:16 stock clip";
         yield encode({ type: "notice", message: MOCK_NOTICE });
       } else if (falApiKey()) {
-        console.error("[fal] video render failed", rendered.error);
+        console.error("[fal] video render failed; credits were not charged", rendered.error);
         yield encode({ type: "error", message: rendered.error });
         return;
       } else {
@@ -612,6 +611,7 @@ async function* runWorkflow(
       }
     } catch (error) {
       if (isAbortError(error)) throw error;
+      console.error("[fal] video render failed; credits were not charged", error instanceof Error ? error.message : error);
       if (falApiKey()) {
         yield encode({
           type: "error",
@@ -1177,10 +1177,7 @@ export async function POST(request: NextRequest) {
     typeof record.language === "string" && isNarrationLanguageId(record.language) ? record.language : "auto";
   const videoModel = DEFAULT_VIDEO_MODEL;
   const engine = videoModelEngine(videoModel);
-  const resolution =
-    typeof record.resolution === "string" && isVideoResolution(record.resolution)
-      ? record.resolution
-      : DEFAULT_VIDEO_RESOLUTION;
+  const resolution = "720p" as const;
   const referenceImage = parseReferenceImage(record.referenceImage);
   const motionStyle = typeof record.motionStyle === "string" ? record.motionStyle : "";
   const mockMode = record.mockMode === true;

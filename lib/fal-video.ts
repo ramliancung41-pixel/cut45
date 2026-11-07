@@ -2,9 +2,7 @@ import { logApiKey } from "@/lib/api-keys";
 import { falApiKey } from "@/lib/fal-key";
 import { frameSize, type AspectRatio } from "@/lib/frame";
 import {
-  DEFAULT_VIDEO_RESOLUTION,
   getVideoModel,
-  videoRenderResolution,
   type VideoModelId,
   type VideoResolution,
 } from "@/lib/video-models";
@@ -15,12 +13,12 @@ export type ReferenceImage = {
   bytes: Buffer;
 };
 
-const WAN_TEXT = "fal-ai/wan-t2v";
-const WAN_IMAGE = "fal-ai/wan-i2v";
+const LTX_TEXT = "fal-ai/ltx-video";
+const LTX_IMAGE = "fal-ai/ltx-video/image-to-video";
 
 const MODELS: Record<Exclude<VisualEngineId, "stock">, { text: string; image: string }> = {
-  budget: { text: WAN_TEXT, image: WAN_IMAGE },
-  ultra: { text: WAN_TEXT, image: WAN_IMAGE },
+  budget: { text: LTX_TEXT, image: LTX_IMAGE },
+  ultra: { text: LTX_TEXT, image: LTX_IMAGE },
 };
 
 const POLL_START_MS = 2000;
@@ -198,21 +196,11 @@ function videoInput(
 ) {
   const seconds = motionSeconds(durationSec);
 
-  if (model.includes("wan")) {
-    const aspectRatio = aspect === "9:16" || aspect === "1:1" || aspect === "16:9" ? aspect : "16:9";
-    return {
-      prompt,
-      resolution: "720p",
-      aspect_ratio: aspectRatio,
-      ...(imageUrl ? { image_url: imageUrl } : {}),
-    };
-  }
-
   if (model.includes("ltx-video")) {
     return {
       prompt,
       negative_prompt: "worst quality, inconsistent motion, blurry, jittery, distorted, still frame, slideshow, static image",
-      resolution,
+      resolution: "720p",
       aspect_ratio: aspect,
       num_frames: seconds * 24 + 1,
       frame_rate: 24,
@@ -437,11 +425,7 @@ export async function renderFalClip(input: {
   const startFrame = input.startFrameUrl ? httpsUrl(input.startFrameUrl) : null;
   const endpoints = videoEndpoints(input.engine, input.videoModel);
   const model = input.image || startFrame ? endpoints.image : endpoints.text;
-  const resolution = input.videoModel
-    ? videoRenderResolution(input.videoModel, input.resolution)
-    : input.engine === "budget"
-      ? videoRenderResolution("wan", input.resolution)
-      : input.resolution ?? DEFAULT_VIDEO_RESOLUTION;
+  const resolution = "720p" as const;
   let imageUrl: string | null = startFrame;
   let storageUrl: string | null = startFrame;
   if (input.image && !imageUrl) {

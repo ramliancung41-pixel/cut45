@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
     });
     if ("pending" in rendered) return NextResponse.json({ pending: true });
     if (!("videoUrl" in rendered)) {
-      console.error("[fal] video status failed", rendered.error);
+      console.error("[fal] video status failed; credits were not charged", rendered.error);
       return NextResponse.json({ error: rendered.error }, { status: 502 });
     }
 
@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Fal.ai status could not be reached.";
-    console.error("[fal] video status failed", message);
+    console.error("[fal] video status failed; credits were not charged", message);
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

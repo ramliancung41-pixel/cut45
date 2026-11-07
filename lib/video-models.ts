@@ -18,7 +18,7 @@ export const VIDEO_RESOLUTIONS = [
 
 export type VideoResolution = (typeof VIDEO_RESOLUTIONS)[number]["id"];
 
-export const DEFAULT_VIDEO_RESOLUTION: VideoResolution = "1080p";
+export const DEFAULT_VIDEO_RESOLUTION: VideoResolution = "720p";
 
 export type VideoModelTier = "budget" | "premium";
 
@@ -36,17 +36,17 @@ const ANY_SIZE: RenderPlan = {
 export const VIDEO_MODELS = [
   {
     id: "wan",
-    name: "Wan",
-    shortName: "Wan",
+    name: "LTX Video",
+    shortName: "LTX",
     badge: "LOW COST",
     note: "3 credits per second",
     tier: "budget" as const,
     rateKey: "Wan" as const,
     render: ANY_SIZE,
-    aliases: ["wan", "wan 2.1", "fal-ai/wan-2.1"],
+    aliases: ["wan", "ltx", "ltx video"],
     engine: "budget" as const,
-    textEndpoint: "fal-ai/wan-t2v",
-    imageEndpoint: "fal-ai/wan-i2v",
+    textEndpoint: "fal-ai/ltx-video",
+    imageEndpoint: "fal-ai/ltx-video/image-to-video",
   },
 ] as const;
 
@@ -122,8 +122,7 @@ function findRateKey(nameOrId: string | null | undefined): VideoRateKey {
 export function videoCreditQuote(model: string | null | undefined, resolution?: string | null, durationSec = 5) {
   const rateKey = findRateKey(model);
   const entry = findVideoModel(model);
-  const requested = resolveVideoResolution(resolution);
-  const billedResolution = entry ? entry.render[requested].billed : requested;
+  const billedResolution = "720p" as const;
   const seconds = videoClipDuration(durationSec);
   const ratePerSecond = VIDEO_RATE_MATRIX[rateKey];
   const multiplier = RESOLUTION_MULTIPLIER[billedResolution];

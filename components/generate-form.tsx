@@ -32,7 +32,7 @@ import { imageStyleName, type ImageStyleId } from "@/lib/image-styles";
 import { ImageAspectMenu } from "@/components/image-aspect-menu";
 import { ImageModelMenu } from "@/components/image-model-menu";
 import { StyleMenu } from "@/components/style-menu";
-import { VideoDurationMenu, VideoModelMenu, VideoResolutionMenu } from "@/components/video-bar-menus";
+import { VideoDurationMenu, VideoModelMenu } from "@/components/video-bar-menus";
 import {
   DEFAULT_VIDEO_MODEL,
   DEFAULT_VIDEO_RESOLUTION,
@@ -40,7 +40,6 @@ import {
   INSUFFICIENT_CREDITS_MESSAGE,
   videoClipCreditCost,
   videoModelEngine,
-  videoResolutionLabel,
   type VideoModelId,
   type VideoResolution,
 } from "@/lib/video-models";
@@ -1294,10 +1293,6 @@ export function GenerateForm() {
     setPicker((current) => (current === "duration" ? null : current));
   }
 
-  function closeVideoResolutionMenu() {
-    setPicker((current) => (current === "resolution" ? null : current));
-  }
-
   function selectVideoModel(next: VideoModelId) {
     setVideoModel(next);
     setEngine(videoModelEngine(next));
@@ -1681,25 +1676,13 @@ export function GenerateForm() {
                       </Glyph>,
                     )}
                   />
-                  <VideoResolutionMenu
-                    open={picker === "resolution"}
-                    value={videoResolution}
-                    model={videoModel}
-                    durationSec={durationSec >= 10 ? 10 : 5}
-                    onSelect={(next) => {
-                      setVideoResolution(next);
-                      setPicker(null);
-                    }}
-                    onClose={closeVideoResolutionMenu}
-                    trigger={chip(
-                      "resolution",
-                      videoResolutionLabel(videoResolution),
-                      <Glyph className="h-3.5 w-3.5">
-                        <rect x="2.5" y="4.5" width="15" height="11" rx="1.5" />
-                        <path d="M6 15.5h8" />
-                      </Glyph>,
-                    )}
-                  />
+                  <span className="home-chip pointer-events-none">
+                    <Glyph className="h-3.5 w-3.5">
+                      <rect x="2.5" y="4.5" width="15" height="11" rx="1.5" />
+                      <path d="M6 15.5h8" />
+                    </Glyph>
+                    <span>720p HD</span>
+                  </span>
                   {chip(
                     "voice",
                     getVoice(voice)?.name.split(" ")[0] ?? "Voice",
