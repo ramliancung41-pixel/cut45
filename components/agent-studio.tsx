@@ -809,6 +809,7 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
         credits={credits}
         balanceReady={balanceReady}
         cardStatus={cardStatus}
+        latestMediaUrl={(messageId) => generations.find((item) => item.sourceId === messageId && item.url)?.url ?? ""}
         onSend={send}
         onAttach={(file) => void attach(file)}
         onClearAttachment={clearAttachment}

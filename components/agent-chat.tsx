@@ -12,6 +12,7 @@ import type { AgentMessage } from "@/lib/agent-sessions";
 import { pluginStore } from "@/lib/studio-prefs";
 import { imageStyleName } from "@/lib/image-styles";
 import { videoResolutionLabel } from "@/lib/video-models";
+import { SaveCharacterButton } from "@/components/save-character-button";
 
 export type CardStatus = "idle" | "running" | "done" | "error";
 
@@ -34,6 +35,7 @@ export function AgentChatPanel({
   credits,
   balanceReady,
   cardStatus,
+  latestMediaUrl,
   onSend,
   onAttach,
   onClearAttachment,
@@ -49,6 +51,7 @@ export function AgentChatPanel({
   credits: number;
   balanceReady: boolean;
   cardStatus: (messageId: string) => CardStatus;
+  latestMediaUrl?: (messageId: string) => string;
   onSend: (text: string) => boolean;
   onAttach: (file: File) => void;
   onClearAttachment: () => void;
@@ -185,6 +188,7 @@ export function AgentChatPanel({
                       short={balanceReady && credits < suggestionCreditCost(message.suggestion, plugins.voiceover)}
                       onGenerate={() => onGenerate(message)}
                       onContinue={() => onContinue(message)}
+                      saveUrl={latestMediaUrl?.(message.id)}
                       onUpgrade={onUpgrade}
                     />
                   ) : null}
@@ -318,6 +322,7 @@ function GenerationCard({
   withVoice,
   onGenerate,
   onContinue,
+  saveUrl,
   onUpgrade,
 }: {
   suggestion: AgentSuggestion;
@@ -326,6 +331,7 @@ function GenerationCard({
   withVoice: boolean;
   onGenerate: () => void;
   onContinue: () => void;
+  saveUrl?: string;
   onUpgrade: () => void;
 }) {
   const video = suggestion.kind === "video";
@@ -384,6 +390,14 @@ function GenerationCard({
           </button>
         ) : (
           <div className="flex items-center gap-2">
+            {status === "done" && saveUrl ? (
+              <SaveCharacterButton
+                imageUrl={suggestion.kind === "image" ? saveUrl : undefined}
+                videoUrl={suggestion.kind === "video" ? saveUrl : undefined}
+                label="Save to Character"
+                className="rounded-full border border-white/15 px-3.5 py-1.5 text-xs font-semibold text-white"
+              />
+            ) : null}
             {video && status === "done" ? (
               <button
                 type="button"

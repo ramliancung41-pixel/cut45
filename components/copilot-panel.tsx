@@ -3,6 +3,7 @@
 import { Menu, Plus, Send, Sparkles, SquarePen, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { SaveCharacterButton } from "@/components/save-character-button";
 import { useStudioAccount } from "@/components/profile-credit-bar";
 import { useStudioChrome } from "@/components/studio-chrome";
 import {
@@ -518,12 +519,17 @@ export function CopilotPanel({
                   </span>
                 </div>
               ) : characterImage ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={characterImage}
-                  alt="Character reference sheet"
-                  className="mt-3 aspect-square w-full rounded-2xl bg-black object-contain"
-                />
+                <div className="relative mt-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={characterImage}
+                    alt="Character reference sheet"
+                    className="aspect-square w-full rounded-2xl bg-black object-contain"
+                  />
+                  <div className="absolute right-2 bottom-2">
+                    <SaveCharacterButton imageUrl={characterImage} label="Save to Character" className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-black" />
+                  </div>
+                </div>
               ) : null}
               {characterSheet ? <p className="mt-2 text-xs leading-5 text-foreground/80">{characterSheet}</p> : null}
             </section>

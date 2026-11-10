@@ -5,6 +5,7 @@ import { primeSpeechVoices, speakNarration, stopNarration } from "@/lib/browser-
 import { type AspectRatio } from "@/lib/frame";
 import { VIDEO_DURATION_SEC, formatTimecode, isMotionSrc, sceneBlocks, type StoryFrame } from "@/lib/generate";
 import { isVoiceId } from "@/lib/voices";
+import { SaveCharacterButton } from "@/components/save-character-button";
 
 function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
@@ -195,6 +196,16 @@ export function Storyboard({
           ) : (
             <img src={mainSrc} alt="" className={cn(frameClass(aspect), "rounded-[1.15rem] object-cover")} />
           )}
+          {onSaveCharacter ? (
+            <div className="absolute top-3 right-3 z-10">
+              <SaveCharacterButton
+                videoUrl={isMotionSrc(mainSrc) ? mainSrc : undefined}
+                imageUrl={isMotionSrc(mainSrc) ? undefined : mainSrc}
+                label="Save Character to Library"
+                className="rounded-full bg-black/70 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur"
+              />
+            </div>
+          ) : null}
           <p className="mt-2 text-center font-mono text-[11px] text-muted">
             {formatTimecode(Math.min(durationSec, playhead * durationSec))} / {formatTimecode(durationSec)}
           </p>
