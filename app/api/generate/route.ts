@@ -416,6 +416,7 @@ async function* runWorkflow(
   resolution: VideoResolution = "720p",
   billing: VideoBilling | null = null,
   narration: { voiceId: VoiceId; language: NarrationLanguageId } | null = null,
+  referenceUrl: string | null = null,
 ) {
   const lockPromise =
     referenceImage && engine !== "stock"
@@ -490,12 +491,13 @@ async function* runWorkflow(
       const rendered = await renderFalLtx({
         prompt: visualScenePrompt(topic, motionStyle, aspect),
         image: referenceImage,
+        characterImageUrl: referenceUrl,
         durationSec: clipSec >= 10 ? 10 : 5,
       });
       if ("videoUrl" in rendered) {
         falRendered = true;
         frames = motionClip(rendered.videoUrl, script);
-        frameDetail = referenceImage
+        frameDetail = referenceImage || referenceUrl
           ? "Image-to-video clip · 720p · 16:9"
           : "720p · 16:9";
       } else if (isFalCreditError(rendered.error)) {
@@ -953,7 +955,9 @@ export async function POST(request: NextRequest) {
   const videoModel = DEFAULT_VIDEO_MODEL;
   const engine = videoModelEngine(videoModel);
   const resolution = "720p" as const;
-  const referenceImage = parseReferenceImage(record.referenceImage);
+  const rawReference = typeof record.referenceImage === "string" ? record.referenceImage.trim() : "";
+  const referenceUrl = rawReference.startsWith("https://") ? rawReference : "";
+  const referenceImage = referenceUrl ? null : parseReferenceImage(rawReference || null);
   const motionStyle = typeof record.motionStyle === "string" ? record.motionStyle : "";
   const mockMode = record.mockMode === true;
   const aspect: AspectRatio = typeof record.aspect === "string" && isAspectRatio(record.aspect) ? record.aspect : "16:9";
@@ -1112,6 +1116,7 @@ export async function POST(request: NextRequest) {
       resolution,
       billing,
       voiceRequested ? { voiceId: voiceStyle.id, language } : null,
+      referenceUrl,
     ),
     hold,
   );

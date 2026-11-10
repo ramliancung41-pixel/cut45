@@ -17,11 +17,12 @@ export async function POST(request: NextRequest) {
     actionPrompt?: unknown;
     characterImageUrl?: unknown;
     continueFromVideoUrl?: unknown;
+    extractFrame?: unknown;
   } | null;
   const actionPrompt = typeof body?.actionPrompt === "string" ? body.actionPrompt.trim() : "";
   const characterImageUrl = typeof body?.characterImageUrl === "string" ? body.characterImageUrl.trim() : "";
   const continueFromVideoUrl = typeof body?.continueFromVideoUrl === "string" ? body.continueFromVideoUrl.trim() : "";
-  if (actionPrompt.length < 3) {
+  if (actionPrompt.length < 3 && !continueFromVideoUrl) {
     return NextResponse.json({ success: false, error: "Describe the video first." }, { status: 400 });
   }
   const characterImage = characterImageUrl.startsWith("data:") ? parseReferenceImage(characterImageUrl) : null;
@@ -34,11 +35,30 @@ export async function POST(request: NextRequest) {
   if (continueFromVideoUrl && !continueFromVideoUrl.startsWith("https://")) {
     return NextResponse.json({ success: false, error: "The previous video could not be continued." }, { status: 400 });
   }
+  const extractFrame = body?.extractFrame === true;
 
   const accessToken = request.cookies.get(SUPABASE_ACCESS_COOKIE)?.value ?? "";
   const user = accessToken ? await userFromAccessToken(accessToken) : null;
   if (!user?.id || !user.email) {
     return NextResponse.json({ success: false, error: "Sign in before spending credits." }, { status: 401 });
+  }
+
+  if (extractFrame) {
+    if (!continueFromVideoUrl) {
+      return NextResponse.json({ success: false, error: "The previous video could not be continued." }, { status: 400 });
+    }
+    const frame = await extractLastFrame(continueFromVideoUrl, request.signal);
+    if ("error" in frame || !frame.imageUrl) {
+      return NextResponse.json(
+        { success: false, error: "error" in frame ? frame.error : "The last frame could not be read." },
+        { status: 502 },
+      );
+    }
+    return NextResponse.json({ success: true, frameUrl: frame.imageUrl });
+  }
+
+  if (actionPrompt.length < 3) {
+    return NextResponse.json({ success: false, error: "Describe the next scene first." }, { status: 400 });
   }
 
   try {

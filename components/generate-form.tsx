@@ -1044,34 +1044,23 @@ export function GenerateForm() {
       setError("Continue a finished video.");
       return;
     }
-    if (!requireCredits(15, "Continuing this scene costs 15 credits.")) return;
     setRunning(true);
     setError(null);
     try {
       const response = await fetch("/api/generate-scene", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          actionPrompt: (topic.trim() || result.script).slice(0, 2000),
-          continueFromVideoUrl: clipUrl,
-          ...(referenceImage ? { characterImageUrl: referenceImage } : {}),
-        }),
+        body: JSON.stringify({ extractFrame: true, continueFromVideoUrl: clipUrl }),
       });
-      const payload = (await response.json().catch(() => null)) as { success?: boolean; videoUrl?: string; error?: string } | null;
-      if (!response.ok || !payload?.success || !payload.videoUrl) {
-        throw new Error(payload?.error ?? "The scene could not be continued.");
+      const payload = (await response.json().catch(() => null)) as { success?: boolean; frameUrl?: string; error?: string } | null;
+      if (!response.ok || !payload?.frameUrl) {
+        throw new Error(payload?.error ?? "The last frame could not be read.");
       }
-      setResult({
-        ...result,
-        videoUrl: payload.videoUrl,
-        durationSec: result.durationSec + 5,
-        creditsCharged: result.creditsCharged + 15,
-        frames: result.frames.map((frame, index) => (index === 0 ? { ...frame, src: payload.videoUrl! } : frame)),
-      });
-      setStatusMessage("Continued 5 seconds from the last frame. 15 credits used.");
-      void syncBalance();
+      setReferenceImage(payload.frameUrl);
+      setReferencePreview(payload.frameUrl);
+      setStatusMessage("Last frame attached. The next prompt continues this scene.");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "The scene could not be continued.");
+      setError(caught instanceof Error ? caught.message : "The last frame could not be read.");
     } finally {
       setRunning(false);
     }
@@ -2016,7 +2005,7 @@ export function GenerateForm() {
                       disabled={!balanceReady || running}
                       className="gen-ghost"
                     >
-                      Extend 5s
+                      Continue Scene
                     </button>
                   ) : null}
                   {chainVideoUrls(result.frames).length > 0 ? (

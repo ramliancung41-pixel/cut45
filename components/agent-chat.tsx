@@ -391,7 +391,7 @@ function GenerationCard({
                 disabled={running}
                 className="rounded-full border border-white/15 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-white/10 disabled:opacity-60"
               >
-                Extend 5s
+                Continue Scene
               </button>
             ) : null}
             <button
