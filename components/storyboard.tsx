@@ -26,6 +26,7 @@ export function Storyboard({
   durationSec = VIDEO_DURATION_SEC,
   videoUrl,
   aspect = "9:16",
+  onSaveCharacter,
 }: {
   frames: StoryFrame[];
   script: string;
@@ -36,6 +37,7 @@ export function Storyboard({
   durationSec?: number;
   videoUrl?: string;
   aspect?: AspectRatio;
+  onSaveCharacter?: () => void;
 }) {
   const scenes = sceneBlocks(frames);
   const movieSrc = videoUrl?.startsWith("https://") ? videoUrl : scenes.length === 1 ? scenes[0]?.src ?? "" : "";
@@ -171,7 +173,11 @@ export function Storyboard({
         <button type="button" onClick={() => stopPlayback()} className="gen-ghost">
           Stop
         </button>
-        {null}
+        {onSaveCharacter ? (
+          <button type="button" onClick={onSaveCharacter} className="gen-ghost">
+            Save to Character
+          </button>
+        ) : null}
       </div>
 
       {mainSrc ? (

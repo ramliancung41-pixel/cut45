@@ -5,6 +5,7 @@ const STUDIO_PATHS = [
   "/create-video",
   "/credits",
   "/gallery",
+  "/characters",
   "/settings",
   "/editor",
   "/agent",

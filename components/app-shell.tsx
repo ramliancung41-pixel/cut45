@@ -37,6 +37,12 @@ const RAIL: RailItem[][] = [
       icon: <VideoIcon />,
       match: (pathname, mode) => pathname === "/generator" && mode === "video",
     },
+    {
+      href: "/characters",
+      label: "Characters",
+      icon: <CharacterIcon />,
+      match: (pathname) => pathname.startsWith("/characters"),
+    },
   ],
   [
     {
@@ -103,6 +109,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     pathname === "/generator" ||
     pathname === "/create" ||
     pathname.startsWith("/gallery") ||
+    pathname.startsWith("/characters") ||
     pathname.startsWith("/credits") ||
     pathname.startsWith("/pricing") ||
     pathname.startsWith("/settings");
@@ -590,6 +597,15 @@ function VideoIcon() {
     <Svg>
       <rect x="2.5" y="5" width="11" height="10" rx="2" />
       <path d="m13.5 8.5 4-2.5v8l-4-2.5" />
+    </Svg>
+  );
+}
+
+function CharacterIcon() {
+  return (
+    <Svg>
+      <circle cx="10" cy="7" r="2.5" />
+      <path d="M4.5 16.5c1-3 3-4.5 5.5-4.5s4.5 1.5 5.5 4.5" />
     </Svg>
   );
 }

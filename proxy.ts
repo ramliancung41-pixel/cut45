@@ -107,6 +107,8 @@ export const config = {
     "/credits/:path*",
     "/gallery",
     "/gallery/:path*",
+    "/characters",
+    "/characters/:path*",
     "/settings",
     "/settings/:path*",
     "/editor",

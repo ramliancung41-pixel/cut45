@@ -1157,7 +1157,19 @@ export function GenerateForm() {
     void fetch("/api/characters")
       .then((response) => (response.ok ? response.json() : null))
       .then((payload: { characters?: SavedCharacter[] } | null) => {
-        if (!cancelled && payload?.characters) setCharacters(payload.characters);
+        if (cancelled) return;
+        if (payload?.characters) setCharacters(payload.characters);
+        const stored = sessionStorage.getItem("cut45-character");
+        if (!stored) return;
+        sessionStorage.removeItem("cut45-character");
+        const picked = JSON.parse(stored) as { name?: string; url?: string };
+        if (picked.url?.startsWith("https://")) {
+          setReferenceImage(picked.url);
+          setReferencePreview(picked.url);
+          setReferenceName(picked.name || "Character");
+          setReferenceBytes(null);
+          setMode("video");
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -1176,6 +1188,34 @@ export function GenerateForm() {
     setSaveUrl(url);
     setSaveName(referenceName?.replace(/\.[a-z0-9]+$/i, "") || "");
     setSaveOpen(true);
+  }
+
+  async function saveResultCharacter() {
+    const still = previewSrc && !/\.mp4($|\?)/i.test(previewSrc) ? previewSrc : "";
+    if (still) {
+      openCharacterSave(still);
+      return;
+    }
+    const clipUrl = result?.videoUrl || (result ? chainVideoUrls(result.frames).at(-1) : "");
+    if (!clipUrl) {
+      setError("Generate a character image or video before saving.");
+      return;
+    }
+    setSavingCharacter(true);
+    try {
+      const response = await fetch("/api/generate-scene", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ extractFrame: true, continueFromVideoUrl: clipUrl }),
+      });
+      const payload = (await response.json().catch(() => null)) as { frameUrl?: string; error?: string } | null;
+      if (!response.ok || !payload?.frameUrl) throw new Error(payload?.error ?? "The last frame could not be read.");
+      openCharacterSave(payload.frameUrl);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The last frame could not be read.");
+    } finally {
+      setSavingCharacter(false);
+    }
   }
 
   async function saveCharacter() {
@@ -1722,6 +1762,30 @@ export function GenerateForm() {
                       </Glyph>,
                     )}
                   />
+                  <label className="home-chip">
+                    <span className="sr-only">Character library</span>
+                    <select
+                      className="max-w-[9rem] bg-transparent text-xs outline-none"
+                      defaultValue=""
+                      onChange={(event) => {
+                        const picked = characters.find((item) => item.id === event.target.value);
+                        event.currentTarget.value = "";
+                        if (!picked) return;
+                        setReferenceImage(picked.characterImageUrl);
+                        setReferencePreview(picked.characterImageUrl);
+                        setReferenceName(picked.name);
+                        setReferenceBytes(null);
+                        setMode("video");
+                      }}
+                    >
+                      <option value="">{characters.length > 0 ? "Character library" : "No saved characters"}</option>
+                      {characters.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   {chip(
                     "aspect",
                     aspect,
@@ -1757,32 +1821,6 @@ export function GenerateForm() {
                     </Glyph>
                     <span>720p HD</span>
                   </span>
-                  {characters.length > 0 ? (
-                    <label className="home-chip">
-                      <span className="sr-only">Character library</span>
-                      <select
-                        className="bg-transparent text-xs outline-none"
-                        defaultValue=""
-                        onChange={(event) => {
-                          const picked = characters.find((item) => item.id === event.target.value);
-                          event.currentTarget.value = "";
-                          if (!picked) return;
-                          setReferenceImage(picked.characterImageUrl);
-                          setReferencePreview(picked.characterImageUrl);
-                          setReferenceName(picked.name);
-                          setReferenceBytes(null);
-                          setMode("video");
-                        }}
-                      >
-                        <option value="">Character library</option>
-                        {characters.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
                   {chip(
                     "motion",
                     motionStyle ? motionPillLabel(motionStyle).replace("Motion: ", "") : "Motion",
@@ -2063,6 +2101,7 @@ export function GenerateForm() {
                   durationSec={result.durationSec}
                   videoUrl={result.videoUrl}
                   aspect={aspect}
+                  onSaveCharacter={() => void saveResultCharacter()}
                 />
                 <div className="mt-4 flex flex-wrap items-center gap-3">
                   {(() => {
