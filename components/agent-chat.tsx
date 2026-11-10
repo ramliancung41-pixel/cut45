@@ -38,6 +38,7 @@ export function AgentChatPanel({
   onAttach,
   onClearAttachment,
   onGenerate,
+  onContinue,
   onUpgrade,
   onNewChat,
 }: {
@@ -52,6 +53,7 @@ export function AgentChatPanel({
   onAttach: (file: File) => void;
   onClearAttachment: () => void;
   onGenerate: (message: AgentMessage) => void;
+  onContinue: (message: AgentMessage) => void;
   onUpgrade: () => void;
   onNewChat: () => void;
 }) {
@@ -182,6 +184,7 @@ export function AgentChatPanel({
                       withVoice={suggestionHasVoice(message.suggestion, plugins.voiceover)}
                       short={balanceReady && credits < suggestionCreditCost(message.suggestion, plugins.voiceover)}
                       onGenerate={() => onGenerate(message)}
+                      onContinue={() => onContinue(message)}
                       onUpgrade={onUpgrade}
                     />
                   ) : null}
@@ -314,6 +317,7 @@ function GenerationCard({
   short,
   withVoice,
   onGenerate,
+  onContinue,
   onUpgrade,
 }: {
   suggestion: AgentSuggestion;
@@ -321,6 +325,7 @@ function GenerationCard({
   short: boolean;
   withVoice: boolean;
   onGenerate: () => void;
+  onContinue: () => void;
   onUpgrade: () => void;
 }) {
   const video = suggestion.kind === "video";
@@ -378,15 +383,27 @@ function GenerationCard({
             Upgrade
           </button>
         ) : (
-          <button
-            type="button"
-            onClick={onGenerate}
-            disabled={running}
-            className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-black transition hover:bg-white/90 disabled:opacity-60"
-          >
-            {running ? <Spinner /> : null}
-            {running ? "Generating…" : status === "done" ? "Regenerate" : status === "error" ? "Try again" : "Generate"}
-          </button>
+          <div className="flex items-center gap-2">
+            {video && status === "done" ? (
+              <button
+                type="button"
+                onClick={onContinue}
+                disabled={running}
+                className="rounded-full border border-white/15 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-white/10 disabled:opacity-60"
+              >
+                Extend 5s
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={onGenerate}
+              disabled={running}
+              className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-black transition hover:bg-white/90 disabled:opacity-60"
+            >
+              {running ? <Spinner /> : null}
+              {running ? "Generating…" : status === "done" ? "Regenerate" : status === "error" ? "Try again" : "Generate"}
+            </button>
+          </div>
         )}
       </div>
     </div>

@@ -64,9 +64,9 @@ export type Tier = {
 };
 
 export const TIERS: readonly Tier[] = [
-  { id: "standard", label: "Standard", modelId: "wan", modelLabel: "Veo 3.1 Lite", rateKey: "Veo", resolution: "720p" },
-  { id: "pro", label: "Pro", modelId: "wan", modelLabel: "Veo 3.1 Lite", rateKey: "Veo", resolution: "720p" },
-  { id: "premium", label: "Premium", modelId: "wan", modelLabel: "Veo 3.1 Lite", rateKey: "Veo", resolution: "720p" },
+  { id: "standard", label: "Standard", modelId: "wan", modelLabel: "Wan 2.1", rateKey: "Veo", resolution: "720p" },
+  { id: "pro", label: "Pro", modelId: "wan", modelLabel: "Wan 2.1", rateKey: "Veo", resolution: "720p" },
+  { id: "premium", label: "Premium", modelId: "wan", modelLabel: "Wan 2.1", rateKey: "Veo", resolution: "720p" },
 ];
 
 export const DEFAULT_TIER_ID: TierId = "standard";

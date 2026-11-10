@@ -17,7 +17,7 @@ import type { AgentSuggestion } from "@/lib/agent-suggestion";
 import { threadTitleFromPrompt } from "@/lib/copilot-history";
 import { FRAME_ASPECTS, frameCue, type AspectRatio } from "@/lib/frame";
 import { NARRATION_LANGUAGES, isNarrationLanguageId, type NarrationLanguageId } from "@/lib/narration";
-import { VOICES, getVoice, isVoiceId, voicesForGender, type VoiceGender, type VoiceId } from "@/lib/voices";
+import { VOICES, getVoice, voicesForGender, type VoiceGender, type VoiceId } from "@/lib/voices";
 import {
   VISUAL_ENGINES,
   type VisualEngineId,
@@ -809,10 +809,6 @@ export function GenerateForm() {
     options?: { referenceDataUrl?: string | null; forceBudget?: boolean },
   ) {
     if (running || sceneList.length === 0) return;
-    if (!isVoiceId(voice)) {
-      setError("Select a voice style.");
-      return;
-    }
     if (!options?.forceBudget && engine !== "budget") {
       setError("Switch to Studio Fast Motion to render the scene chain.");
       return;
@@ -1041,11 +1037,47 @@ export function GenerateForm() {
     }
   }
 
-  async function generateLongVideo(trimmed: string) {
-    if (!isVoiceId(voice)) {
-      setError("Select a voice style.");
+  async function continueFiveSeconds() {
+    if (!result || running) return;
+    const clipUrl = result.videoUrl || chainVideoUrls(result.frames).at(-1);
+    if (!clipUrl) {
+      setError("Continue a finished video.");
       return;
     }
+    if (!requireCredits(15, "Continuing this scene costs 15 credits.")) return;
+    setRunning(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/generate-scene", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actionPrompt: (topic.trim() || result.script).slice(0, 2000),
+          continueFromVideoUrl: clipUrl,
+          ...(referenceImage ? { characterImageUrl: referenceImage } : {}),
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as { success?: boolean; videoUrl?: string; error?: string } | null;
+      if (!response.ok || !payload?.success || !payload.videoUrl) {
+        throw new Error(payload?.error ?? "The scene could not be continued.");
+      }
+      setResult({
+        ...result,
+        videoUrl: payload.videoUrl,
+        durationSec: result.durationSec + 5,
+        creditsCharged: result.creditsCharged + 15,
+        frames: result.frames.map((frame, index) => (index === 0 ? { ...frame, src: payload.videoUrl! } : frame)),
+      });
+      setStatusMessage("Continued 5 seconds from the last frame. 15 credits used.");
+      void syncBalance();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The scene could not be continued.");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function generateLongVideo(trimmed: string) {
     if (engine !== "budget") {
       setError("Videos longer than 10 seconds use Studio Fast Motion. Each 5-second scene costs 10 credits.");
       return;
@@ -1078,11 +1110,6 @@ export function GenerateForm() {
 
     if (trimmed.length > PROMPT_MAX) {
       setError(`Keep the prompt under ${PROMPT_MAX} characters.`);
-      return;
-    }
-
-    if (!isVoiceId(voice)) {
-      setError("Select a voice style.");
       return;
     }
 
@@ -1317,7 +1344,7 @@ export function GenerateForm() {
     };
     const Recognition = speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
     if (!Recognition) {
-      setError("Voice typing is not available in this browser.");
+      setError("Dictation is not available in this browser.");
       return;
     }
     const recognition = new Recognition();
@@ -1696,9 +1723,9 @@ export function GenerateForm() {
             <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
-                aria-label={listening ? "Stop voice typing" : "Voice typing"}
+                aria-label={listening ? "Stop dictation" : "Dictate prompt"}
                 aria-pressed={listening}
-                title={listening ? "Stop voice typing" : "Speak your prompt"}
+                title={listening ? "Stop dictation" : "Type the prompt by speaking"}
                 onClick={toggleDictation}
                 disabled={running}
                 className={cn(
@@ -1982,6 +2009,16 @@ export function GenerateForm() {
                       </button>
                     );
                   })()}
+                  {chainVideoUrls(result.frames).length > 0 || result.videoUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => void continueFiveSeconds()}
+                      disabled={!balanceReady || running}
+                      className="gen-ghost"
+                    >
+                      Extend 5s
+                    </button>
+                  ) : null}
                   {chainVideoUrls(result.frames).length > 0 ? (
                     <>
                       <button

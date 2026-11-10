@@ -991,9 +991,9 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "Select a motion style." }, { status: 400 });
   }
 
-  const voiceStyle = getVoice(voice);
+  const voiceStyle = getVoice(voice) ?? getVoice(DEFAULT_VOICE_ID);
   if (!voiceStyle) {
-    return Response.json({ error: "Select a voice style." }, { status: 400 });
+    return Response.json({ error: "Could not start the video." }, { status: 500 });
   }
 
   if (extend) {

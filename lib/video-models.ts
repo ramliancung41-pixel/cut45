@@ -36,17 +36,17 @@ const ANY_SIZE: RenderPlan = {
 export const VIDEO_MODELS = [
   {
     id: "wan",
-    name: "Veo 3.1 Lite",
-    shortName: "Veo",
+    name: "Wan 2.1",
+    shortName: "Wan 2.1",
     badge: "LOW COST",
     note: "3 credits per second",
     tier: "budget" as const,
     rateKey: "Veo" as const,
     render: ANY_SIZE,
-    aliases: ["wan", "ltx", "ltx video"],
+    aliases: ["wan", "wan 2.1", "ltx", "ltx video"],
     engine: "budget" as const,
-    textEndpoint: "fal-ai/ltx-video",
-    imageEndpoint: "fal-ai/ltx-video/image-to-video",
+    textEndpoint: "fal-ai/wan-t2v",
+    imageEndpoint: "fal-ai/wan-i2v",
   },
 ] as const;
 

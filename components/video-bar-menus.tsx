@@ -154,7 +154,7 @@ export function VideoModelMenu({
                   {model.id === DEFAULT_VIDEO_MODEL ? <span className="image-model-default">Default</span> : null}
                 </span>
                 <span className="mt-0.5 block text-[11px] text-white/45">
-                  {model.note} · {videoClipCreditCost(model.id, resolution, durationSec)} credits
+                  {model.note} • {videoClipCreditCost(model.id, resolution, durationSec)} credits
                 </span>
               </span>
               <span className={`image-model-badge image-model-badge-${model.badge.toLowerCase().replace(" ", "-")}`}>

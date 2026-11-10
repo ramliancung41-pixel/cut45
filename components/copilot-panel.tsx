@@ -609,7 +609,7 @@ export function CopilotPanel({
           {attachmentName ? (
             <p className="mb-2 flex items-center justify-between gap-2 px-2 text-xs text-muted">
               <span className="truncate">Attached {attachmentName}</span>
-              <button type="button" onClick={() => setAttachmentName("")} className="shrink-0 text-foreground">
+              <button type="button" onClick={() => { setAttachmentName(""); setCharacterImage(""); }} className="shrink-0 text-foreground">
                 Remove
               </button>
             </p>
@@ -666,7 +666,15 @@ export function CopilotPanel({
             onChange={(event) => {
               const file = event.target.files?.[0];
               event.target.value = "";
-              if (file) setAttachmentName(file.name);
+              if (file) {
+                setAttachmentName(file.name);
+                const reader = new FileReader();
+                reader.onload = () => {
+                  const value = typeof reader.result === "string" ? reader.result : "";
+                  if (value.startsWith("data:image/")) setCharacterImage(value);
+                };
+                reader.readAsDataURL(file);
+              }
             }}
           />
         </form>

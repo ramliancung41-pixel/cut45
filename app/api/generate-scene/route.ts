@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SUPABASE_ACCESS_COOKIE } from "@/lib/auth-cookie";
+import { extractLastFrame, parseReferenceImage } from "@/lib/fal-video";
 import { renderFalLtx } from "@/lib/fal-ltx";
 import { ensureProfile, readProfileBalance } from "@/lib/profiles";
 import { userFromAccessToken } from "@/lib/supabase/server";
@@ -15,14 +16,23 @@ export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => null)) as {
     actionPrompt?: unknown;
     characterImageUrl?: unknown;
+    continueFromVideoUrl?: unknown;
   } | null;
   const actionPrompt = typeof body?.actionPrompt === "string" ? body.actionPrompt.trim() : "";
   const characterImageUrl = typeof body?.characterImageUrl === "string" ? body.characterImageUrl.trim() : "";
+  const continueFromVideoUrl = typeof body?.continueFromVideoUrl === "string" ? body.continueFromVideoUrl.trim() : "";
   if (actionPrompt.length < 3) {
     return NextResponse.json({ success: false, error: "Describe the video first." }, { status: 400 });
   }
-  if (characterImageUrl && !characterImageUrl.startsWith("https://")) {
+  const characterImage = characterImageUrl.startsWith("data:") ? parseReferenceImage(characterImageUrl) : null;
+  if (characterImage === "invalid") {
+    return NextResponse.json({ success: false, error: "The character image could not be read." }, { status: 400 });
+  }
+  if (characterImageUrl && !characterImageUrl.startsWith("https://") && !characterImage) {
     return NextResponse.json({ success: false, error: "The character image must be an https URL." }, { status: 400 });
+  }
+  if (continueFromVideoUrl && !continueFromVideoUrl.startsWith("https://")) {
+    return NextResponse.json({ success: false, error: "The previous video could not be continued." }, { status: 400 });
   }
 
   const accessToken = request.cookies.get(SUPABASE_ACCESS_COOKIE)?.value ?? "";
@@ -44,9 +54,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: "Could not read the credit balance." }, { status: 500 });
   }
 
+  let startFrameUrl = "";
+  if (continueFromVideoUrl) {
+    const frame = await extractLastFrame(continueFromVideoUrl, request.signal);
+    if ("error" in frame || !frame.imageUrl) {
+      return NextResponse.json(
+        { success: false, error: "error" in frame ? frame.error : "The last frame could not be read." },
+        { status: 502 },
+      );
+    }
+    startFrameUrl = frame.imageUrl;
+  }
+
   const rendered = await renderFalLtx({
     prompt: actionPrompt,
-    characterImageUrl,
+    characterImageUrl: startFrameUrl || (characterImage ? "" : characterImageUrl),
+    image: startFrameUrl ? null : characterImage,
+    startFrameUrl,
     durationSec: 5,
   });
   if (!("videoUrl" in rendered)) {

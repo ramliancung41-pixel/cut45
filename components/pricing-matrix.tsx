@@ -12,7 +12,7 @@ import {
 export type PricingView = "video" | "voice" | "compare";
 
 const ROWS: Array<{ key: VideoRateKey; label: string; badge: string; tone: string }> = [
-  { key: "Veo", label: "Veo 3.1 Lite", badge: "3 credits/sec", tone: "bg-sky-400/15 text-sky-200" },
+  { key: "Veo", label: "Wan 2.1", badge: "3 credits/sec", tone: "bg-sky-400/15 text-sky-200" },
 ];
 
 export function VoiceSwitch({ withVoice, onChange }: { withVoice: boolean; onChange: (next: boolean) => void }) {

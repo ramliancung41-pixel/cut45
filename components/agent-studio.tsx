@@ -297,10 +297,12 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
       if (!response.ok || typeof payload?.reply !== "string") {
         throw new Error(payload?.error ?? "The Co-Pilot could not answer. Try again.");
       }
+      const assistantId = newId("msg");
+      if (image) extrasRef.current.set(assistantId, { referenceImage: image });
       setMessages((current) => [
         ...current,
         {
-          id: newId("msg"),
+          id: assistantId,
           role: "assistant",
           text: payload.reply ?? "",
           reasoning: payload.reasoning || undefined,
@@ -322,6 +324,55 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
   function cardStatus(messageId: string): CardStatus {
     const latest = generations.find((generation) => generation.sourceId === messageId);
     return latest ? latest.status : "idle";
+  }
+
+  async function continueScene(message: AgentMessage) {
+    const suggestion = message.suggestion;
+    if (!suggestion || suggestion.kind !== "video") return;
+    const previous = generations.find((item) => item.sourceId === message.id && item.kind === "video" && item.url);
+    if (!previous?.url) return;
+    if (balanceReady && credits < 15) {
+      setUpgradeOpen(true);
+      return;
+    }
+    const id = newId("gen");
+    setGenerations((current) => [
+      {
+        id,
+        sourceId: message.id,
+        kind: "video",
+        title: `${previous.title} · continued`,
+        prompt: suggestion.prompt,
+        modelName: "Wan 2.1",
+        aspect: suggestion.aspect,
+        status: "running",
+        durationSec: 5,
+      },
+      ...current,
+    ]);
+    setSelectedId(id);
+    const extras = extrasRef.current.get(message.id);
+    try {
+      const response = await fetch("/api/generate-scene", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actionPrompt: suggestion.prompt.slice(0, 2000),
+          continueFromVideoUrl: previous.url,
+          ...(extras?.referenceImage ? { characterImageUrl: extras.referenceImage } : {}),
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as { success?: boolean; videoUrl?: string; error?: string } | null;
+      if (!response.ok || !payload?.success || !payload.videoUrl) {
+        if (response.status === 402) setUpgradeOpen(true);
+        throw new Error(payload?.error ?? "The scene could not be continued.");
+      }
+      updateGeneration(id, { status: "done", url: payload.videoUrl });
+      void syncBalance();
+    } catch (caught) {
+      const text = caught instanceof Error ? caught.message : "The scene could not be continued.";
+      updateGeneration(id, { status: "error", error: text });
+    }
   }
 
   async function syncBalance() {
@@ -786,6 +837,7 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
         onAttach={(file) => void attach(file)}
         onClearAttachment={clearAttachment}
         onGenerate={(message) => void generate(message)}
+        onContinue={(message) => void continueScene(message)}
         onUpgrade={() => setUpgradeOpen(true)}
         onNewChat={newChat}
       />
