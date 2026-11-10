@@ -41,8 +41,8 @@ async function agentChat(
 ) {
   const prompt = typeof body.prompt === "string" ? cleanText(body.prompt, 4000) : "";
   const rawImage = typeof body.image === "string" ? body.image.trim() : "";
-  const image = rawImage ? AGENT_IMAGE.exec(rawImage) : null;
-  if (rawImage && !image) {
+  const image = rawImage && AGENT_IMAGE.test(rawImage) ? AGENT_IMAGE.exec(rawImage) : null;
+  if (rawImage && !rawImage.startsWith("https://") && !rawImage.startsWith("http://") && !image) {
     return Response.json({ error: "Attach a JPEG, PNG, or WebP image." }, { status: 400 });
   }
   if (image && image[2].length > AGENT_IMAGE_MAX_BASE64) {

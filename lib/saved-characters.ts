@@ -25,6 +25,27 @@ export function rowToCharacter(row: Record<string, unknown>): SavedCharacter | n
   };
 }
 
+export function isVideoMedia(url: string) {
+  return /\.mp4(\?|#|$)/i.test(url) || /video\/mp4/i.test(url);
+}
+
+export function isStillImage(url: string) {
+  if (!url || isVideoMedia(url)) return false;
+  return url.startsWith("https://") || url.startsWith("data:image/jpeg") || url.startsWith("data:image/png") || url.startsWith("data:image/webp");
+}
+
+export async function latestCharacterImage(userId: string) {
+  const admin = createSupabaseAdminClient();
+  const listed = await admin
+    .from("characters")
+    .select("character_image_url")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  const url = listed.data?.[0]?.character_image_url;
+  return typeof url === "string" && isStillImage(url) ? url : "";
+}
+
 export async function storeCharacterImage(userId: string, sourceUrl: string) {
   const downloaded = await fetch(sourceUrl);
   if (!downloaded.ok) return { error: "The character image could not be downloaded." };

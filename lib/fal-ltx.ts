@@ -24,7 +24,7 @@ async function imageUrlFor(input: {
   startFrameUrl?: string | null;
 }) {
   const direct = input.characterImageUrl?.trim() || input.startFrameUrl?.trim() || "";
-  if (direct.startsWith("https://")) return direct;
+  if (direct.startsWith("https://") && !/\.mp4(\?|#|$)/i.test(direct)) return direct;
   if (!input.image) return "";
   const file = new File([new Uint8Array(input.image.bytes)], "character.png", {
     type: input.image.contentType,

@@ -3,6 +3,7 @@ import { SUPABASE_ACCESS_COOKIE } from "@/lib/auth-cookie";
 import { extractLastFrame, parseReferenceImage } from "@/lib/fal-video";
 import { renderFalLtx } from "@/lib/fal-ltx";
 import { ensureProfile, readProfileBalance } from "@/lib/profiles";
+import { isStillImage, isVideoMedia, latestCharacterImage } from "@/lib/saved-characters";
 import { userFromAccessToken } from "@/lib/supabase/server";
 import { deductGenerationCredits } from "@/lib/video-billing";
 import { INSUFFICIENT_CREDITS_MESSAGE } from "@/lib/video-models";
@@ -75,22 +76,24 @@ export async function POST(request: NextRequest) {
   }
 
   let startFrameUrl = "";
-  if (continueFromVideoUrl) {
+  if (continueFromVideoUrl && isVideoMedia(continueFromVideoUrl)) {
     const frame = await extractLastFrame(continueFromVideoUrl, request.signal);
-    if ("error" in frame || !frame.imageUrl) {
-      return NextResponse.json(
-        { success: false, error: "error" in frame ? frame.error : "The last frame could not be read." },
-        { status: 502 },
-      );
-    }
-    startFrameUrl = frame.imageUrl;
+    if (!("error" in frame) && frame.imageUrl && isStillImage(frame.imageUrl)) startFrameUrl = frame.imageUrl;
+  }
+  let still = startFrameUrl || (isStillImage(characterImageUrl) ? characterImageUrl : "");
+  if (!still) still = await latestCharacterImage(user.id);
+  if (!still && !characterImage) {
+    return NextResponse.json(
+      { success: false, error: "Attach a JPEG, PNG, or WebP image." },
+      { status: 400 },
+    );
   }
 
   const rendered = await renderFalLtx({
     prompt: actionPrompt,
-    characterImageUrl: startFrameUrl || (characterImage ? "" : characterImageUrl),
-    image: startFrameUrl ? null : characterImage,
-    startFrameUrl,
+    characterImageUrl: still,
+    image: still ? null : characterImage,
+    startFrameUrl: still,
     durationSec: 5,
   });
   if (!("videoUrl" in rendered)) {

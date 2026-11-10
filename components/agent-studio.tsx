@@ -331,23 +331,52 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
     if (!suggestion || suggestion.kind !== "video") return;
     const previous = generations.find((item) => item.sourceId === message.id && item.kind === "video" && item.url);
     if (!previous?.url) return;
-    setAttachmentPending(true);
+    if (balanceReady && credits < 15) {
+      setUpgradeOpen(true);
+      return;
+    }
+    const extras = extrasRef.current.get(message.id);
+    const savedStill =
+      extras?.referenceImage &&
+      !/\.mp4(\?|#|$)/i.test(extras.referenceImage) &&
+      (extras.referenceImage.startsWith("https://") || extras.referenceImage.startsWith("data:image/"))
+        ? extras.referenceImage
+        : "";
+    const id = newId("gen");
+    setGenerations((current) => [
+      {
+        id,
+        sourceId: message.id,
+        kind: "video",
+        title: `${previous.title} · continued`,
+        prompt: suggestion.prompt,
+        modelName: "Wan 2.1",
+        aspect: "16:9",
+        status: "running",
+        durationSec: 5,
+      },
+      ...current,
+    ]);
+    setSelectedId(id);
     try {
       const response = await fetch("/api/generate-scene", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ extractFrame: true, continueFromVideoUrl: previous.url }),
+        body: JSON.stringify({
+          actionPrompt: suggestion.prompt.slice(0, 2000),
+          ...(savedStill ? { characterImageUrl: savedStill } : { continueFromVideoUrl: previous.url }),
+        }),
       });
-      const payload = (await response.json().catch(() => null)) as { success?: boolean; frameUrl?: string; error?: string } | null;
-      if (!response.ok || !payload?.frameUrl) {
-        throw new Error(payload?.error ?? "The last frame could not be read.");
+      const payload = (await response.json().catch(() => null)) as { success?: boolean; videoUrl?: string; error?: string } | null;
+      if (!response.ok || !payload?.success || !payload.videoUrl) {
+        if (response.status === 402) setUpgradeOpen(true);
+        throw new Error(payload?.error ?? "The scene could not be continued.");
       }
-      setAttachment({ full: payload.frameUrl, thumb: payload.frameUrl });
+      updateGeneration(id, { status: "done", url: payload.videoUrl });
+      void syncBalance();
     } catch (caught) {
-      const text = caught instanceof Error ? caught.message : "The last frame could not be read.";
-      setMessages((current) => [...current, { id: newId("msg"), role: "assistant", text, failed: true }]);
-    } finally {
-      setAttachmentPending(false);
+      const text = caught instanceof Error ? caught.message : "The scene could not be continued.";
+      updateGeneration(id, { status: "error", error: text });
     }
   }
 
