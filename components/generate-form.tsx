@@ -46,6 +46,7 @@ import {
 import { MOTION_STYLES, PROMPT_MAX, type MotionStyleId } from "@/lib/motion-styles";
 import { prepareReferenceImage } from "@/lib/prepare-reference-image";
 import { CopilotPanel } from "@/components/copilot-panel";
+import { type SavedCharacter } from "@/lib/saved-characters";
 import {
   CLIP_DURATION_SEC,
   movieCreditCost,
@@ -215,6 +216,11 @@ export function GenerateForm() {
   const [referencePreview, setReferencePreview] = useState<string | null>(null);
   const [referenceName, setReferenceName] = useState<string | null>(null);
   const [referenceBytes, setReferenceBytes] = useState<number | null>(null);
+  const [characters, setCharacters] = useState<SavedCharacter[]>([]);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const [saveUrl, setSaveUrl] = useState("");
+  const [savingCharacter, setSavingCharacter] = useState(false);
   const [draggingImage, setDraggingImage] = useState(false);
   const [motionStyle, setMotionStyle] = useState<MotionStyleId | "">("");
   const [enhancing, setEnhancing] = useState(false);
@@ -1147,10 +1153,62 @@ export function GenerateForm() {
   }
 
   useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/characters")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { characters?: SavedCharacter[] } | null) => {
+        if (!cancelled && payload?.characters) setCharacters(payload.characters);
+      })
+      .catch(() => undefined);
     return () => {
-      if (previewRef.current) URL.revokeObjectURL(previewRef.current);
+      cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (previewRef.current?.startsWith("blob:")) URL.revokeObjectURL(previewRef.current);
+    };
+  }, []);
+
+  function openCharacterSave(url: string) {
+    if (!url) return;
+    setSaveUrl(url);
+    setSaveName(referenceName?.replace(/\.[a-z0-9]+$/i, "") || "");
+    setSaveOpen(true);
+  }
+
+  async function saveCharacter() {
+    const characterName = saveName.trim();
+    if (!characterName || !saveUrl || savingCharacter) return;
+    setSavingCharacter(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/characters/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ characterName, tempFalUrl: saveUrl }),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        success?: boolean;
+        character?: SavedCharacter;
+        error?: string;
+      } | null;
+      if (!response.ok || !payload?.success || !payload.character) {
+        throw new Error(payload?.error ?? "The character could not be saved.");
+      }
+      setCharacters((current) => [payload.character!, ...current.filter((item) => item.id !== payload.character?.id)]);
+      setReferenceImage(payload.character.characterImageUrl);
+      setReferencePreview(payload.character.characterImageUrl);
+      setReferenceName(payload.character.name);
+      setSaveOpen(false);
+      setStatusMessage(`${payload.character.name} is in the character library.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The character could not be saved.");
+    } finally {
+      setSavingCharacter(false);
+    }
+  }
 
   async function acceptReference(file: File) {
     if (!/^image\/(jpeg|png|webp)$/.test(file.type)) {
@@ -1699,6 +1757,32 @@ export function GenerateForm() {
                     </Glyph>
                     <span>720p HD</span>
                   </span>
+                  {characters.length > 0 ? (
+                    <label className="home-chip">
+                      <span className="sr-only">Character library</span>
+                      <select
+                        className="bg-transparent text-xs outline-none"
+                        defaultValue=""
+                        onChange={(event) => {
+                          const picked = characters.find((item) => item.id === event.target.value);
+                          event.currentTarget.value = "";
+                          if (!picked) return;
+                          setReferenceImage(picked.characterImageUrl);
+                          setReferencePreview(picked.characterImageUrl);
+                          setReferenceName(picked.name);
+                          setReferenceBytes(null);
+                          setMode("video");
+                        }}
+                      >
+                        <option value="">Character library</option>
+                        {characters.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
                   {chip(
                     "motion",
                     motionStyle ? motionPillLabel(motionStyle).replace("Motion: ", "") : "Motion",
@@ -1934,6 +2018,7 @@ export function GenerateForm() {
                 setDownloadError("Could not download that image.");
               });
             }}
+            onSaveCharacter={openCharacterSave}
           />
         </div>
       ) : null}
@@ -1998,7 +2083,17 @@ export function GenerateForm() {
                       </button>
                     );
                   })()}
-                  {chainVideoUrls(result.frames).length > 0 || result.videoUrl ? (
+                  {previewSrc ? (
+                    <button
+                      type="button"
+                      onClick={() => openCharacterSave(previewSrc)}
+                      disabled={running || savingCharacter}
+                      className="gen-ghost"
+                    >
+                      Save to Character Library
+                    </button>
+                  ) : null}
+                  {result.videoUrl || chainVideoUrls(result.frames).length > 0 ? (
                     <button
                       type="button"
                       onClick={() => void continueFiveSeconds()}
@@ -2030,6 +2125,36 @@ export function GenerateForm() {
               </div>
           ) : null}
         </section>
+      ) : null}
+
+      {saveOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4" role="dialog" aria-modal="true" aria-labelledby="save-character-title">
+          <form
+            className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#111113] p-5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveCharacter();
+            }}
+          >
+            <h2 id="save-character-title" className="text-base font-semibold">Save to Character Library</h2>
+            <p className="mt-1 text-sm text-muted">Name this character so the next video can keep the same look.</p>
+            <input
+              autoFocus
+              value={saveName}
+              onChange={(event) => setSaveName(event.target.value)}
+              placeholder="Kai Renn"
+              className="mt-4 w-full rounded-xl border border-white/10 bg-black px-3 py-2 text-sm outline-none"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" className="gen-ghost" onClick={() => setSaveOpen(false)} disabled={savingCharacter}>
+                Cancel
+              </button>
+              <button type="submit" className="gen-cta" disabled={savingCharacter || saveName.trim().length < 1}>
+                {savingCharacter ? "Saving…" : "Save character"}
+              </button>
+            </div>
+          </form>
+        </div>
       ) : null}
 
       <CopilotPanel
@@ -2090,6 +2215,7 @@ function ImageResultPanel({
   onChange,
   onRemove,
   onDownload,
+  onSaveCharacter,
 }: {
   running: boolean;
   source: string | null;
@@ -2100,6 +2226,7 @@ function ImageResultPanel({
   onChange: () => void;
   onRemove: () => void;
   onDownload: (imageUrl: string) => void;
+  onSaveCharacter?: (imageUrl: string) => void;
 }) {
   const [outputReady, setOutputReady] = useState(false);
   useEffect(() => {
@@ -2194,6 +2321,11 @@ function ImageResultPanel({
           <button type="button" onClick={() => onDownload(result.imageUrl)} className="gen-cta">
             Download / Save
           </button>
+          {onSaveCharacter ? (
+            <button type="button" onClick={() => onSaveCharacter(result.imageUrl)} className="gen-ghost">
+              Save to Character Library
+            </button>
+          ) : null}
           <p className="text-sm text-muted">{result.prompt}</p>
         </div>
       ) : null}
