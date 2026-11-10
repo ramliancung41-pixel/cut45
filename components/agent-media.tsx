@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { AgentStep } from "@/lib/agent-sessions";
 
 function cn(...parts: Array<string | false | null | undefined>) {
@@ -82,14 +82,6 @@ function clock(seconds: number) {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }
 
-function captionLines(script: string) {
-  return script
-    .split(/\n+/)
-    .map((line) => line.replace(/^\s*[^:"]{1,24}:\s*/, "").replace(/^"|"$/g, "").trim())
-    .filter((line) => line.length > 0)
-    .slice(0, 24);
-}
-
 function aspectRatio(aspect: string) {
   const [w, h] = aspect.split(":").map(Number);
   return w > 0 && h > 0 ? `${w} / ${h}` : "9 / 16";
@@ -118,13 +110,7 @@ export function AgentPlayer({
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
   const [voiceOn, setVoiceOn] = useState(true);
-  const [captionsOn, setCaptionsOn] = useState(captions);
-  const lines = useMemo(() => captionLines(script ?? ""), [script]);
   const hasVoice = Boolean(voiceEmbedded || audioSrc);
-  const caption =
-    captionsOn && lines.length > 0 && duration > 0
-      ? lines[Math.min(lines.length - 1, Math.floor((current / duration) * lines.length))]
-      : "";
   const fill = duration > 0 ? `${(current / duration) * 100}%` : "0%";
 
   function syncAudio(play: boolean) {
@@ -208,12 +194,6 @@ export function AgentPlayer({
             audioRef.current?.pause();
           }}
         />
-        {audioSrc && !voiceEmbedded ? <audio ref={audioRef} src={audioSrc} preload="auto" /> : null}
-        {caption ? (
-          <p className="pointer-events-none absolute inset-x-4 bottom-4 mx-auto w-fit max-w-[92%] rounded-lg bg-black/65 px-3 py-1.5 text-center text-sm leading-5 font-medium text-white backdrop-blur-sm">
-            {caption}
-          </p>
-        ) : null}
         {playing ? null : (
           <button
             type="button"
@@ -271,45 +251,6 @@ export function AgentPlayer({
           <span className="ml-1 text-xs text-zinc-300 tabular-nums">
             {clock(current)} / {clock(duration)}
           </span>
-          <div className="ml-auto flex items-center gap-1">
-            <button
-              type="button"
-              onClick={toggleVoice}
-              disabled={!hasVoice}
-              aria-pressed={hasVoice && voiceOn}
-              title={hasVoice ? voiceLabel || "Voice track" : "No voice track on this clip"}
-              className={cn(
-                "inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40",
-                hasVoice && voiceOn ? "bg-white/12 text-white" : "text-zinc-400 hover:bg-white/10 hover:text-white",
-              )}
-            >
-              <Icon className="h-3.5 w-3.5">
-                {hasVoice && voiceOn ? (
-                  <path d="M3.5 8v4h3l4 3.5v-11l-4 3.5Zm10 -.5a3.5 3.5 0 0 1 0 5M15.5 5.5a6.5 6.5 0 0 1 0 9" />
-                ) : (
-                  <path d="M3.5 8v4h3l4 3.5v-11l-4 3.5ZM13.5 8l4 4M17.5 8l-4 4" />
-                )}
-              </Icon>
-              Voice
-            </button>
-            <button
-              type="button"
-              onClick={() => setCaptionsOn((value) => !value)}
-              disabled={lines.length === 0}
-              aria-pressed={captionsOn && lines.length > 0}
-              title="Subtitle captions"
-              className={cn(
-                "inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40",
-                captionsOn && lines.length > 0 ? "bg-white/12 text-white" : "text-zinc-400 hover:bg-white/10 hover:text-white",
-              )}
-            >
-              <Icon className="h-3.5 w-3.5">
-                <rect x="2.5" y="4.5" width="15" height="11" rx="2" />
-                <path d="M6 11.5h3M11 11.5h3M6 8.5h8" />
-              </Icon>
-              CC
-            </button>
-          </div>
         </div>
       </div>
     </div>

@@ -170,17 +170,8 @@ export function GalleryBoard() {
               </span>
             </div>
             <p className="mt-4 text-sm font-medium">{project.engineLabel}</p>
-            <p className="mt-1 text-sm text-muted">
-              {rateLine(project)}
-              {" · "}
-              {project.voiceName}
-            </p>
+            <p className="mt-1 text-sm text-muted">{rateLine(project)}</p>
             <div className="mt-5 flex flex-wrap gap-2">
-              {project.kind === "image" ? null : (
-              <button type="button" onClick={() => replay(project)} className="gen-cta">
-                Replay audio
-              </button>
-              )}
               <button
                 type="button"
                 onClick={() => {

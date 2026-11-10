@@ -22,21 +22,20 @@ import { userFromAccessToken } from "@/lib/supabase/server";
 import { isAspectRatio, type AspectRatio } from "@/lib/frame";
 import { CLIP_DURATION_SEC } from "@/lib/scenes";
 import { logApiKey } from "@/lib/api-keys";
-import { falApiKey } from "@/lib/fal-key";
 import {
   extractLastFrame,
   falMediaUrl,
   mergeFalVideos,
   parseReferenceImage,
-  renderFalClip,
   type ReferenceImage,
 } from "@/lib/fal-video";
+import { falApiKey } from "@/lib/fal-key";
+import { renderFalLtx } from "@/lib/fal-ltx";
 import {
-  imageLockedMotionPrompt,
   isMotionStyleId,
   PROMPT_MAX,
-  speakingMotionPrompt,
-  videoMotionPrompt,
+  spokenDialogue,
+  visualScenePrompt,
 } from "@/lib/motion-styles";
 import { alignReferenceContext } from "@/lib/reference-context";
 import { DEFAULT_VOICE_ID, getVoice, resolveVoiceId, type VoiceId } from "@/lib/voices";
@@ -461,59 +460,15 @@ async function* runWorkflow(
       : `${wordCount} words, paced for a ${clipSec}-second dialogue`,
   });
 
-  yield encode({
-    type: "progress",
-    step: "audio",
-    status: "started",
-    message: GENERATE_STEPS[1].label,
-  });
-
-  let audioLabel: string;
-  let audioSrc: string | undefined;
-  try {
-    if (USE_PAID_VOICE) {
-      try {
-        audioSrc = await synthesizeSpeech(script, elevenLabsVoiceId, signal);
-        audioLabel = `${voiceName} · ElevenLabs`;
-      } catch (error) {
-        if (isAbortError(error)) throw error;
-        if (!(error instanceof QuotaError)) throw error;
-        preview = true;
-        await sleep(AUDIO_STEP_MS, signal);
-        audioLabel = `${voiceName} · browser voice · free-tier preview`;
-        yield encode({ type: "notice", message: error.message });
-      }
-    } else {
-      await sleep(AUDIO_STEP_MS, signal);
-      audioLabel = narration
-        ? `${voiceName} · ElevenLabs voiceover records once the picture is ready`
-        : "No voiceover selected";
-    }
-  } catch (error) {
-    if (isAbortError(error)) throw error;
-    yield encode({
-      type: "error",
-      message: error instanceof Error ? error.message : "Could not render the voice.",
-    });
-    return;
-  }
-
-  const recordVoice = Boolean(narration) && !preview;
-  if (!recordVoice) {
-    yield encode({
-      type: "progress",
-      step: "audio",
-      status: "completed",
-      message: "Audio ready",
-      detail: audioLabel,
-    });
-  }
+  let audioLabel = "";
+  const audioSrc: string | undefined = undefined;
+  const recordVoice = false;
 
   yield encode({
     type: "progress",
     step: "frames",
     status: "started",
-    message: GENERATE_STEPS[2].label,
+    message: GENERATE_STEPS[1].label,
   });
 
   let frames = buildStoryboard(script);
@@ -531,63 +486,18 @@ async function* runWorkflow(
     await sleep(FRAME_STEP_MS, signal);
   } else {
     try {
-      const lock = await lockPromise;
-      const rendered = await renderFalClip({
-        engine,
-        videoModel,
-        resolution,
-        prompt: speakingMotionPrompt(
-          referenceImage
-            ? imageLockedMotionPrompt(topic, motionStyle, lock)
-            : videoMotionPrompt(topic, motionStyle),
-          script,
-        ),
+      await lockPromise;
+      const rendered = await renderFalLtx({
+        prompt: visualScenePrompt(topic, motionStyle, aspect),
         image: referenceImage,
         durationSec: clipSec >= 10 ? 10 : 5,
-        aspectRatio: aspect,
-        signal,
       });
       if ("videoUrl" in rendered) {
         falRendered = true;
         frames = motionClip(rendered.videoUrl, script);
         frameDetail = referenceImage
-          ? "Image-to-video clip from Fal.ai · 9:16"
-          : "Fal.ai motion clip · 9:16";
-      } else if ("pending" in rendered) {
-        if (!billing) {
-          yield encode({ type: "error", message: "Sign in before rendering a video." });
-          return;
-        }
-        yield encode({
-          type: "rendering",
-          statusUrl: rendered.statusUrl,
-          responseUrl: rendered.responseUrl,
-          ticket: signRenderTicket({
-            userId: billing.userId,
-            email: billing.email,
-            credits: preview ? 0 : billing.credits,
-            responseUrl: rendered.responseUrl,
-            ...(recordVoice && narration
-              ? { voice: { voiceId: narration.voiceId, language: narration.language, script, aspect } }
-              : {}),
-          }),
-          result: {
-            id: `c45_${Date.now().toString(36)}`,
-            topic,
-            voiceId,
-            voiceName,
-            durationSec: clipSec,
-            script,
-            wordCount,
-            audioLabel,
-            audioSrc,
-            frames: motionClip("", script),
-            engine,
-          creditsCharged: 0,
-            preview: false,
-          },
-        });
-        return;
+          ? "Image-to-video clip · 720p · 16:9"
+          : "720p · 16:9";
       } else if (isFalCreditError(rendered.error)) {
         console.error("[fal] credits depleted; using a stock clip", rendered.error);
         const stock = mockPicture(script);
@@ -597,7 +507,7 @@ async function* runWorkflow(
         frameDetail = "Mock 9:16 stock clip";
         yield encode({ type: "notice", message: MOCK_NOTICE });
       } else if (falApiKey()) {
-        console.error("[fal] video render failed; credits were not charged", rendered.error);
+        console.error("[veo] video render failed; credits were not charged", rendered.error);
         yield encode({ type: "error", message: rendered.error });
         return;
       } else {
@@ -606,16 +516,16 @@ async function* runWorkflow(
         frameDetail = `${FRAME_COUNT} stock preview clips · 9:16`;
         yield encode({
           type: "notice",
-          message: "Fal.ai is not configured yet. A stock preview is ready instead.",
+          message: "Google AI Studio is not configured yet. A stock preview is ready instead.",
         });
       }
     } catch (error) {
       if (isAbortError(error)) throw error;
-      console.error("[fal] video render failed; credits were not charged", error instanceof Error ? error.message : error);
+      console.error("[veo] video render failed; credits were not charged", error instanceof Error ? error.message : error);
       if (falApiKey()) {
         yield encode({
           type: "error",
-          message: "Fal.ai could not be reached.",
+          message: "Veo could not be reached.",
         });
         return;
       }
@@ -623,7 +533,7 @@ async function* runWorkflow(
       frameDetail = `${FRAME_COUNT} stock preview clips · 9:16`;
       yield encode({
         type: "notice",
-        message: "Fal.ai could not be reached. A stock preview is ready instead.",
+        message: "Veo could not be reached. A stock preview is ready instead.",
       });
     }
   }
@@ -638,57 +548,15 @@ async function* runWorkflow(
 
   const pictureUrl = frames.find((frame) => frame.src.startsWith("https://"))?.src ?? null;
   let videoUrl = pictureUrl ?? undefined;
-  let narrationEmbedded = false;
-  let voiceOk = !recordVoice;
-  if (recordVoice && narration) {
-    try {
-      const narrated = await narrateClip({
-        script,
-        voiceId: narration.voiceId,
-        language: narration.language,
-        videoUrl: falRendered || mock ? pictureUrl : null,
-        aspect,
-        mock,
-        signal,
-      });
-      voiceOk = narrated.elevenLabs;
-      audioSrc = narrated.audioSrc;
-      audioLabel = narrated.audioLabel;
-      if (narrated.embedded && narrated.videoUrl) {
-        const voiced = narrated.videoUrl;
-        frames = frames.map((frame) => (frame.src === pictureUrl ? { ...frame, src: voiced } : frame));
-        videoUrl = voiced;
-        narrationEmbedded = true;
-      }
-      if (narrated.notice) yield encode({ type: "notice", message: narrated.notice });
-    } catch (error) {
-      if (isAbortError(error)) throw error;
-      console.error("[elevenlabs] voiceover failed", error instanceof Error ? error.message : error);
-      audioLabel = "Voiceover could not be recorded";
-    }
-    yield encode({
-      type: "progress",
-      step: "audio",
-      status: "completed",
-      message: voiceOk ? "Audio ready" : "Voiceover unavailable",
-      detail: audioLabel,
-    });
-  }
+  const narrationEmbedded = false;
 
   if (billing && falRendered && !preview) {
-    if (voiceOk) {
-      const charged = await deductGenerationCredits(billing);
-      if (!charged.ok) {
-        yield encode({ type: "error", message: charged.error });
-        return;
-      }
-      creditsCharged = billing.credits;
-    } else {
-      yield encode({
-        type: "notice",
-        message: "The ElevenLabs voiceover could not be recorded, so no credits were charged for this clip.",
-      });
+    const charged = await deductGenerationCredits(billing);
+    if (!charged.ok) {
+      yield encode({ type: "error", message: charged.error });
+      return;
     }
+    creditsCharged = billing.credits;
   }
 
   yield encode({
@@ -772,21 +640,7 @@ async function* runExtend(input: {
     detail: `${countWords(continuation)} new words`,
   });
 
-  yield encode({
-    type: "progress",
-    step: "audio",
-    status: "started",
-    message: GENERATE_STEPS[1].label,
-  });
-  await sleep(AUDIO_STEP_MS, input.signal);
-  const audioLabel = `${input.voiceName} · Character dialogue and lip-sync run after the picture is ready`;
-  yield encode({
-    type: "progress",
-    step: "audio",
-    status: "completed",
-    message: "Audio ready",
-    detail: audioLabel,
-  });
+  const audioLabel = "";
 
   yield encode({
     type: "progress",
@@ -820,47 +674,12 @@ async function* runExtend(input: {
     return;
   }
 
-  const rendered = await renderFalClip({
-    engine: "budget",
-    prompt: speakingMotionPrompt(
-      imageLockedMotionPrompt(
-        `${input.topic}. ${continuation.slice(0, 180)}`,
-        input.motionStyle,
-        "Continue from this exact frame. Keep the same character, face, clothing, colors, and setting.",
-      ),
-      continuation,
-    ),
+  const rendered = await renderFalLtx({
+    prompt: visualScenePrompt(`${input.topic}. ${continuation.slice(0, 180)}`, input.motionStyle, input.aspect ?? "16:9"),
     image: null,
     startFrameUrl: frameUrl,
     durationSec: 5,
-    aspectRatio: input.aspect ?? "9:16",
-    signal: input.signal,
   });
-  if ("pending" in rendered) {
-    const frames = motionClip("", continuation);
-    yield encode({
-      type: "rendering",
-      statusUrl: rendered.statusUrl,
-      responseUrl: rendered.responseUrl,
-      ...(input.owner
-        ? { ticket: signRenderTicket({ ...input.owner, credits: 0, responseUrl: rendered.responseUrl }) }
-        : {}),
-      result: {
-        id: `c45_${Date.now().toString(36)}`,
-        topic: input.topic,
-        voiceId: input.voiceId,
-        voiceName: input.voiceName,
-        durationSec: VIDEO_DURATION_SEC,
-        script: continuation,
-        wordCount: countWords(continuation),
-        audioLabel,
-        frames,
-        engine: "budget",
-        creditsCharged: durationCreditCost(VIDEO_DURATION_SEC) ?? EXTEND_VIDEO_COST,
-      },
-    });
-    return;
-  }
   if ("error" in rendered) {
     if (!isFalCreditError(rendered.error)) {
       console.error("[fal] video render failed", rendered.error);
@@ -955,13 +774,6 @@ async function* runScene(input: {
   });
   yield encode({
     type: "progress",
-    step: "audio",
-    status: "completed",
-    message: "Audio ready",
-    detail: `${input.voiceName} · Character dialogue and lip-sync run after the picture is ready`,
-  });
-  yield encode({
-    type: "progress",
     step: "frames",
     status: "started",
     message: input.priorVideoUrls.length > 0 ? "Continuing from the last frame" : "Rendering this scene",
@@ -1007,49 +819,12 @@ async function* runScene(input: {
     startFrameUrl = frame.imageUrl;
   }
 
-  const rendered = await renderFalClip({
-    engine: "budget",
-    prompt: speakingMotionPrompt(
-      imageLockedMotionPrompt(
-        input.visualPrompt,
-        input.motionStyle,
-        startFrameUrl
-          ? "Continue from this exact frame. Keep the same character, face, clothing, colors, and setting."
-          : "Match the reference still when one is attached. Keep the subject consistent.",
-      ),
-      script,
-    ),
+  const rendered = await renderFalLtx({
+    prompt: visualScenePrompt(input.visualPrompt, input.motionStyle, input.aspect ?? "16:9"),
     image: startFrameUrl ? null : input.referenceImage,
     startFrameUrl,
     durationSec: CLIP_DURATION_SEC,
-    aspectRatio: input.aspect ?? "9:16",
-    signal: input.signal,
   });
-  if ("pending" in rendered) {
-    const frames = motionClip("", script);
-    yield encode({
-      type: "rendering",
-      statusUrl: rendered.statusUrl,
-      responseUrl: rendered.responseUrl,
-      ...(input.owner
-        ? { ticket: signRenderTicket({ ...input.owner, credits: 0, responseUrl: rendered.responseUrl }) }
-        : {}),
-      result: {
-        id: `c45_${Date.now().toString(36)}`,
-        topic: input.topic,
-        voiceId: input.voiceId,
-        voiceName: input.voiceName,
-        durationSec: CLIP_DURATION_SEC,
-        script,
-        wordCount: countWords(script),
-        audioLabel: `${input.voiceName} · Character dialogue and lip-sync run after the picture is ready`,
-        frames,
-        engine: "budget",
-        creditsCharged: durationCreditCost(CLIP_DURATION_SEC) ?? BUDGET_GENERATION_COST,
-      },
-    });
-    return;
-  }
   if ("error" in rendered) {
     if (!isFalCreditError(rendered.error)) {
       console.error("[fal] video render failed", rendered.error);
@@ -1171,7 +946,7 @@ export async function POST(request: NextRequest) {
       : typeof record.voiceId === "string"
         ? record.voiceId
         : "";
-  const voiceRequested = wantsVoiceover(rawVoice);
+  const voiceRequested = false;
   const voice = voiceRequested ? resolveVoiceId(rawVoice) : DEFAULT_VOICE_ID;
   const language: NarrationLanguageId =
     typeof record.language === "string" && isNarrationLanguageId(record.language) ? record.language : "auto";
@@ -1181,7 +956,7 @@ export async function POST(request: NextRequest) {
   const referenceImage = parseReferenceImage(record.referenceImage);
   const motionStyle = typeof record.motionStyle === "string" ? record.motionStyle : "";
   const mockMode = record.mockMode === true;
-  const aspect: AspectRatio = typeof record.aspect === "string" && isAspectRatio(record.aspect) ? record.aspect : "9:16";
+  const aspect: AspectRatio = typeof record.aspect === "string" && isAspectRatio(record.aspect) ? record.aspect : "16:9";
 
   if (topic.length < 3) {
     return Response.json(

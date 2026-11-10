@@ -7,7 +7,6 @@ export const FRAME_LENGTH_SEC = 5;
 
 export const GENERATE_STEPS = [
   { id: "script", label: "Generating script" },
-  { id: "audio", label: "Generating audio" },
   { id: "frames", label: "Generating visual frames" },
 ] as const;
 

@@ -21,6 +21,7 @@ export async function narrateClip(input: {
   language: NarrationLanguageId;
   videoUrl: string | null;
   aspect: AspectRatio;
+  durationSec?: number;
   mock: boolean;
   signal: AbortSignal;
 }): Promise<NarratedClip> {
@@ -35,9 +36,11 @@ export async function narrateClip(input: {
         elevenLabsVoiceId: voice.elevenLabsVoiceId,
         language: input.language,
         signal: input.signal,
+        minChars: 1,
+        padSeconds: input.durationSec ?? 5,
       });
   const audioLabel = turns ? dialogueAudioLabel(turns) : `${voice.name} · ElevenLabs`;
-  const elevenLabs = !spoken.audioSrc.startsWith("data:audio/wav");
+  const elevenLabs = "elevenLabs" in spoken && spoken.elevenLabs === true;
   const voiceNote = elevenLabs ? undefined : "ElevenLabs did not answer, so a local male and female voice was used.";
   const base = { audioSrc: spoken.audioSrc, audioLabel, elevenLabs, lipSynced: false };
 

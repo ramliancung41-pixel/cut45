@@ -117,7 +117,7 @@ export async function POST(request: Request) {
   }
 
   const credits = paidCreditGrant(session, plan);
-  if (credits !== 300 && credits !== 1000 && credits !== 150) {
+  if (credits !== 500 && credits !== 1600 && credits !== 3400) {
     console.error("stripe checkout unknown plan", plan, credits);
     return NextResponse.json({ error: "Unknown plan.", plan, credits }, { status: 400 });
   }

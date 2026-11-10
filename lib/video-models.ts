@@ -36,12 +36,12 @@ const ANY_SIZE: RenderPlan = {
 export const VIDEO_MODELS = [
   {
     id: "wan",
-    name: "LTX Video",
-    shortName: "LTX",
+    name: "Veo 3.1 Lite",
+    shortName: "Veo",
     badge: "LOW COST",
     note: "3 credits per second",
     tier: "budget" as const,
-    rateKey: "Wan" as const,
+    rateKey: "Veo" as const,
     render: ANY_SIZE,
     aliases: ["wan", "ltx", "ltx video"],
     engine: "budget" as const,

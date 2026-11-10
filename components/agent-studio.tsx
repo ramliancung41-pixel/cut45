@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { AgentChatPanel, Glyph, Spinner, type CardStatus } from "@/components/agent-chat";
-import { AgentPlayer, GenerationTimeline } from "@/components/agent-media";
+import { AgentPlayer } from "@/components/agent-media";
 import { useCredits } from "@/components/credit-provider";
 import { UpgradeModal } from "@/components/upgrade-modal";
 import { useDefaultVoice } from "@/components/use-default-voice";
@@ -691,7 +691,7 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
             </div>
           ) : (
             <div className="mx-auto flex max-w-6xl flex-col gap-8">
-              <article className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]" aria-label="Selected generation">
+              <article className="mx-auto w-full max-w-3xl" aria-label="Selected generation">
                 <div className="flex min-w-0 flex-col items-center justify-center">
                   {featured.url && featured.kind === "video" ? (
                     <AgentPlayer
@@ -718,10 +718,12 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
                       style={aspectStyle(featured.aspect)}
                     >
                       {featured.status === "running" ? (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[radial-gradient(circle_at_30%_20%,rgba(167,139,250,0.18),transparent_55%),radial-gradient(circle_at_70%_80%,rgba(56,189,248,0.14),transparent_55%)] text-sm text-zinc-300">
-                          <span className="absolute inset-0 animate-pulse bg-white/[0.02]" aria-hidden />
-                          <Spinner light />
-                          {featured.kind === "video" ? "Rendering video…" : "Rendering image…"}
+                        <div className="absolute inset-0 bg-[#09090b]">
+                          <span className="absolute top-[28%] left-[22%] h-1.5 w-1.5 animate-pulse rounded-full bg-white/50" />
+                          <span className="absolute top-[22%] left-[58%] h-1 w-1 animate-pulse rounded-full bg-white/35 [animation-delay:180ms]" />
+                          <span className="absolute right-[26%] bottom-[36%] h-1.5 w-1.5 animate-pulse rounded-full bg-violet-200/50 [animation-delay:360ms]" />
+                          <span className="absolute bottom-[30%] left-[42%] h-1 w-1 animate-pulse rounded-full bg-white/30 [animation-delay:540ms]" />
+                          <span className="sr-only">Rendering video</span>
                         </div>
                       ) : (
                         <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-red-300">
@@ -731,37 +733,6 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
                     </div>
                   )}
                 </div>
-
-                <aside className="agent-glass flex h-fit flex-col gap-5 rounded-2xl p-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-[11px] font-medium tracking-wide text-zinc-500 uppercase">
-                        {featured.kind === "video" ? "Generate Video" : "Generate Image"}
-                      </p>
-                      <h2 className="mt-1 truncate text-base font-semibold tracking-tight text-zinc-100">{featured.title}</h2>
-                    </div>
-                    <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-zinc-200">
-                      {featured.modelName}
-                    </span>
-                  </div>
-                  {featured.steps && featured.steps.length > 0 ? <GenerationTimeline steps={featured.steps} /> : null}
-                  <p className="line-clamp-5 rounded-xl border border-white/[0.06] bg-black/30 px-3 py-2.5 text-xs leading-5 text-zinc-300">
-                    {featured.prompt}
-                  </p>
-                  {featured.status === "error" && featured.url ? (
-                    <p className="text-xs text-red-300">{featured.error}</p>
-                  ) : null}
-                  {featured.status === "done" && featured.url ? (
-                    <a
-                      href={featured.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex h-9 items-center justify-center rounded-full bg-white text-xs font-semibold text-black transition hover:bg-white/90"
-                    >
-                      Open full size
-                    </a>
-                  ) : null}
-                </aside>
               </article>
 
               {generations.length > 1 ? (

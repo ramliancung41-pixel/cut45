@@ -37,8 +37,31 @@ function narrationText(script: string) {
   return script.replace(/\s+/g, " ").trim().slice(0, MAX_CHARS);
 }
 
-function audioPayload(bytes: Uint8Array) {
-  return { bytes, audioSrc: `data:audio/mpeg;base64,${Buffer.from(bytes).toString("base64")}` };
+function pcmToWav(pcm: Uint8Array, sampleRate: number, padSeconds: number) {
+  const bytesPerSample = 2;
+  const speechSamples = Math.floor(pcm.byteLength / bytesPerSample);
+  const targetSamples = Math.max(speechSamples, Math.round(Math.max(padSeconds, 0) * sampleRate));
+  const dataBytes = targetSamples * bytesPerSample;
+  const wav = Buffer.alloc(44 + dataBytes);
+  wav.write("RIFF", 0);
+  wav.writeUInt32LE(36 + dataBytes, 4);
+  wav.write("WAVE", 8);
+  wav.write("fmt ", 12);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(sampleRate, 24);
+  wav.writeUInt32LE(sampleRate * bytesPerSample, 28);
+  wav.writeUInt16LE(bytesPerSample, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36);
+  wav.writeUInt32LE(dataBytes, 40);
+  Buffer.from(pcm.buffer, pcm.byteOffset, speechSamples * bytesPerSample).copy(wav, 44);
+  return new Uint8Array(wav);
+}
+
+function audioPayload(bytes: Uint8Array, mime = "audio/mpeg") {
+  return { bytes, audioSrc: `data:${mime};base64,${Buffer.from(bytes).toString("base64")}` };
 }
 
 function joinMpeg(parts: Uint8Array[]) {
@@ -58,6 +81,7 @@ export async function synthesizeSpeech(input: {
   language: string;
   signal?: AbortSignal;
   minChars?: number;
+  padSeconds?: number;
 }) {
   try {
     return await renderElevenSpeech(input);
@@ -67,7 +91,8 @@ export async function synthesizeSpeech(input: {
       "[elevenlabs] voice request failed; using the local voice of that gender",
       error instanceof Error ? error.message : error,
     );
-    return synthesizeLocalSpeech([{ text: input.script, gender: voiceGender(input.elevenLabsVoiceId) }]);
+    const local = await synthesizeLocalSpeech([{ text: input.script, gender: voiceGender(input.elevenLabsVoiceId) }]);
+    return { ...local, elevenLabs: false as const };
   }
 }
 
@@ -77,6 +102,7 @@ async function renderElevenSpeech(input: {
   language: string;
   signal?: AbortSignal;
   minChars?: number;
+  padSeconds?: number;
 }) {
   if (!logApiKey("ELEVENLABS_API_KEY")) {
     throw new Error("ELEVENLABS_API_KEY is missing from the server environment.");
@@ -93,7 +119,7 @@ async function renderElevenSpeech(input: {
 
   let response: Response;
   try {
-    response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${input.elevenLabsVoiceId}`, {
+    response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${input.elevenLabsVoiceId}?output_format=pcm_44100`, {
       method: "POST",
       signal: boundedSignal(input.signal),
       headers: {
@@ -106,8 +132,9 @@ async function renderElevenSpeech(input: {
         model_id: MODEL_ID,
         ...(languageCode ? { language_code: languageCode } : {}),
         voice_settings: {
-          stability: 0.45,
+          stability: 0.55,
           similarity_boost: 0.75,
+          speed: 0.8,
         },
       }),
     });
@@ -134,7 +161,8 @@ async function renderElevenSpeech(input: {
   if (bytes.byteLength === 0) {
     throw new Error("ElevenLabs returned an empty voice track.");
   }
-  return audioPayload(bytes);
+  const wav = pcmToWav(bytes, 44100, input.padSeconds ?? 5);
+  return { ...audioPayload(wav, "audio/wav"), elevenLabs: true as const };
 }
 
 async function readVoiceError(response: Response) {

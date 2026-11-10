@@ -105,13 +105,13 @@ export function paidCreditGrant(session: Stripe.Checkout.Session, plan: BillingP
     const price = item.price;
     if (!price || typeof price === "string") continue;
     const matched = planForCatalogAmount(price.unit_amount, price.currency);
-    if (matched === "starter") return 300;
-    if (matched === "pro") return 1000;
-    if (matched === "topup") return 150;
+    if (matched === "starter") return 500;
+    if (matched === "pro") return 1600;
+    if (matched === "topup") return 3400;
   }
-  if (plan === "starter") return 300;
-  if (plan === "pro") return 1000;
-  return 150;
+  if (plan === "starter") return 500;
+  if (plan === "pro") return 1600;
+  return 3400;
 }
 
 export function checkoutUserId(session: Stripe.Checkout.Session) {
@@ -181,9 +181,9 @@ export function lineItemPriceId(session: Stripe.Checkout.Session) {
 
 function planForCatalogAmount(unitAmount: number | null | undefined, currency: string | null | undefined) {
   if (currency && currency.toLowerCase() !== "usd") return null;
-  if (unitAmount === 1500) return "starter" as const;
-  if (unitAmount === 4000) return "pro" as const;
-  if (unitAmount === 1000) return "topup" as const;
+  if (unitAmount === 500) return "starter" as const;
+  if (unitAmount === 1500) return "pro" as const;
+  if (unitAmount === 3000) return "topup" as const;
   return null;
 }
 

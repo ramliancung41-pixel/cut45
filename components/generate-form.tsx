@@ -232,7 +232,7 @@ export function GenerateForm() {
   const filmRef = useRef<GenerateResult | null>(null);
   const [scenes, setScenes] = useState<MovieScene[]>([]);
   const [durationSec, setDurationSec] = useState<VideoDurationSec>(5);
-  const [aspect, setAspect] = useState<AspectRatio>("9:16");
+  const [aspect, setAspect] = useState<AspectRatio>("16:9");
   const [copilotOpen, setCopilotOpen] = useState(false);
   const [picker, setPicker] = useState<StudioPicker | null>(null);
   const [planning, setPlanning] = useState(false);
@@ -1684,13 +1684,6 @@ export function GenerateForm() {
                     <span>720p HD</span>
                   </span>
                   {chip(
-                    "voice",
-                    getVoice(voice)?.name.split(" ")[0] ?? "Voice",
-                    <Glyph className="h-3.5 w-3.5">
-                      <path d="M4 8v4M7 5.5v9M10 3.5v13M13 6v8M16 8.5v3" />
-                    </Glyph>,
-                  )}
-                  {chip(
                     "motion",
                     motionStyle ? motionPillLabel(motionStyle).replace("Motion: ", "") : "Motion",
                     <Glyph className="h-3.5 w-3.5">
@@ -1762,63 +1755,6 @@ export function GenerateForm() {
                   </Glyph>
                 </button>
               </div>
-              {picker === "voice" ? (
-                <div className="grid gap-1.5">
-                  <p className="text-xs leading-5 text-muted">
-                    The first character uses this voice. The other character uses the opposite gender.
-                  </p>
-                  <div className="flex gap-1 rounded-lg bg-panel p-0.5" role="radiogroup" aria-label="Voice gender">
-                    {(["male", "female"] as const).map((gender) => (
-                      <button
-                        key={gender}
-                        type="button"
-                        role="radio"
-                        aria-checked={voiceGender === gender}
-                        onClick={() => selectGender(gender)}
-                        className={cn(
-                          "flex-1 rounded-md px-3 py-1.5 text-xs font-medium text-muted",
-                          voiceGender === gender && "bg-[var(--surface)] text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.12)]",
-                        )}
-                      >
-                        {gender === "male" ? "Male Voice" : "Female Voice"}
-                      </button>
-                    ))}
-                  </div>
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-muted">Language</span>
-                    <select
-                      aria-label="Narration language"
-                      value={narrationLanguage}
-                      onChange={(event) => {
-                        if (!isNarrationLanguageId(event.target.value)) return;
-                        setNarrationLanguage(event.target.value);
-                      }}
-                      className="gen-field gen-select w-full appearance-none rounded-lg px-3 py-2 text-sm outline-none"
-                    >
-                      {NARRATION_LANGUAGES.map((language) => (
-                        <option key={language.id} value={language.id}>
-                          {language.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {VOICES.filter((option) => option.gender === voiceGender).map((option) => (
-                    <button
-                      key={option.id}
-                      type="button"
-                      aria-pressed={voice === option.id}
-                      onClick={() => {
-                        setVoiceOverride(option.id);
-                        setPicker(null);
-                      }}
-                      className="home-option"
-                    >
-                      <span className="block font-medium">{option.name}</span>
-                      <span className="mt-0.5 block text-xs leading-5 text-muted">{VOICE_NOTE[option.id]}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
               {picker === "motion" ? (
                 <div className="grid gap-1.5 sm:grid-cols-2">
                   <button
@@ -1987,55 +1923,18 @@ export function GenerateForm() {
       ) : null}
 
       {showVideoRun ? (
-        <section className="gen-glass mx-auto mt-8 max-w-3xl rounded-2xl p-5 sm:p-6">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-base font-semibold tracking-tight">Generation</h2>
-            <p className="rounded-full border border-line px-3 py-1 text-[11px] text-muted">
-              {result ? `${result.durationSec}s` : `${durationSec}s`} · {aspect} · character dialogue
-            </p>
-          </div>
+        <section className="mx-auto mt-8 w-full max-w-3xl">
+          {result ? null : (
+            <div className="relative aspect-video w-full overflow-hidden rounded-2xl border border-white/10 bg-[#09090b]" aria-live="polite">
+              <span className="absolute top-[28%] left-[22%] h-1.5 w-1.5 animate-pulse rounded-full bg-white/50" />
+              <span className="absolute top-[22%] left-[58%] h-1 w-1 animate-pulse rounded-full bg-white/35 [animation-delay:180ms]" />
+              <span className="absolute right-[26%] bottom-[36%] h-1.5 w-1.5 animate-pulse rounded-full bg-violet-200/50 [animation-delay:360ms]" />
+              <span className="absolute bottom-[30%] left-[42%] h-1 w-1 animate-pulse rounded-full bg-white/30 [animation-delay:540ms]" />
+              <span className="sr-only">{statusMessage || "Rendering video"}</span>
+            </div>
+          )}
 
-          <ol className="mt-6">
-            {steps.map((step, index) => (
-              <li key={step.id} className="relative flex gap-4 pb-6 last:pb-0">
-                {index < steps.length - 1 ? (
-                  <span
-                    aria-hidden
-                    className={cn(
-                      "gen-rail",
-                      (step.status === "completed" || step.status === "started") && "gen-rail-on",
-                    )}
-                  />
-                ) : null}
-                <span
-                  aria-hidden
-                  className={cn(
-                    "gen-step",
-                    step.status === "completed" && "gen-step-done",
-                    step.status === "started" && "gen-step-live",
-                  )}
-                >
-                  {step.status === "started" ? <Spinner /> : step.status === "completed" ? <Check /> : index + 1}
-                </span>
-                <div className="min-w-0 pt-1">
-                  <p className="text-sm font-medium tracking-tight">{step.label}</p>
-                  <p className={cn("mt-1 text-sm", step.status === "pending" ? "text-muted" : "text-foreground")}>
-                    {step.status === "started" ? "Working…" : step.message}
-                  </p>
-                  {step.detail ? <p className="mt-1 text-sm leading-6 text-muted">{step.detail}</p> : null}
-                </div>
-              </li>
-            ))}
-          </ol>
-
-          {notice ? (
-            <p role="status" className="gen-notice mt-2">
-              {notice}
-            </p>
-          ) : null}
-
-          <div className="mt-6 border-t border-line pt-6">
-            {result ? (
+          {result ? (
               <div>
                 <div className="flex flex-wrap items-end justify-between gap-3">
                   <div>
@@ -2102,13 +2001,8 @@ export function GenerateForm() {
                     {downloadError}
                   </p>
                 ) : null}
-                <h3 className="mt-5 text-sm font-medium tracking-tight">Script</h3>
-                <p className="mt-2 text-sm leading-7 text-foreground/90">{result.script}</p>
               </div>
-            ) : (
-              <PreviewSkeleton running={running} label={activeStep?.label} />
-            )}
-          </div>
+          ) : null}
         </section>
       ) : null}
 

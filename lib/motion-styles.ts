@@ -61,15 +61,31 @@ export function imageLockedMotionPrompt(
     .slice(0, 1200);
 }
 
-export function speakingMotionPrompt(base: string, dialogue: string) {
-  const spoken = dialogue.replace(/\s+/g, " ").trim();
-  return [
-    "Vertical 9:16 medium close-up. The characters face the camera with mouths clearly visible and speak the dialogue.",
-    base.trim(),
-    spoken ? `Dialogue: ${spoken}` : "",
-    "Natural mouth movement while talking. No on-screen text. No narrator voiceover.",
-  ]
+export function visualScenePrompt(
+  topic: string,
+  style: string | null | undefined,
+  aspect: "16:9" | "9:16" | "1:1" = "16:9",
+) {
+  const cleaned = topic
+    .replace(/\b(voiceover script|dialogue|narration)\s*:\s*[\s\S]*$/i, "")
+    .replace(/["“”']/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const frame = aspect === "9:16" ? "Vertical 9:16" : aspect === "1:1" ? "Square 1:1" : "Widescreen 16:9";
+  const guidance = motionGuidance(style);
+  return [cleaned, `${frame} cinematic motion.`, guidance, "No on-screen text. No subtitles. No quoted dialogue."]
     .filter(Boolean)
     .join(" ")
     .slice(0, 1200);
+}
+
+export function spokenDialogue(script: string, clipSec: number) {
+  const cleaned = script
+    .replace(/\b(voiceover script|dialogue|narration)\s*:\s*/gi, "")
+    .replace(/["“”']/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const perClip = Math.max(1, Math.round(clipSec / 5));
+  const maxWords = Math.min(8 * perClip, Math.max(6, 8 * perClip));
+  return cleaned.split(" ").filter(Boolean).slice(0, maxWords).join(" ");
 }

@@ -2,8 +2,9 @@ import { BILLING_PLANS, type BillingPlanId } from "@/lib/billing";
 import type { VideoModelId } from "@/lib/video-models";
 
 // Server billing (/api/generate, /api/video/status) reads these through lib/video-models.ts.
+// 720p Veo: 3 credits/sec. A 5s clip is 15 credits ($0.15). A 10s clip is 30 credits ($0.30).
 export const VIDEO_RATE_MATRIX = {
-  Wan: 3,
+  Veo: 3,
 } as const;
 
 export type VideoRateKey = keyof typeof VIDEO_RATE_MATRIX;
@@ -63,9 +64,9 @@ export type Tier = {
 };
 
 export const TIERS: readonly Tier[] = [
-  { id: "standard", label: "Standard", modelId: "wan", modelLabel: "Wan", rateKey: "Wan", resolution: "720p" },
-  { id: "pro", label: "Pro", modelId: "wan", modelLabel: "Wan", rateKey: "Wan", resolution: "720p" },
-  { id: "premium", label: "Premium", modelId: "wan", modelLabel: "Wan", rateKey: "Wan", resolution: "720p" },
+  { id: "standard", label: "Standard", modelId: "wan", modelLabel: "Veo 3.1 Lite", rateKey: "Veo", resolution: "720p" },
+  { id: "pro", label: "Pro", modelId: "wan", modelLabel: "Veo 3.1 Lite", rateKey: "Veo", resolution: "720p" },
+  { id: "premium", label: "Premium", modelId: "wan", modelLabel: "Veo 3.1 Lite", rateKey: "Veo", resolution: "720p" },
 ];
 
 export const DEFAULT_TIER_ID: TierId = "standard";

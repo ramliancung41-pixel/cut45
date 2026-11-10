@@ -104,7 +104,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     pathname === "/create" ||
     pathname.startsWith("/gallery") ||
     pathname.startsWith("/credits") ||
-    pathname.startsWith("/pricing");
+    pathname.startsWith("/pricing") ||
+    pathname.startsWith("/settings");
   const groups = RAIL;
 
   const railRef = useRef<HTMLElement>(null);

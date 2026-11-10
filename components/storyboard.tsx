@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ViralSubtitles } from "@/components/viral-subtitles";
 import { primeSpeechVoices, speakNarration, stopNarration } from "@/lib/browser-speech";
 import { type AspectRatio } from "@/lib/frame";
 import { VIDEO_DURATION_SEC, formatTimecode, isMotionSrc, sceneBlocks, type StoryFrame } from "@/lib/generate";
@@ -149,9 +148,8 @@ export function Storyboard({
     lastUiRef.current = 0;
 
     const player = playerRef.current;
-    const embedded = narrationEmbedded || (!audioSrc && isMotionSrc(mainSrc));
     if (player) {
-      player.muted = !embedded;
+      player.muted = false;
       try {
         player.currentTime = 0;
       } catch {
@@ -160,23 +158,11 @@ export function Storyboard({
       void player.play().catch(() => undefined);
     }
 
-    if (!embedded && audioSrc && audioRef.current) {
-      const audio = audioRef.current;
-      audio.currentTime = 0;
-      void audio.play().catch(() => {
-        if (!playingRef.current || !isVoiceId(voiceId)) return;
-        speakNarration(script, voiceId);
-      });
-    } else if (!embedded && !isMotionSrc(mainSrc) && isVoiceId(voiceId)) {
-      speakNarration(script, voiceId);
-    }
-
     rafRef.current = window.requestAnimationFrame(tick);
   }
 
   return (
     <div className="mt-5">
-      {audioSrc && !narrationEmbedded ? <audio ref={audioRef} src={audioSrc} preload="auto" /> : null}
 
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" onClick={play} className="gen-cta">
@@ -185,7 +171,7 @@ export function Storyboard({
         <button type="button" onClick={() => stopPlayback()} className="gen-ghost">
           Stop
         </button>
-        {audioLabel ? <p className="text-sm text-muted">{audioLabel}</p> : null}
+        {null}
       </div>
 
       {mainSrc ? (
@@ -203,10 +189,8 @@ export function Storyboard({
           ) : (
             <img src={mainSrc} alt="" className={cn(frameClass(aspect), "rounded-[1.15rem] object-cover")} />
           )}
-          <ViralSubtitles script={script} playhead={playhead} visible={narrating} />
           <p className="mt-2 text-center font-mono text-[11px] text-muted">
             {formatTimecode(Math.min(durationSec, playhead * durationSec))} / {formatTimecode(durationSec)}
-            {active?.caption ? ` · ${active.caption}` : ""}
           </p>
         </div>
       ) : null}

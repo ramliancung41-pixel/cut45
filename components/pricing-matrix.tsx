@@ -12,7 +12,7 @@ import {
 export type PricingView = "video" | "voice" | "compare";
 
 const ROWS: Array<{ key: VideoRateKey; label: string; badge: string; tone: string }> = [
-  { key: "Wan", label: "Wan", badge: "3 credits/sec", tone: "bg-sky-400/15 text-sky-200" },
+  { key: "Veo", label: "Veo 3.1 Lite", badge: "3 credits/sec", tone: "bg-sky-400/15 text-sky-200" },
 ];
 
 export function VoiceSwitch({ withVoice, onChange }: { withVoice: boolean; onChange: (next: boolean) => void }) {
@@ -154,10 +154,10 @@ export function PricingNotes() {
       </p>
       <p className="flex items-start gap-2 rounded-xl border border-amber-300/20 bg-amber-300/[0.05] px-3 py-2.5">
         <span aria-hidden className="text-amber-300">*</span>
-        Wan is billed at 3 credits per second.
+        A 5-second 720p clip costs 15 credits. A 10-second clip costs 30 credits.
       </p>
       <p className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5 sm:col-span-2">
-        Credits are checked before the Wan render starts. A zero balance cannot generate a video.
+        Credits are checked before the Veo render starts. A zero balance cannot generate a video.
       </p>
     </div>
   );

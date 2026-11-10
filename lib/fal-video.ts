@@ -201,7 +201,7 @@ function videoInput(
       prompt,
       negative_prompt: "worst quality, inconsistent motion, blurry, jittery, distorted, still frame, slideshow, static image",
       resolution: "720p",
-      aspect_ratio: aspect,
+      aspect_ratio: aspect === "9:16" || aspect === "1:1" ? aspect : "16:9",
       num_frames: seconds * 24 + 1,
       frame_rate: 24,
       expand_prompt: false,

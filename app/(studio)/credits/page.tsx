@@ -16,7 +16,7 @@ export default function CreditsPage() {
       <PageHeader
         eyebrow="Account"
         title="Credits & Billing"
-        description="Wan costs 3 credits per second. A new account starts at 0 credits, so add credits before generating. Starter adds 300 credits, Pro adds 1,000, and the top-up adds 150."
+        description="A 5-second clip costs 15 credits and a 10-second clip costs 30. Starter is $5 for 500 credits, Pro is $15 for 1,600, and Creator is $30 for 3,400."
       />
 
       <div className="gen-glass rounded-3xl px-5 py-6">
