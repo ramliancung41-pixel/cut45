@@ -36,9 +36,21 @@ function isBuilderAlias(next: string) {
   );
 }
 
+function pathOnly(next: string) {
+  const query = next.indexOf("?");
+  return query === -1 ? next : next.slice(0, query);
+}
+
+function searchOf(next: string) {
+  const query = next.indexOf("?");
+  return query === -1 ? "" : next.slice(query);
+}
+
 export function studioDestination(next: string | null) {
   if (!next || !next.startsWith("/") || next.startsWith("//")) return "/dashboard";
-  if (isBuilderAlias(next)) return "/builder";
-  if (isStudioPath(next)) return next;
+  const path = pathOnly(next);
+  const search = searchOf(next);
+  if (isBuilderAlias(path)) return `/builder${search}`;
+  if (isStudioPath(path)) return `${path}${search}`;
   return "/dashboard";
 }

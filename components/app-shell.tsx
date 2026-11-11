@@ -109,6 +109,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { account, ready, signOut } = useStudioAccount();
   const [railPath, setRailPath] = useState(pathname);
   const agentPage = pathname === "/agent";
+  const builderPage = pathname === "/builder";
   const workspacePage = WORKSPACE_PATHS.includes(pathname);
   const darkPage =
     workspacePage ||
@@ -231,7 +232,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <CreditPill dark={darkPage} />
             </div>
           )}
-          {agentPage ? (
+          {agentPage || builderPage ? (
             <main className="min-w-0">{children}</main>
           ) : (
             <main className="min-w-0 px-4 pt-14 pb-10 sm:px-8 md:pt-12">
