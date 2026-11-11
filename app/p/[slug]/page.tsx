@@ -26,7 +26,7 @@ export default async function PublishedSitePage({ params }: { params: Promise<{ 
   if (!found?.ok || !found.project) notFound();
 
   return (
-    <main>
+    <main className="min-h-dvh">
       <WebsitePreview content={found.project.content} />
     </main>
   );

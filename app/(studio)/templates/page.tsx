@@ -11,26 +11,26 @@ const TEMPLATES = [
   {
     id: "studio",
     name: "Studio",
-    description: "A calm landing page with a hero, three features, and a contact section.",
-    sections: ["Hero", "Features", "Contact"],
+    description: "Clean Agency Light. A full client site with a glass navbar, hero, feature cards, quotes, and pricing.",
+    sections: ["Navbar", "Hero", "Features", "Testimonials", "Pricing", "Footer"],
   },
   {
     id: "product",
     name: "Product",
-    description: "A product page with a price block, benefits, and a closing call to action.",
-    sections: ["Hero", "Pricing", "FAQ"],
+    description: "Modern Dark SaaS. A product page with a live hero image, three feature cards, and a pricing table.",
+    sections: ["Navbar", "Hero", "Features", "Testimonials", "Pricing", "Footer"],
   },
   {
     id: "portfolio",
     name: "Portfolio",
-    description: "A personal site with an introduction, selected work, and a short bio.",
-    sections: ["Intro", "Work", "About"],
+    description: "Minimalist Tech. Selected work, client quotes, and a clear way to start a project.",
+    sections: ["Navbar", "Hero", "Work", "Testimonials", "Pricing", "Footer"],
   },
   {
     id: "waitlist",
     name: "Waitlist",
-    description: "A single-screen launch page with a headline and an email capture.",
-    sections: ["Headline", "Signup"],
+    description: "Vibrant Creative. A launch page with a hero, three reasons, and an email capture.",
+    sections: ["Navbar", "Hero", "Features", "Testimonials", "Pricing", "Footer"],
   },
 ];
 

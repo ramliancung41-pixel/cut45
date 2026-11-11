@@ -6,6 +6,7 @@ import {
   SECTION_LABEL,
   SECTION_TYPES,
   slugify,
+  THEME_PRESETS,
   type FontChoice,
   type WebsiteContent,
   type WebsiteSection,
@@ -337,7 +338,7 @@ export function WebsiteBuilder({
           ))}
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-4 sm:p-6">
-          <div className={viewport === "mobile" ? "mx-auto w-[390px] max-w-full" : "mx-auto w-full max-w-[1100px]"}>
+          <div className={viewport === "mobile" ? "mx-auto w-[390px] max-w-full" : "w-full"}>
             <div className="overflow-hidden rounded-2xl shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
               <WebsitePreview content={content} selectedId={selected?.id ?? null} onSelect={setSelectedId} />
             </div>
@@ -364,6 +365,21 @@ function ThemeControls({
   ];
   return (
     <div className="space-y-4">
+      <div>
+        <p className="text-xs text-zinc-400">Themes</p>
+        <div className="mt-2 grid gap-1">
+          {THEME_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => onChange(preset.theme)}
+              className="rounded-full border border-white/15 px-3 py-1.5 text-left text-xs"
+            >
+              {preset.name}
+            </button>
+          ))}
+        </div>
+      </div>
       <div>
         <p className="text-xs text-zinc-400">Typography</p>
         <div className="mt-2 grid grid-cols-3 gap-1">
@@ -410,12 +426,19 @@ function SectionFields({
   return (
     <div className="mt-5 space-y-3 border-t border-white/10 pt-4">
       <p className="text-xs tracking-[0.16em] text-zinc-400 uppercase">{SECTION_LABEL[section.type]} copy</p>
+      {section.type === "nav" ? (
+        <>
+          <TextField label="Brand" value={section.brand} onChange={(brand) => onChange((item) => (item.type === "nav" ? { ...item, brand } : item))} />
+          <TextField label="Button" value={section.buttonLabel} onChange={(buttonLabel) => onChange((item) => (item.type === "nav" ? { ...item, buttonLabel } : item))} />
+        </>
+      ) : null}
       {section.type === "hero" ? (
         <>
           <TextField label="Eyebrow" value={section.eyebrow} onChange={(eyebrow) => onChange((item) => (item.type === "hero" ? { ...item, eyebrow } : item))} />
           <TextField label="Headline" value={section.headline} onChange={(headline) => onChange((item) => (item.type === "hero" ? { ...item, headline } : item))} />
           <TextField label="Subhead" value={section.subhead} onChange={(subhead) => onChange((item) => (item.type === "hero" ? { ...item, subhead } : item))} multiline />
           <TextField label="Button" value={section.buttonLabel} onChange={(buttonLabel) => onChange((item) => (item.type === "hero" ? { ...item, buttonLabel } : item))} />
+          <TextField label="Second button" value={section.secondaryLabel} onChange={(secondaryLabel) => onChange((item) => (item.type === "hero" ? { ...item, secondaryLabel } : item))} />
           <ImagePicker
             assets={assets}
             selected={section.imageUrl}
@@ -484,6 +507,48 @@ function SectionFields({
                   )
                 }
               />
+              <TextField
+                label="Role"
+                value={item.role}
+                onChange={(role) =>
+                  onChange((current) =>
+                    current.type === "testimonials"
+                      ? { ...current, items: current.items.map((entry, entryIndex) => (entryIndex === index ? { ...entry, role } : entry)) }
+                      : current,
+                  )
+                }
+              />
+            </div>
+          ))}
+        </>
+      ) : null}
+      {section.type === "pricing" ? (
+        <>
+          <TextField label="Title" value={section.title} onChange={(title) => onChange((item) => (item.type === "pricing" ? { ...item, title } : item))} />
+          {section.plans.map((plan, index) => (
+            <div key={`${section.id}-${index}`} className="space-y-2 rounded-2xl border border-white/10 p-3">
+              <TextField
+                label={`Plan ${index + 1}`}
+                value={plan.name}
+                onChange={(name) =>
+                  onChange((current) =>
+                    current.type === "pricing"
+                      ? { ...current, plans: current.plans.map((entry, entryIndex) => (entryIndex === index ? { ...entry, name } : entry)) }
+                      : current,
+                  )
+                }
+              />
+              <TextField
+                label="Price"
+                value={plan.price}
+                onChange={(price) =>
+                  onChange((current) =>
+                    current.type === "pricing"
+                      ? { ...current, plans: current.plans.map((entry, entryIndex) => (entryIndex === index ? { ...entry, price } : entry)) }
+                      : current,
+                  )
+                }
+              />
             </div>
           ))}
         </>
@@ -496,7 +561,10 @@ function SectionFields({
         </>
       ) : null}
       {section.type === "footer" ? (
-        <TextField label="Footer text" value={section.text} onChange={(text) => onChange((item) => (item.type === "footer" ? { ...item, text } : item))} />
+        <>
+          <TextField label="Footer text" value={section.text} onChange={(text) => onChange((item) => (item.type === "footer" ? { ...item, text } : item))} />
+          <TextField label="Note" value={section.note} onChange={(note) => onChange((item) => (item.type === "footer" ? { ...item, note } : item))} />
+        </>
       ) : null}
     </div>
   );
