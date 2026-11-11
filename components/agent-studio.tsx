@@ -200,7 +200,12 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
     };
   }, []);
 
-  useEffect(() => onGenerationStop((id, reason) => stopRenderRef.current(id, reason)), []);
+  useEffect(() => {
+    const stop = onGenerationStop((id, reason) => stopRenderRef.current(id, reason));
+    return () => {
+      stop();
+    };
+  }, []);
 
   useEffect(() => {
     if (messages.length === 0) return;
