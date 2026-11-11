@@ -23,18 +23,18 @@ export function AgencyServices({ active = "pricing" }: { active?: "pricing" | "a
     if (pending) return;
     setPending(true);
     setError("");
-    const response = await fetch("/api/agency/requests", {
+    const response = await fetch("/api/agency", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, email, packageId, message, company }),
     });
-    const body = (await response.json().catch(() => null)) as { error?: string; saved?: boolean } | null;
+    const body = (await response.json().catch(() => null)) as { error?: string; success?: boolean; message?: string } | null;
     setPending(false);
-    if (!response.ok || !body?.saved) {
+    if (!response.ok || !body?.success) {
       setError(body?.error ?? "The request could not be saved.");
       return;
     }
-    setSavedEmail(email.trim());
+    setSavedEmail(body.message || "Request received!");
     setName("");
     setEmail("");
     setMessage("");
@@ -86,7 +86,7 @@ export function AgencyServices({ active = "pricing" }: { active?: "pricing" | "a
           <h2 className="text-2xl font-medium">Request Website / Contact Agency</h2>
           {savedEmail ? (
             <p className="mt-4 text-sm leading-6 text-white/70" role="status">
-              Your request is saved. The agency will reply at {savedEmail}.
+              {savedEmail}
             </p>
           ) : (
             <form className="mt-4 grid gap-3" onSubmit={(event) => void submit(event)}>

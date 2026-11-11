@@ -19,6 +19,10 @@ export function createSupabaseAdminClient() {
   if (!serviceKey) throw new Error("Supabase service role key is missing.");
   return createClient(supabaseUrl(), serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
+    db: { schema: "public" },
+    global: {
+      fetch: (input, init) => fetch(input, { ...init, cache: "no-store" }),
+    },
   });
 }
 
