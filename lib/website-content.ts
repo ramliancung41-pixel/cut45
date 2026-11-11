@@ -22,6 +22,7 @@ export type NavSection = {
   brand: string;
   links: string[];
   buttonLabel: string;
+  buttonHref: string;
 };
 
 export type HeroSection = {
@@ -32,6 +33,8 @@ export type HeroSection = {
   subhead: string;
   buttonLabel: string;
   secondaryLabel: string;
+  buttonHref: string;
+  secondaryHref: string;
   imageUrl: string;
 };
 
@@ -68,6 +71,7 @@ export type ContactSection = {
   title: string;
   body: string;
   buttonLabel: string;
+  buttonHref: string;
 };
 
 export type FooterSection = {
@@ -177,6 +181,13 @@ function themeFrom(value: unknown, fallback: WebsiteTheme): WebsiteTheme {
   };
 }
 
+function hrefOf(value: unknown, fallback: string) {
+  const text = clip(value, 200);
+  if (/^#[a-z0-9-]{1,40}$/i.test(text)) return text;
+  if (text.startsWith("https://") && !/\s/.test(text)) return text;
+  return fallback;
+}
+
 function iconOf(value: unknown, fallback: FeatureIcon) {
   return FEATURE_ICONS.find((icon) => icon === value) ?? fallback;
 }
@@ -225,7 +236,7 @@ function pricingPlans(value: unknown, fallback: PricingPlan[]) {
 
 export function blankSection(type: SectionType, id: string): WebsiteSection {
   if (type === "nav") {
-    return { id, type, brand: "Studio", links: ["Work", "Pricing", "Contact"], buttonLabel: "Book a call" };
+    return { id, type, brand: "Studio", links: ["Work", "Pricing", "Contact"], buttonLabel: "Book a call", buttonHref: "#contact" };
   }
   if (type === "hero") {
     return {
@@ -236,6 +247,8 @@ export function blankSection(type: SectionType, id: string): WebsiteSection {
       subhead: "Say who it is for and what they should do next.",
       buttonLabel: "Get started",
       secondaryLabel: "See the work",
+      buttonHref: "#contact",
+      secondaryHref: "#work",
       imageUrl: "",
     };
   }
@@ -282,6 +295,7 @@ export function blankSection(type: SectionType, id: string): WebsiteSection {
       title: "Talk to us",
       body: "Leave a note and we will reply.",
       buttonLabel: "Send",
+      buttonHref: "#contact",
     };
   }
   return {
@@ -307,6 +321,7 @@ function parseSection(value: unknown, index: number, fallback: WebsiteSection): 
       brand: clip(record.brand, 40) || base.brand,
       links: trio(record.links, base.links, 24),
       buttonLabel: clip(record.buttonLabel, 32) || base.buttonLabel,
+      buttonHref: hrefOf(record.buttonHref, base.buttonHref || "#contact"),
     };
   }
   if (type === "hero") {
@@ -320,6 +335,8 @@ function parseSection(value: unknown, index: number, fallback: WebsiteSection): 
       subhead: clip(record.subhead, 280) || base.subhead,
       buttonLabel: clip(record.buttonLabel, 32) || base.buttonLabel,
       secondaryLabel: clip(record.secondaryLabel, 32) || base.secondaryLabel,
+      buttonHref: hrefOf(record.buttonHref, base.buttonHref || "#contact"),
+      secondaryHref: hrefOf(record.secondaryHref, base.secondaryHref || "#work"),
       imageUrl: imageUrl.startsWith("https://") ? imageUrl : "",
     };
   }
@@ -343,6 +360,7 @@ function parseSection(value: unknown, index: number, fallback: WebsiteSection): 
       title: clip(record.title, 80) || base.title,
       body: clip(record.body, 280) || base.body,
       buttonLabel: clip(record.buttonLabel, 32) || base.buttonLabel,
+      buttonHref: hrefOf(record.buttonHref, base.buttonHref || "#contact"),
     };
   }
   const base = fallback.type === "footer" ? fallback : (blankSection("footer", id) as FooterSection);
@@ -418,7 +436,7 @@ function page(theme: WebsiteTheme, sections: WebsiteSection[]): WebsiteContent {
 export function templateContent(templateId: string): WebsiteContent {
   if (templateId === "product") {
     return page(preset("dark-saas"), [
-      { id: "nav", type: "nav", brand: "Harbor", links: ["Product", "Pricing", "Customers"], buttonLabel: "Start trial" },
+      { id: "nav", type: "nav", brand: "Harbor", links: ["Product", "Pricing", "Customers"], buttonLabel: "Start trial", buttonHref: "#contact" },
       {
         id: "hero",
         type: "hero",
@@ -427,6 +445,8 @@ export function templateContent(templateId: string): WebsiteContent {
         subhead: "Harbor gives revenue teams one live view of deals, risk, and the next call worth making.",
         buttonLabel: "Start trial",
         secondaryLabel: "Watch a tour",
+        buttonHref: "#contact",
+        secondaryHref: "#work",
         imageUrl: PHOTO.analytics,
       },
       {
@@ -459,13 +479,13 @@ export function templateContent(templateId: string): WebsiteContent {
           { name: "Custom", price: "$499+", detail: "A full Next.js product app.", points: ["Custom app", "Live data views", "Launch support"] },
         ],
       },
-      { id: "contact", type: "contact", title: "Book a working session", body: "Tell us the pipeline you want on screen. We reply within two weekdays.", buttonLabel: "Request a demo" },
+      { id: "contact", type: "contact", title: "Book a working session", body: "Tell us the pipeline you want on screen. We reply within two weekdays.", buttonLabel: "Request a demo", buttonHref: "#contact" },
       { id: "footer", type: "footer", text: "© Harbor", note: "Revenue software for teams that sell from a live page.", links: ["Product", "Pricing", "Contact"] },
     ]);
   }
   if (templateId === "portfolio") {
     return page(preset("minimal-tech"), [
-      { id: "nav", type: "nav", brand: "Lumen", links: ["Work", "Practice", "Contact"], buttonLabel: "Start a project" },
+      { id: "nav", type: "nav", brand: "Lumen", links: ["Work", "Practice", "Contact"], buttonLabel: "Start a project", buttonHref: "#contact" },
       {
         id: "hero",
         type: "hero",
@@ -474,6 +494,8 @@ export function templateContent(templateId: string): WebsiteContent {
         subhead: "Lumen builds interfaces for tools people use every day: clear type, quiet color, and a path through the work.",
         buttonLabel: "Start a project",
         secondaryLabel: "See selected work",
+        buttonHref: "#contact",
+        secondaryHref: "#work",
         imageUrl: PHOTO.desk,
       },
       {
@@ -506,13 +528,13 @@ export function templateContent(templateId: string): WebsiteContent {
           { name: "Custom", price: "$499+", detail: "A product interface in Next.js.", points: ["Custom app", "Design system", "Launch support"] },
         ],
       },
-      { id: "contact", type: "contact", title: "Commission a project", body: "Share the product, the audience, and the date you need a first look.", buttonLabel: "Write Lumen" },
+      { id: "contact", type: "contact", title: "Commission a project", body: "Share the product, the audience, and the date you need a first look.", buttonLabel: "Write Lumen", buttonHref: "#contact" },
       { id: "footer", type: "footer", text: "© Lumen Notes", note: "Interface design for software and the sites that sell it.", links: ["Work", "Practice", "Contact"] },
     ]);
   }
   if (templateId === "waitlist") {
     return page(preset("vibrant"), [
-      { id: "nav", type: "nav", brand: "Sunday", links: ["Issue", "Readers", "Join"], buttonLabel: "Join the list" },
+      { id: "nav", type: "nav", brand: "Sunday", links: ["Issue", "Readers", "Join"], buttonLabel: "Join the list", buttonHref: "#contact" },
       {
         id: "hero",
         type: "hero",
@@ -521,6 +543,8 @@ export function templateContent(templateId: string): WebsiteContent {
         subhead: "Sunday sends one story, one kitchen or street, and nothing else. Join before the first issue goes out.",
         buttonLabel: "Join the list",
         secondaryLabel: "Read a sample",
+        buttonHref: "#contact",
+        secondaryHref: "#work",
         imageUrl: PHOTO.workshop,
       },
       {
@@ -553,12 +577,12 @@ export function templateContent(templateId: string): WebsiteContent {
           { name: "Custom", price: "$499+", detail: "A member app around the letter.", points: ["Custom app", "Member pages", "Launch support"] },
         ],
       },
-      { id: "contact", type: "contact", title: "Get the first letter", body: "Leave your email. We write when the first issue is ready.", buttonLabel: "Notify me" },
+      { id: "contact", type: "contact", title: "Get the first letter", body: "Leave your email. We write when the first issue is ready.", buttonLabel: "Notify me", buttonHref: "#contact" },
       { id: "footer", type: "footer", text: "© Sunday Letter", note: "One story a week. No noise around it.", links: ["Issue", "Readers", "Join"] },
     ]);
   }
   return page(preset("agency-light"), [
-    { id: "nav", type: "nav", brand: "Northwind", links: ["Work", "Services", "Pricing"], buttonLabel: "Book a call" },
+    { id: "nav", type: "nav", brand: "Northwind", links: ["Work", "Services", "Pricing"], buttonLabel: "Book a call", buttonHref: "#contact" },
     {
       id: "hero",
       type: "hero",
@@ -567,6 +591,8 @@ export function templateContent(templateId: string): WebsiteContent {
       subhead: "Northwind designs, builds, and publishes client sites that explain the work before anyone has to ask.",
       buttonLabel: "Book a call",
       secondaryLabel: "View services",
+      buttonHref: "#contact",
+      secondaryHref: "#work",
       imageUrl: PHOTO.office,
     },
     {
@@ -599,7 +625,7 @@ export function templateContent(templateId: string): WebsiteContent {
         { name: "Custom", price: "$499+", detail: "A Next.js app shaped around the product.", points: ["Custom app", "Tailored design", "Launch support"] },
       ],
     },
-    { id: "contact", type: "contact", title: "Start a project", body: "Tell us what the site needs to do. We reply within two weekdays.", buttonLabel: "Send the brief" },
+    { id: "contact", type: "contact", title: "Start a project", body: "Tell us what the site needs to do. We reply within two weekdays.", buttonLabel: "Send the brief", buttonHref: "#contact" },
     { id: "footer", type: "footer", text: "© Northwind Studio", note: "Agency sites, designed and published from one studio.", links: ["Work", "Services", "Pricing"] },
   ]);
 }

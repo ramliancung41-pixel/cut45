@@ -9,6 +9,12 @@ function escapeHtml(value: string) {
     .replace(/'/g, "&#39;");
 }
 
+function safeHref(value: string | undefined, fallback: string) {
+  const href = (value ?? "").trim() || fallback;
+  if (/^#[a-z0-9-]{1,40}$/i.test(href)) return href;
+  if (/^https:\/\/[^\s"'<>]+$/.test(href)) return escapeHtml(href);
+  return fallback;
+}
 function safeImage(url: string) {
   if (!/^https:\/\/[^\s"'<>]+$/.test(url)) return "";
   return escapeHtml(url);
@@ -32,7 +38,7 @@ function sectionHtml(section: WebsiteSection, theme: WebsiteContent["theme"]) {
     return `<header class="nav">
       <strong>${escapeHtml(section.brand)}</strong>
       <nav>${links}</nav>
-      <a href="#contact">${escapeHtml(section.buttonLabel)}</a>
+      <a href="${safeHref(section.buttonHref, "#contact")}">${escapeHtml(section.buttonLabel)}</a>
     </header>`;
   }
   if (section.type === "hero") {
@@ -46,8 +52,8 @@ function sectionHtml(section: WebsiteSection, theme: WebsiteContent["theme"]) {
         <h1>${escapeHtml(section.headline)}</h1>
         <p class="lede">${escapeHtml(section.subhead)}</p>
         <div class="actions">
-          <a class="primary" href="#contact">${escapeHtml(section.buttonLabel)}</a>
-          <a class="secondary" href="#work">${escapeHtml(section.secondaryLabel)}</a>
+          <a class="primary" href="${safeHref(section.buttonHref, "#contact")}">${escapeHtml(section.buttonLabel)}</a>
+          <a class="secondary" href="${safeHref(section.secondaryHref, "#work")}">${escapeHtml(section.secondaryLabel)}</a>
         </div>
       </div>
       <figure>${media}</figure>
@@ -214,7 +220,7 @@ export default function LandingPage() {
             <header key={section.id} style={{ position: "sticky", top: 0, display: "flex", gap: 16, alignItems: "center", padding: "12px 20px", backdropFilter: "blur(16px)", background: theme.background }}>
               <strong>{section.brand}</strong>
               <nav style={{ marginLeft: "auto", display: "flex", gap: 16, color: theme.muted }}>{section.links.map((link) => <span key={link}>{link}</span>)}</nav>
-              <a href="#contact" style={{ background: theme.primary, color: "#fff", borderRadius: 999, padding: "6px 12px", textDecoration: "none" }}>{section.buttonLabel}</a>
+              <a href={section.buttonHref || "#contact"} style={{ background: theme.primary, color: "#fff", borderRadius: 999, padding: "6px 12px", textDecoration: "none" }}>{section.buttonLabel}</a>
             </header>
           );
         }
@@ -225,8 +231,8 @@ export default function LandingPage() {
                 <p style={{ color: theme.primary, letterSpacing: "0.14em", textTransform: "uppercase" }}>{section.eyebrow}</p>
                 <h1 style={{ fontSize: "clamp(2.4rem, 5vw, 4rem)", lineHeight: 1.05 }}>{section.headline}</h1>
                 <p style={{ color: theme.muted, maxWidth: "38rem" }}>{section.subhead}</p>
-                <a href="#contact" style={{ display: "inline-block", marginTop: 24, marginRight: 12, background: theme.primary, color: "#fff", borderRadius: 999, padding: "10px 16px", textDecoration: "none" }}>{section.buttonLabel}</a>
-                <a href="#work" style={{ display: "inline-block", marginTop: 24, borderRadius: 999, padding: "10px 16px" }}>{section.secondaryLabel}</a>
+                <a href={section.buttonHref || "#contact"} style={{ display: "inline-block", marginTop: 24, marginRight: 12, background: theme.primary, color: "#fff", borderRadius: 999, padding: "10px 16px", textDecoration: "none" }}>{section.buttonLabel}</a>
+                <a href={section.secondaryHref || "#work"} style={{ display: "inline-block", marginTop: 24, borderRadius: 999, padding: "10px 16px" }}>{section.secondaryLabel}</a>
               </div>
               {section.imageUrl ? <img src={section.imageUrl} alt="" style={{ width: "100%", aspectRatio: "4 / 3", objectFit: "cover", borderRadius: 28 }} /> : null}
             </section>

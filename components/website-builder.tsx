@@ -5,6 +5,7 @@ import {
   blankSection,
   SECTION_LABEL,
   SECTION_TYPES,
+  isStoredImageUrl,
   slugify,
   THEME_PRESETS,
   type FontChoice,
@@ -340,7 +341,19 @@ export function WebsiteBuilder({
         <div className="min-h-0 flex-1 overflow-auto p-4 sm:p-6">
           <div className={viewport === "mobile" ? "mx-auto w-[390px] max-w-full" : "w-full"}>
             <div className="overflow-hidden rounded-2xl shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
-              <WebsitePreview content={content} selectedId={selected?.id ?? null} onSelect={setSelectedId} />
+              <WebsitePreview
+                content={content}
+                selectedId={selected?.id ?? null}
+                onSelect={(id) => {
+                  setSelectedId(id);
+                  setPanel("sections");
+                }}
+                onEdit={(id, recipe) => {
+                  setSelectedId(id);
+                  setPanel("sections");
+                  updateSection(id, recipe);
+                }}
+              />
             </div>
           </div>
         </div>
@@ -428,17 +441,32 @@ function SectionFields({
       <p className="text-xs tracking-[0.16em] text-zinc-400 uppercase">{SECTION_LABEL[section.type]} copy</p>
       {section.type === "nav" ? (
         <>
-          <TextField label="Brand" value={section.brand} onChange={(brand) => onChange((item) => (item.type === "nav" ? { ...item, brand } : item))} />
-          <TextField label="Button" value={section.buttonLabel} onChange={(buttonLabel) => onChange((item) => (item.type === "nav" ? { ...item, buttonLabel } : item))} />
+          <TextField label="Header" value={section.brand} onChange={(brand) => onChange((item) => (item.type === "nav" ? { ...item, brand } : item))} />
+          {section.links.map((link, index) => (
+            <TextField
+              key={`${section.id}-link-${index}`}
+              label={`Link ${index + 1}`}
+              value={link}
+              onChange={(next) =>
+                onChange((item) =>
+                  item.type === "nav" ? { ...item, links: item.links.map((entry, entryIndex) => (entryIndex === index ? next : entry)) } : item,
+                )
+              }
+            />
+          ))}
+          <TextField label="Button label" value={section.buttonLabel} onChange={(buttonLabel) => onChange((item) => (item.type === "nav" ? { ...item, buttonLabel } : item))} />
+          <TextField label="Button link" value={section.buttonHref} onChange={(buttonHref) => onChange((item) => (item.type === "nav" ? { ...item, buttonHref } : item))} />
         </>
       ) : null}
       {section.type === "hero" ? (
         <>
+          <TextField label="Header" value={section.headline} onChange={(headline) => onChange((item) => (item.type === "hero" ? { ...item, headline } : item))} />
           <TextField label="Eyebrow" value={section.eyebrow} onChange={(eyebrow) => onChange((item) => (item.type === "hero" ? { ...item, eyebrow } : item))} />
-          <TextField label="Headline" value={section.headline} onChange={(headline) => onChange((item) => (item.type === "hero" ? { ...item, headline } : item))} />
-          <TextField label="Subhead" value={section.subhead} onChange={(subhead) => onChange((item) => (item.type === "hero" ? { ...item, subhead } : item))} multiline />
-          <TextField label="Button" value={section.buttonLabel} onChange={(buttonLabel) => onChange((item) => (item.type === "hero" ? { ...item, buttonLabel } : item))} />
-          <TextField label="Second button" value={section.secondaryLabel} onChange={(secondaryLabel) => onChange((item) => (item.type === "hero" ? { ...item, secondaryLabel } : item))} />
+          <TextField label="Description" value={section.subhead} onChange={(subhead) => onChange((item) => (item.type === "hero" ? { ...item, subhead } : item))} multiline />
+          <TextField label="Button label" value={section.buttonLabel} onChange={(buttonLabel) => onChange((item) => (item.type === "hero" ? { ...item, buttonLabel } : item))} />
+          <TextField label="Button link" value={section.buttonHref} onChange={(buttonHref) => onChange((item) => (item.type === "hero" ? { ...item, buttonHref } : item))} />
+          <TextField label="Second button label" value={section.secondaryLabel} onChange={(secondaryLabel) => onChange((item) => (item.type === "hero" ? { ...item, secondaryLabel } : item))} />
+          <TextField label="Second button link" value={section.secondaryHref} onChange={(secondaryHref) => onChange((item) => (item.type === "hero" ? { ...item, secondaryHref } : item))} />
           <ImagePicker
             assets={assets}
             selected={section.imageUrl}
@@ -449,11 +477,11 @@ function SectionFields({
       ) : null}
       {section.type === "features" ? (
         <>
-          <TextField label="Title" value={section.title} onChange={(title) => onChange((item) => (item.type === "features" ? { ...item, title } : item))} />
+          <TextField label="Header" value={section.title} onChange={(title) => onChange((item) => (item.type === "features" ? { ...item, title } : item))} />
           {section.items.map((item, index) => (
             <div key={`${section.id}-${index}`} className="space-y-2 rounded-2xl border border-white/10 p-3">
               <TextField
-                label={`Feature ${index + 1}`}
+                label="Header"
                 value={item.title}
                 onChange={(title) =>
                   onChange((current) =>
@@ -464,7 +492,7 @@ function SectionFields({
                 }
               />
               <TextField
-                label="Body"
+                label="Description"
                 value={item.body}
                 multiline
                 onChange={(body) =>
@@ -481,11 +509,11 @@ function SectionFields({
       ) : null}
       {section.type === "testimonials" ? (
         <>
-          <TextField label="Title" value={section.title} onChange={(title) => onChange((item) => (item.type === "testimonials" ? { ...item, title } : item))} />
+          <TextField label="Header" value={section.title} onChange={(title) => onChange((item) => (item.type === "testimonials" ? { ...item, title } : item))} />
           {section.items.map((item, index) => (
             <div key={`${section.id}-${index}`} className="space-y-2 rounded-2xl border border-white/10 p-3">
               <TextField
-                label="Quote"
+                label="Description"
                 value={item.quote}
                 multiline
                 onChange={(quote) =>
@@ -524,7 +552,7 @@ function SectionFields({
       ) : null}
       {section.type === "pricing" ? (
         <>
-          <TextField label="Title" value={section.title} onChange={(title) => onChange((item) => (item.type === "pricing" ? { ...item, title } : item))} />
+          <TextField label="Header" value={section.title} onChange={(title) => onChange((item) => (item.type === "pricing" ? { ...item, title } : item))} />
           {section.plans.map((plan, index) => (
             <div key={`${section.id}-${index}`} className="space-y-2 rounded-2xl border border-white/10 p-3">
               <TextField
@@ -549,21 +577,67 @@ function SectionFields({
                   )
                 }
               />
+              <TextField
+                label="Description"
+                value={plan.detail}
+                multiline
+                onChange={(detail) =>
+                  onChange((current) =>
+                    current.type === "pricing"
+                      ? { ...current, plans: current.plans.map((entry, entryIndex) => (entryIndex === index ? { ...entry, detail } : entry)) }
+                      : current,
+                  )
+                }
+              />
+              {plan.points.map((point, pointIndex) => (
+                <TextField
+                  key={`${section.id}-point-${pointIndex}`}
+                  label={`Point ${pointIndex + 1}`}
+                  value={point}
+                  onChange={(next) =>
+                    onChange((current) =>
+                      current.type === "pricing"
+                        ? {
+                            ...current,
+                            plans: current.plans.map((entry, entryIndex) =>
+                              entryIndex === index
+                                ? { ...entry, points: entry.points.map((item, itemIndex) => (itemIndex === pointIndex ? next : item)) }
+                                : entry,
+                            ),
+                          }
+                        : current,
+                    )
+                  }
+                />
+              ))}
             </div>
           ))}
         </>
       ) : null}
       {section.type === "contact" ? (
         <>
-          <TextField label="Title" value={section.title} onChange={(title) => onChange((item) => (item.type === "contact" ? { ...item, title } : item))} />
-          <TextField label="Body" value={section.body} multiline onChange={(body) => onChange((item) => (item.type === "contact" ? { ...item, body } : item))} />
-          <TextField label="Button" value={section.buttonLabel} onChange={(buttonLabel) => onChange((item) => (item.type === "contact" ? { ...item, buttonLabel } : item))} />
+          <TextField label="Header" value={section.title} onChange={(title) => onChange((item) => (item.type === "contact" ? { ...item, title } : item))} />
+          <TextField label="Description" value={section.body} multiline onChange={(body) => onChange((item) => (item.type === "contact" ? { ...item, body } : item))} />
+          <TextField label="Button label" value={section.buttonLabel} onChange={(buttonLabel) => onChange((item) => (item.type === "contact" ? { ...item, buttonLabel } : item))} />
+          <TextField label="Button link" value={section.buttonHref} onChange={(buttonHref) => onChange((item) => (item.type === "contact" ? { ...item, buttonHref } : item))} />
         </>
       ) : null}
       {section.type === "footer" ? (
         <>
-          <TextField label="Footer text" value={section.text} onChange={(text) => onChange((item) => (item.type === "footer" ? { ...item, text } : item))} />
-          <TextField label="Note" value={section.note} onChange={(note) => onChange((item) => (item.type === "footer" ? { ...item, note } : item))} />
+          <TextField label="Header" value={section.text} onChange={(text) => onChange((item) => (item.type === "footer" ? { ...item, text } : item))} />
+          <TextField label="Description" value={section.note} multiline onChange={(note) => onChange((item) => (item.type === "footer" ? { ...item, note } : item))} />
+          {section.links.map((link, index) => (
+            <TextField
+              key={`${section.id}-link-${index}`}
+              label={`Link ${index + 1}`}
+              value={link}
+              onChange={(next) =>
+                onChange((item) =>
+                  item.type === "footer" ? { ...item, links: item.links.map((entry, entryIndex) => (entryIndex === index ? next : entry)) } : item,
+                )
+              }
+            />
+          ))}
         </>
       ) : null}
     </div>
@@ -581,9 +655,38 @@ function ImagePicker({
   onSelect: (url: string) => void;
   onUpload: (file: File) => void;
 }) {
+  const [draft, setDraft] = useState(selected);
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    setDraft(selected);
+  }, [selected]);
+
   return (
     <div>
-      <p className="text-xs text-zinc-400">Section image</p>
+      <p className="text-xs text-zinc-400">Image</p>
+      <input
+        value={draft}
+        aria-label="Image URL"
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setNote("");
+        }}
+        onBlur={(event) => {
+          const next = event.currentTarget.value.trim();
+          if (!next || isStoredImageUrl(next)) {
+            setDraft(next);
+            onSelect(next);
+            setNote("");
+            return;
+          }
+          setDraft(selected);
+          setNote("Use an Unsplash link or an uploaded asset.");
+        }}
+        placeholder="https://images.unsplash.com/..."
+        className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs outline-none"
+      />
+      {note ? <p className="mt-1 text-xs text-red-300">{note}</p> : null}
       <label className="mt-2 inline-flex cursor-pointer rounded-full border border-white/15 px-3 py-1.5 text-xs">
         Upload to assets
         <input
