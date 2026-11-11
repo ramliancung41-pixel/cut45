@@ -72,6 +72,15 @@ export function AgencyPage() {
           </ul>
         </section>
 
+        <section className="mt-14" aria-labelledby="custom-heading">
+          <h2 id="custom-heading" className="text-2xl font-medium">
+            Custom solutions
+          </h2>
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-white/60">
+            A Custom AI Web App starts at $499 and is a full Next.js application when a template is not enough. Package prices and the comparison stay on the pricing page. Start the work with the request form here.
+          </p>
+        </section>
+
         <section className="mt-14 grid gap-8 lg:grid-cols-[1fr_minmax(0,28rem)]" aria-labelledby="request-heading">
           <div>
             <h2 id="request-heading" className="text-2xl font-medium">

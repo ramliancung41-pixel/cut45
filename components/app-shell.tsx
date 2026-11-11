@@ -4,6 +4,7 @@ import { Sora } from "next/font/google";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { AiCopilot } from "@/components/ai-copilot";
 import { useStudioAccount } from "@/components/profile-credit-bar";
 import { StudioChromeProvider } from "@/components/studio-chrome";
 import {
@@ -99,7 +100,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [expanded, setExpanded] = useState(false);
   const desktop = useDesktop();
   const open = expanded || desktop;
-  const [, setCopilotOpen] = useState(false);
+  const [copilotOpen, setCopilotOpen] = useState(false);
   const { account, ready, signOut } = useStudioAccount();
   const [railPath, setRailPath] = useState(pathname);
   const agentPage = pathname === "/agent";
@@ -197,20 +198,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </Suspense>
           ) : null}
           <div className="mt-auto flex shrink-0 flex-col gap-2 pt-2">
-            {workspacePage ? null : (
-              <Link
-                href="/agent"
-                aria-label="AI Co-Pilot"
-                title="AI Co-Pilot"
-                className={cn(
-                  "flex h-9 items-center gap-3 rounded-full bg-violet-600 text-white shadow-[0_6px_18px_rgba(124,58,237,0.35)] transition hover:bg-violet-700",
-                  open ? "px-2.5" : "w-9 justify-center self-center",
-                )}
-              >
-                <SparkIcon />
-                {open ? <span className="text-sm font-medium">AI Co-Pilot</span> : null}
-              </Link>
-            )}
+            <button
+              type="button"
+              aria-label="AI Co-Pilot"
+              aria-expanded={copilotOpen}
+              title="AI Co-Pilot"
+              onClick={() => setCopilotOpen((value) => !value)}
+              className={cn(
+                "flex h-9 items-center gap-3 rounded-full bg-violet-600 text-white shadow-[0_6px_18px_rgba(124,58,237,0.35)] transition hover:bg-violet-700",
+                open ? "px-2.5" : "w-9 justify-center self-center",
+              )}
+            >
+              <SparkIcon />
+              {open ? <span className="text-sm font-medium">AI Co-Pilot</span> : null}
+            </button>
             <AccountMenu
               expanded={open}
               name={account?.name ?? null}
@@ -230,6 +231,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           )}
         </div>
         <MobileTabBar pathname={pathname} />
+        <AiCopilot open={copilotOpen} onClose={() => setCopilotOpen(false)} />
       </div>
     </StudioChromeProvider>
   );
