@@ -1,12 +1,11 @@
 import type { Metadata } from "next";
-import { PublicPricing } from "@/components/public-pricing";
+import { AgencyServices } from "@/components/agency-services";
 
 export const metadata: Metadata = {
-  title: "Pricing",
-  description:
-    "Cut45 credit packs and what a 45-second AI video story costs on the Standard, Pro, and Premium tiers.",
+  title: "Agency services",
+  description: "Starter, Business, and Custom website packages, plus a form to request a site from the agency.",
 };
 
 export default function PricingPage() {
-  return <PublicPricing />;
+  return <AgencyServices active="pricing" />;
 }

@@ -7,32 +7,39 @@ import {
 
 export function WebsitePreview({
   content,
-  selectedId,
+  selectedId = null,
   onSelect,
 }: {
   content: WebsiteContent;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
+  selectedId?: string | null;
+  onSelect?: (id: string) => void;
 }) {
   const { theme } = content;
   const onPrimary = contrastColor(theme.primary);
 
   return (
     <article style={{ background: theme.background, color: theme.text, fontFamily: fontStack(theme.font) }}>
-      {content.sections.map((section) => (
-        <button
-          key={section.id}
-          type="button"
-          onClick={() => onSelect(section.id)}
-          className="block w-full text-left"
-          style={{
-            outline: selectedId === section.id ? `2px solid ${theme.primary}` : "none",
-            outlineOffset: -2,
-          }}
-        >
-          <SectionView section={section} theme={theme} onPrimary={onPrimary} />
-        </button>
-      ))}
+      {content.sections.map((section) => {
+        const outline = selectedId === section.id ? `2px solid ${theme.primary}` : "none";
+        if (!onSelect) {
+          return (
+            <div key={section.id}>
+              <SectionView section={section} theme={theme} onPrimary={onPrimary} />
+            </div>
+          );
+        }
+        return (
+          <button
+            key={section.id}
+            type="button"
+            onClick={() => onSelect(section.id)}
+            className="block w-full text-left"
+            style={{ outline, outlineOffset: -2 }}
+          >
+            <SectionView section={section} theme={theme} onPrimary={onPrimary} />
+          </button>
+        );
+      })}
     </article>
   );
 }

@@ -46,6 +46,8 @@ export default async function BuilderPage({
       initialTitle={project?.title ?? templateTitle(templateId)}
       initialSlug={project?.slug ?? slugify(templateTitle(templateId))}
       initialContent={project?.content ?? fallback}
+      initialPublished={project?.published ?? false}
+      initialDomain={project?.customDomain ?? ""}
     />
   );
 }

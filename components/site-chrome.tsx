@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { AuthModal } from "@/components/auth-modal";
 import { hasAccountSession } from "@/lib/account-session";
 
-export function SiteHeader({ active }: { active?: "pricing" }) {
+export function SiteHeader({ active }: { active?: "pricing" | "agency" }) {
   const router = useRouter();
   const [authOpen, setAuthOpen] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -39,6 +39,13 @@ export function SiteHeader({ active }: { active?: "pricing" }) {
             >
               Pricing
             </Link>
+            <Link
+              href="/agency"
+              aria-current={active === "agency" ? "page" : undefined}
+              className={`text-sm ${active === "agency" ? "text-white" : "text-white/60 hover:text-white"}`}
+            >
+              Agency
+            </Link>
             <Link href="/login?next=/dashboard" className="hidden text-sm text-white/60 hover:text-white sm:inline">
               Log in
             </Link>
@@ -66,6 +73,9 @@ export function SiteFooter() {
         <nav aria-label="Footer" className="flex flex-wrap items-center gap-5">
           <Link href="/pricing" className="hover:text-white">
             Pricing
+          </Link>
+          <Link href="/agency" className="hover:text-white">
+            Agency
           </Link>
           <Link href="/login?next=/dashboard" className="hover:text-white">
             Log in

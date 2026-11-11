@@ -5,10 +5,12 @@ import {
   blankSection,
   SECTION_LABEL,
   SECTION_TYPES,
+  slugify,
   type FontChoice,
   type WebsiteContent,
   type WebsiteSection,
 } from "@/lib/website-content";
+import { websiteExportZip } from "@/lib/website-export";
 import { WebsitePreview } from "@/components/website-preview";
 
 type Asset = { name: string; url: string };
@@ -18,6 +20,8 @@ type BuilderProject = {
   title: string;
   slug: string;
   content: WebsiteContent;
+  published?: boolean;
+  customDomain?: string;
 };
 
 const FONTS: Array<{ id: FontChoice; label: string }> = [
@@ -32,16 +36,22 @@ export function WebsiteBuilder({
   initialTitle,
   initialSlug,
   initialContent,
+  initialPublished,
+  initialDomain,
 }: {
   templateId: string;
   project: BuilderProject | null;
   initialTitle: string;
   initialSlug: string;
   initialContent: WebsiteContent;
+  initialPublished: boolean;
+  initialDomain: string;
 }) {
   const [projectId, setProjectId] = useState(project?.id ?? null);
   const [title, setTitle] = useState(initialTitle);
   const [slug, setSlug] = useState(initialSlug);
+  const [published, setPublished] = useState(initialPublished);
+  const [customDomain, setCustomDomain] = useState(initialDomain);
   const [content, setContent] = useState(initialContent);
   const [selectedId, setSelectedId] = useState(initialContent.sections[0]?.id ?? null);
   const [viewport, setViewport] = useState<"desktop" | "mobile">("desktop");
@@ -102,7 +112,18 @@ export function WebsiteBuilder({
     if (selectedId === id) setSelectedId(sections[0]?.id ?? null);
   }
 
-  async function save() {
+  function exportCode() {
+    const bytes = websiteExportZip(title.trim() || "Landing page", content);
+    const blob = new Blob([bytes], { type: "application/zip" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${slugify(title || "landing")}-export.zip`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function save(nextPublished = published) {
     const trimmed = title.trim();
     if (!trimmed) {
       setStatus("error");
@@ -111,7 +132,7 @@ export function WebsiteBuilder({
     }
     setStatus("saving");
     setMessage("");
-    const payload = { title: trimmed, slug, content, template: templateId };
+    const payload = { title: trimmed, slug, content, template: templateId, published: nextPublished, customDomain };
     const response = await fetch(projectId ? `/api/projects/${projectId}` : "/api/projects", {
       method: projectId ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
@@ -126,6 +147,8 @@ export function WebsiteBuilder({
     setProjectId(body.project.id);
     setTitle(body.project.title);
     setSlug(body.project.slug);
+    setPublished(Boolean(body.project.published));
+    setCustomDomain(body.project.customDomain ?? "");
     setContent(body.project.content);
     setStatus("saved");
     window.history.replaceState(null, "", `/builder?project=${body.project.id}`);
@@ -168,8 +191,61 @@ export function WebsiteBuilder({
           </button>
         </div>
         <p className="px-4 py-2 text-xs text-zinc-400" role="status">
-          {message || (status === "dirty" ? "Unsaved changes" : status === "saved" ? `Saved as /${slug}` : "Saving")}
+          {message ||
+            (status === "dirty"
+              ? "Unsaved changes"
+              : status === "saved"
+                ? published
+                  ? `Published at /p/${slug}`
+                  : `Saved as /${slug}`
+                : "Saving")}
         </p>
+        <div className="grid gap-2 px-4 pb-3">
+          <label className="text-[11px] text-zinc-400">
+            Public address
+            <input
+              value={slug}
+              onChange={(event) => {
+                setSlug(event.target.value);
+                markDirty();
+              }}
+              aria-label="Public address"
+              className="mt-1 w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm text-white outline-none"
+            />
+          </label>
+          <label className="text-[11px] text-zinc-400">
+            Custom domain
+            <input
+              value={customDomain}
+              onChange={(event) => {
+                setCustomDomain(event.target.value);
+                markDirty();
+              }}
+              placeholder="client.com"
+              aria-label="Custom domain"
+              className="mt-1 w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm text-white outline-none"
+            />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => void save(true)} disabled={status === "saving"} className="rounded-full border border-white/15 px-3 py-1.5 text-[11px]">
+              Publish
+            </button>
+            {published ? (
+              <button type="button" onClick={() => void save(false)} disabled={status === "saving"} className="rounded-full border border-white/15 px-3 py-1.5 text-[11px]">
+                Unpublish
+              </button>
+            ) : null}
+          </div>
+          {published && status === "saved" ? (
+            <a href={`/p/${slug}`} target="_blank" rel="noreferrer" className="text-xs text-zinc-300 underline">
+              Open /p/{slug}
+            </a>
+          ) : (
+            <p className="text-[11px] leading-5 text-zinc-500">
+              Publish to share /p/{slug}. Point a custom domain at this host, then open that same path on the domain.
+            </p>
+          )}
+        </div>
         <div className="grid grid-cols-2 gap-1 px-4">
           {(["sections", "theme"] as const).map((item) => (
             <button
@@ -245,6 +321,9 @@ export function WebsiteBuilder({
       <section className="flex min-h-0 min-w-0 flex-1 flex-col pb-16 lg:pb-0">
         <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
           <p className="mr-auto text-xs tracking-[0.16em] text-zinc-400 uppercase">Live preview</p>
+          <button type="button" onClick={exportCode} className="rounded-full border border-white/15 px-3 py-1.5 text-xs font-medium text-zinc-100">
+            Export HTML/React Code
+          </button>
           {(["desktop", "mobile"] as const).map((item) => (
             <button
               key={item}

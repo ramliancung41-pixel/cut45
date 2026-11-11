@@ -72,14 +72,18 @@ export default async function DashboardPage() {
       ) : (
         <ul className="gen-glass mt-4 divide-y divide-white/10 overflow-hidden rounded-3xl">
           {listed.projects.map((project) => (
-            <li key={project.id}>
-              <Link href={`/builder?project=${project.id}`} className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-white/[0.03]">
-                <div>
-                  <p className="font-medium">{project.title}</p>
-                  <p className="mt-1 text-sm text-muted">/{project.slug}</p>
-                </div>
-                <span className="shrink-0 font-mono text-xs text-ok">Draft</span>
+            <li key={project.id} className="flex items-center justify-between gap-4 px-5 py-4">
+              <Link href={`/builder?project=${project.id}`} className="min-w-0 flex-1 hover:opacity-80">
+                <p className="font-medium">{project.title}</p>
+                <p className="mt-1 text-sm text-muted">/{project.slug}</p>
               </Link>
+              {project.published ? (
+                <Link href={`/p/${project.slug}`} className="shrink-0 font-mono text-xs text-ok">
+                  Published
+                </Link>
+              ) : (
+                <span className="shrink-0 font-mono text-xs text-ok">Draft</span>
+              )}
             </li>
           ))}
         </ul>
