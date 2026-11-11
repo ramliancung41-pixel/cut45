@@ -1059,8 +1059,12 @@ export function GenerateForm() {
         body: JSON.stringify({ extractFrame: true, continueFromVideoUrl: clipUrl }),
       });
       const payload = (await response.json().catch(() => null)) as { success?: boolean; frameUrl?: string; error?: string } | null;
-      if (!response.ok || !payload?.frameUrl) {
-        throw new Error(payload?.error ?? "The last frame could not be read.");
+      if (!response.ok || !payload?.frameUrl || !/\.(png|jpe?g|webp)(\?|#|$)/i.test(payload.frameUrl)) {
+        if (referenceImage && /\.(png|jpe?g|webp)(\?|#|$)/i.test(referenceImage)) {
+          setStatusMessage("Character image attached. The next prompt continues this scene.");
+          return;
+        }
+        throw new Error(payload?.error ?? "A PNG or JPEG character image is required to continue this scene.");
       }
       setReferenceImage(payload.frameUrl);
       setReferencePreview(payload.frameUrl);

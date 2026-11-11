@@ -3,7 +3,7 @@ import { SUPABASE_ACCESS_COOKIE } from "@/lib/auth-cookie";
 import { extractLastFrame, parseReferenceImage } from "@/lib/fal-video";
 import { renderFalLtx } from "@/lib/fal-ltx";
 import { ensureProfile, readProfileBalance } from "@/lib/profiles";
-import { isStillImage, isVideoMedia, latestCharacterImage } from "@/lib/saved-characters";
+import { ensurePublicImageUrl, isPublicImageUrl, isVideoMedia, latestCharacterImage } from "@/lib/saved-characters";
 import { userFromAccessToken } from "@/lib/supabase/server";
 import { deductGenerationCredits } from "@/lib/video-billing";
 import { INSUFFICIENT_CREDITS_MESSAGE } from "@/lib/video-models";
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
     if (!continueFromVideoUrl) {
       return NextResponse.json({ success: false, error: "The previous video could not be continued." }, { status: 400 });
     }
-    const frame = await extractLastFrame(continueFromVideoUrl, request.signal);
+    const frame = await extractLastFrame(continueFromVideoUrl, AbortSignal.timeout(60_000));
     if ("error" in frame || !frame.imageUrl) {
       return NextResponse.json(
         { success: false, error: "error" in frame ? frame.error : "The last frame could not be read." },
@@ -75,16 +75,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: "Could not read the credit balance." }, { status: 500 });
   }
 
-  let startFrameUrl = "";
-  if (continueFromVideoUrl && isVideoMedia(continueFromVideoUrl)) {
-    const frame = await extractLastFrame(continueFromVideoUrl, request.signal);
-    if (!("error" in frame) && frame.imageUrl && isStillImage(frame.imageUrl)) startFrameUrl = frame.imageUrl;
+  let still = "";
+  try {
+    if (isPublicImageUrl(characterImageUrl)) still = characterImageUrl;
+    else if (characterImage) still = await ensurePublicImageUrl(user.id, characterImageUrl);
+    if (!still && continueFromVideoUrl && isVideoMedia(continueFromVideoUrl)) {
+      const frame = await extractLastFrame(continueFromVideoUrl, AbortSignal.timeout(60_000));
+      if (!("error" in frame) && frame.imageUrl) still = await ensurePublicImageUrl(user.id, frame.imageUrl);
+    }
+    if (!still) still = await latestCharacterImage(user.id);
+  } catch (error) {
+    console.error("[scene] image resolve failed", error instanceof Error ? error.message : error);
   }
-  let still = startFrameUrl || (isStillImage(characterImageUrl) ? characterImageUrl : "");
-  if (!still) still = await latestCharacterImage(user.id);
-  if (!still && !characterImage) {
+  if (!isPublicImageUrl(still)) {
     return NextResponse.json(
-      { success: false, error: "Attach a JPEG, PNG, or WebP image." },
+      { success: false, error: "A PNG or JPEG character image is required to continue this scene." },
       { status: 400 },
     );
   }
@@ -92,12 +97,12 @@ export async function POST(request: NextRequest) {
   const rendered = await renderFalLtx({
     prompt: actionPrompt,
     characterImageUrl: still,
-    image: still ? null : characterImage,
+    image: null,
     startFrameUrl: still,
     durationSec: 5,
   });
   if (!("videoUrl" in rendered)) {
-    return NextResponse.json({ success: false, error: rendered.error }, { status: 502 });
+    return NextResponse.json({ success: false, error: rendered.error || "Generation timed out" }, { status: 504 });
   }
 
   const charged = await deductGenerationCredits({

@@ -1071,6 +1071,7 @@ export async function POST(request: NextRequest) {
     billing = checked.billing;
   }
 
+  const signal = AbortSignal.timeout(280_000);
   const stream = iteratorToStream(
     scene
       ? runScene({
@@ -1082,7 +1083,7 @@ export async function POST(request: NextRequest) {
           referenceImage: priorVideoUrls.length > 0 ? null : referenceImage,
           priorVideoUrls,
           motionStyle: motionStyle || null,
-          signal: request.signal,
+          signal,
           mockMode,
           aspect,
           owner,
@@ -1095,7 +1096,7 @@ export async function POST(request: NextRequest) {
           priorScript,
           priorVideoUrls,
           motionStyle: motionStyle || null,
-          signal: request.signal,
+          signal,
           mockMode,
           aspect,
           owner,
@@ -1108,7 +1109,7 @@ export async function POST(request: NextRequest) {
       engine,
       referenceImage,
       motionStyle || null,
-      request.signal,
+      signal,
       clipSec,
       mockMode,
       aspect,

@@ -14,6 +14,7 @@ import {
   useAgentSessions,
 } from "@/lib/agent-session-store";
 import { newAgentSessionId } from "@/lib/agent-sessions";
+import { useActiveGenerations } from "@/lib/generation-jobs";
 
 type RailItem = {
   href: string;
@@ -95,6 +96,7 @@ function cn(...parts: Array<string | false | null | undefined>) {
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const jobs = useActiveGenerations();
   const pathname = usePathname();
   const [expanded, setExpanded] = useState(false);
   const desktop = useDesktop();
@@ -142,6 +144,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <StudioChromeProvider value={setCopilotOpen}>
       <div className={cn(sora.variable, "studio-type studio-light min-h-[100dvh] overflow-x-clip", darkPage && "studio-dark")}>
+        {jobs.length > 0 ? (
+          <div className="fixed right-4 bottom-4 z-[60] rounded-full border border-white/10 bg-zinc-950/95 px-4 py-2 text-sm text-zinc-200 shadow-lg">
+            Generating clip in background...
+          </div>
+        ) : null}
         <div
           aria-hidden
           className={cn(

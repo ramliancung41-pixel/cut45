@@ -19,6 +19,7 @@ import {
 } from "@/lib/agent-handoff";
 import { brandBrief, brandStore, pluginStore } from "@/lib/studio-prefs";
 import { saveAgentSession, startAgentSessions, useAgentSessions } from "@/lib/agent-session-store";
+import { beginGeneration, cancelGeneration, finishGeneration, noteGenerationProgress, onGenerationStop } from "@/lib/generation-jobs";
 import {
   UNTITLED_SESSION,
   agentSessionTitle,
@@ -45,9 +46,8 @@ import { videoModelEngine } from "@/lib/video-models";
 
 type Attachment = { full: string; thumb: string };
 
-const RENDER_POLL_MS = 8 * 60 * 1000;
+const RENDER_POLL_MS = 45_000;
 const THUMB_EDGE = 384;
-const INTERRUPTED = "This render was interrupted. Finished clips still appear in the Gallery.";
 
 function thumbnail(dataUrl: string) {
   return imageThumbnail(dataUrl, THUMB_EDGE);
@@ -55,14 +55,7 @@ function thumbnail(dataUrl: string) {
 
 function restoreGenerations(generations: Generation[]) {
   return generations.map((item) =>
-    item.status === "running"
-      ? {
-          ...item,
-          status: item.url ? ("done" as const) : ("error" as const),
-          error: item.url ? undefined : INTERRUPTED,
-          steps: item.steps?.map((step) => (step.status === "started" ? { ...step, status: "failed" as const } : step)),
-        }
-      : item,
+    item.status === "running" ? { ...item, status: "cancelled" as const, error: "Cancelled" } : item,
   );
 }
 
@@ -123,6 +116,27 @@ function sleep(ms: number, signal: AbortSignal) {
   });
 }
 
+function isVideoUrl(url: string) {
+  return /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(url);
+}
+
+function stillReference(url: string | undefined) {
+  if (!url || isVideoUrl(url)) return "";
+  if (url.startsWith("data:image/jpeg") || url.startsWith("data:image/png") || url.startsWith("data:image/webp")) return url;
+  if (!url.startsWith("https://")) return "";
+  return /\.(png|jpe?g|webp)(\?|#|$)/i.test(url) || url.includes("/characters/") ? url : "";
+}
+
+function readStoredCharacterUrl() {
+  try {
+    const raw = sessionStorage.getItem("cut45-character");
+    const parsed = raw ? (JSON.parse(raw) as { url?: unknown }) : null;
+    return stillReference(typeof parsed?.url === "string" ? parsed.url : "");
+  } catch {
+    return "";
+  }
+}
+
 export function AgentStudioPage() {
   const params = useSearchParams();
   const router = useRouter();
@@ -169,20 +183,24 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const plugins = pluginStore.useValue();
   const chatAbortRef = useRef<AbortController | null>(null);
-  const renderAbortRef = useRef(new Set<AbortController>());
+  const stopRenderRef = useRef<(id: string, reason: "cancel" | "timeout") => void>(() => {});
   const attachIdRef = useRef(0);
   const extrasRef = useRef(new Map<string, AgentRunExtras>());
   const createdAtRef = useRef(initial?.createdAt ?? "");
   const loadedRef = useRef({ messages, generations });
+  const messagesRef = useRef(messages);
+  const generationsRef = useRef(generations);
+  messagesRef.current = messages;
+  generationsRef.current = generations;
   const title = messages.length > 0 ? agentSessionTitle(messages) : UNTITLED_SESSION;
 
   useEffect(() => {
-    const renders = renderAbortRef.current;
     return () => {
       chatAbortRef.current?.abort();
-      renders.forEach((controller) => controller.abort());
     };
   }, []);
+
+  useEffect(() => onGenerationStop((id, reason) => stopRenderRef.current(id, reason)), []);
 
   useEffect(() => {
     if (messages.length === 0) return;
@@ -336,35 +354,33 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
       return;
     }
     const extras = extrasRef.current.get(message.id);
-    const savedStill =
-      extras?.referenceImage &&
-      !/\.mp4(\?|#|$)/i.test(extras.referenceImage) &&
-      (extras.referenceImage.startsWith("https://") || extras.referenceImage.startsWith("data:image/"))
-        ? extras.referenceImage
-        : "";
+    const storedCharacter = readStoredCharacterUrl();
+    const savedStill = storedCharacter || stillReference(extras?.referenceImage);
     const id = newId("gen");
-    setGenerations((current) => [
-      {
-        id,
-        sourceId: message.id,
-        kind: "video",
-        title: `${previous.title} · continued`,
-        prompt: suggestion.prompt,
-        modelName: "Wan 2.1",
-        aspect: "16:9",
-        status: "running",
-        durationSec: 5,
-      },
-      ...current,
-    ]);
+    const controller = beginGeneration(id, "Generating clip in background...");
+    const started: Generation = {
+      id,
+      sourceId: message.id,
+      kind: "video",
+      title: `${previous.title} · continued`,
+      prompt: suggestion.prompt,
+      modelName: "Wan 2.1",
+      aspect: "16:9",
+      status: "running",
+      durationSec: 5,
+    };
+    generationsRef.current = [started, ...generationsRef.current];
+    setGenerations(generationsRef.current);
     setSelectedId(id);
     try {
       const response = await fetch("/api/generate-scene", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           actionPrompt: suggestion.prompt.slice(0, 2000),
-          ...(savedStill ? { characterImageUrl: savedStill } : { continueFromVideoUrl: previous.url }),
+          ...(savedStill ? { characterImageUrl: savedStill } : {}),
+          ...(isVideoUrl(previous.url) ? { continueFromVideoUrl: previous.url } : {}),
         }),
       });
       const payload = (await response.json().catch(() => null)) as { success?: boolean; videoUrl?: string; error?: string } | null;
@@ -372,11 +388,18 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
         if (response.status === 402) setUpgradeOpen(true);
         throw new Error(payload?.error ?? "The scene could not be continued.");
       }
+      if (controller.signal.aborted) return;
       updateGeneration(id, { status: "done", url: payload.videoUrl });
       void syncBalance();
     } catch (caught) {
+      if (controller.signal.aborted) {
+        stopRenderRef.current(id, controller.signal.reason === "timeout" ? "timeout" : "cancel");
+        return;
+      }
       const text = caught instanceof Error ? caught.message : "The scene could not be continued.";
       updateGeneration(id, { status: "error", error: text });
+    } finally {
+      finishGeneration(id);
     }
   }
 
@@ -392,8 +415,30 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
   }
 
   function updateGeneration(id: string, patch: Partial<Generation>) {
-    setGenerations((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+    const next = generationsRef.current.map((item) => (item.id === id ? { ...item, ...patch } : item));
+    generationsRef.current = next;
+    setGenerations(next);
+    const now = new Date().toISOString();
+    if (!createdAtRef.current) createdAtRef.current = now;
+    saveAgentSession({
+      id: sessionId,
+      title,
+      createdAt: createdAtRef.current,
+      updatedAt: now,
+      messages: messagesRef.current,
+      generations: persistable(next),
+    });
   }
+
+  stopRenderRef.current = (id, reason) => {
+    const current = generationsRef.current.find((item) => item.id === id);
+    if (!current || current.status !== "running") return;
+    updateGeneration(id, {
+      status: "cancelled",
+      error: reason === "timeout" ? "Render timed out. Please try again." : "Cancelled",
+      steps: current.steps?.map((step) => (step.status === "started" ? { ...step, status: "failed" } : step)),
+    });
+  };
 
   function patchStep(id: string, stepId: string, patch: Partial<AgentStep>) {
     setGenerations((current) =>
@@ -424,38 +469,40 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
       return;
     }
     const id = newId("gen");
-    setGenerations((current) => [
-      {
-        id,
-        sourceId: message.id,
-        kind: suggestion.kind,
-        title: suggestion.title,
-        prompt: suggestion.prompt,
-        modelName: suggestionModelName(suggestion),
-        aspect: suggestion.aspect,
-        status: "running",
-        steps: pendingSteps(suggestion.kind === "video" ? GENERATE_STEPS : IMAGE_STEPS),
-        ...(suggestion.kind === "video" ? { durationSec: suggestion.durationSec } : {}),
-      },
-      ...current,
-    ]);
+    const started: Generation = {
+      id,
+      sourceId: message.id,
+      kind: suggestion.kind,
+      title: suggestion.title,
+      prompt: suggestion.prompt,
+      modelName: suggestionModelName(suggestion),
+      aspect: suggestion.aspect,
+      status: "running",
+      steps: pendingSteps(suggestion.kind === "video" ? GENERATE_STEPS : IMAGE_STEPS),
+      ...(suggestion.kind === "video" ? { durationSec: suggestion.durationSec } : {}),
+    };
+    generationsRef.current = [started, ...generationsRef.current];
+    setGenerations(generationsRef.current);
     setSelectedId(id);
-    const controller = new AbortController();
-    renderAbortRef.current.add(controller);
+    const controller = beginGeneration(id, "Generating clip in background...");
     const extras = extrasRef.current.get(message.id) ?? {};
     try {
       const output =
         suggestion.kind === "image"
           ? { url: await renderImage(id, suggestion, cost, extras, controller.signal) }
           : await renderVideo(id, suggestion, extras, controller.signal);
+      if (controller.signal.aborted) return;
       updateGeneration(id, { status: "done", ...output });
     } catch (caught) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) {
+        stopRenderRef.current(id, controller.signal.reason === "timeout" ? "timeout" : "cancel");
+        return;
+      }
       const text = caught instanceof Error ? caught.message : "Generation failed.";
       failOpenSteps(id);
       updateGeneration(id, { status: "error", error: text });
     } finally {
-      renderAbortRef.current.delete(controller);
+      finishGeneration(id);
     }
   }
 
@@ -553,6 +600,14 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
     let pending: { statusUrl: string; responseUrl: string; ticket?: string; result: GenerateResult } | null = null;
     const reader = response.body?.getReader();
     if (!reader) throw new Error("The generator did not return a progress stream.");
+    const stopReader = () => {
+      void reader.cancel().catch(() => undefined);
+    };
+    if (signal.aborted) {
+      stopReader();
+      throw new DOMException("Aborted", "AbortError");
+    }
+    signal.addEventListener("abort", stopReader, { once: true });
     const decoder = new TextDecoder();
     let buffer = "";
     const consume = (chunk: string) => {
@@ -581,23 +636,30 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
         patchStep(id, "frames", { status: "started", detail: "Fal.ai is rendering the clip" });
       }
     };
-    while (true) {
-      const { value, done } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      const chunks = buffer.split("\n\n");
-      buffer = chunks.pop() ?? "";
-      chunks.forEach(consume);
-      if (done) {
-        if (buffer.trim()) consume(buffer);
-        break;
+    try {
+      while (true) {
+        if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const chunks = buffer.split("\n\n");
+        buffer = chunks.pop() ?? "";
+        chunks.forEach(consume);
+        if (done) {
+          if (buffer.trim()) consume(buffer);
+          break;
+        }
       }
+    } finally {
+      signal.removeEventListener("abort", stopReader);
     }
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
 
     let result = finished as GenerateResult | null;
     let videoUrl = result?.videoUrl || result?.frames.find((frame) => frame.src.startsWith("https://"))?.src || "";
     const queued = pending as { statusUrl: string; responseUrl: string; ticket?: string; result: GenerateResult } | null;
     if (!videoUrl && queued) {
-      const done = await pollRender(queued.statusUrl, queued.responseUrl, queued.ticket, signal);
+      noteGenerationProgress(id);
+      const done = await pollRender(id, queued.statusUrl, queued.responseUrl, queued.ticket, signal);
       videoUrl = done.videoUrl;
       result = {
         ...queued.result,
@@ -673,6 +735,7 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
   };
 
   async function pollRender(
+    id: string,
     statusUrl: string,
     responseUrl: string,
     ticket: string | undefined,
@@ -680,6 +743,7 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
   ): Promise<FinishedRender> {
     const started = Date.now();
     while (Date.now() - started < RENDER_POLL_MS) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
       const response = await fetch("/api/video/status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -698,7 +762,8 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
       if (payload?.error && response && response.status < 500) throw new Error(payload.error);
       await sleep(3000, signal);
     }
-    throw new Error("Fal.ai is still rendering this clip. Check the Gallery in a moment.");
+    cancelGeneration(id, "timeout");
+    throw new DOMException("Aborted", "AbortError");
   }
 
   function newChat() {
@@ -779,11 +844,22 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
                           <span className="absolute top-[22%] left-[58%] h-1 w-1 animate-pulse rounded-full bg-white/35 [animation-delay:180ms]" />
                           <span className="absolute right-[26%] bottom-[36%] h-1.5 w-1.5 animate-pulse rounded-full bg-violet-200/50 [animation-delay:360ms]" />
                           <span className="absolute bottom-[30%] left-[42%] h-1 w-1 animate-pulse rounded-full bg-white/30 [animation-delay:540ms]" />
+                          <button
+                            type="button"
+                            onClick={() => cancelGeneration(featured.id)}
+                            className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-white/15 bg-black/70 px-3 py-1.5 text-xs text-zinc-200"
+                          >
+                            Cancel render
+                          </button>
                           <span className="sr-only">Rendering video</span>
                         </div>
                       ) : (
-                        <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-red-300">
-                          {featured.error}
+                        <div
+                          className={`absolute inset-0 flex items-center justify-center px-6 text-center text-sm ${
+                            featured.status === "cancelled" ? "text-zinc-300" : "text-red-300"
+                          }`}
+                        >
+                          {featured.status === "cancelled" ? "Cancelled" : featured.error}
                         </div>
                       )}
                     </div>
@@ -813,7 +889,7 @@ function AgentStudio({ sessionId, initial }: { sessionId: string; initial: Agent
                             <img src={item.url} alt="" className="h-full w-full object-cover" />
                           ) : (
                             <span className="grid h-full w-full place-items-center text-[11px] text-zinc-500">
-                              {item.status === "running" ? <Spinner light /> : "Failed"}
+                              {item.status === "running" ? <Spinner light /> : item.status === "cancelled" ? "Cancelled" : "Failed"}
                             </span>
                           )}
                           <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/80 to-transparent px-2 pt-4 pb-1.5 text-left text-[10px] font-medium text-zinc-200">

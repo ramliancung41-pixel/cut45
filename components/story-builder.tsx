@@ -86,8 +86,6 @@ export function StoryBuilder({
   const editorRef = useRef<HTMLElement>(null);
   const timelineRef = useRef<HTMLOListElement>(null);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
-
   useEffect(() => {
     if (!sheetOpen) return;
     function onKey(event: KeyboardEvent) {

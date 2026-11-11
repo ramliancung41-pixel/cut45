@@ -14,7 +14,7 @@ import { imageStyleName } from "@/lib/image-styles";
 import { videoResolutionLabel } from "@/lib/video-models";
 import { SaveCharacterButton } from "@/components/save-character-button";
 
-export type CardStatus = "idle" | "running" | "done" | "error";
+export type CardStatus = "idle" | "running" | "done" | "error" | "cancelled";
 
 const STARTERS = [
   "Enhance this prompt: a samurai walking through neon rain",
@@ -342,6 +342,7 @@ function GenerationCard({
       }`
     : [suggestion.aspect, suggestion.style ? imageStyleName(suggestion.style) : ""].filter(Boolean).join(" · ");
   const running = status === "running";
+  const cancelled = status === "cancelled";
 
   return (
     <div className="overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.03]">
@@ -415,7 +416,7 @@ function GenerationCard({
               className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-black transition hover:bg-white/90 disabled:opacity-60"
             >
               {running ? <Spinner /> : null}
-              {running ? "Generating…" : status === "done" ? "Regenerate" : status === "error" ? "Try again" : "Generate"}
+              {running ? "Generating…" : cancelled ? "Cancelled" : status === "done" ? "Regenerate" : status === "error" ? "Try again" : "Generate"}
             </button>
           </div>
         )}

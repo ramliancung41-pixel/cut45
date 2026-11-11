@@ -25,13 +25,25 @@ export function rowToCharacter(row: Record<string, unknown>): SavedCharacter | n
   };
 }
 
+const IMAGE_EXT = /\.(png|jpe?g|webp)(\?|#|$)/i;
+
 export function isVideoMedia(url: string) {
-  return /\.mp4(\?|#|$)/i.test(url) || /video\/mp4/i.test(url);
+  return /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(url) || /video\/mp4/i.test(url);
+}
+
+export function isPublicImageUrl(url: string) {
+  if (!url.startsWith("https://") || isVideoMedia(url)) return false;
+  if (IMAGE_EXT.test(url)) return true;
+  try {
+    return new URL(url).pathname.includes("/characters/");
+  } catch {
+    return false;
+  }
 }
 
 export function isStillImage(url: string) {
   if (!url || isVideoMedia(url)) return false;
-  return url.startsWith("https://") || url.startsWith("data:image/jpeg") || url.startsWith("data:image/png") || url.startsWith("data:image/webp");
+  return isPublicImageUrl(url) || url.startsWith("data:image/jpeg") || url.startsWith("data:image/png") || url.startsWith("data:image/webp");
 }
 
 export async function latestCharacterImage(userId: string) {
@@ -43,7 +55,15 @@ export async function latestCharacterImage(userId: string) {
     .order("created_at", { ascending: false })
     .limit(1);
   const url = listed.data?.[0]?.character_image_url;
-  return typeof url === "string" && isStillImage(url) ? url : "";
+  return typeof url === "string" && isPublicImageUrl(url) ? url : "";
+}
+
+export async function ensurePublicImageUrl(userId: string, source: string) {
+  const url = source.trim();
+  if (isPublicImageUrl(url)) return url;
+  if (!isStillImage(url)) return "";
+  const stored = await storeCharacterImage(userId, url);
+  return "characterImageUrl" in stored && stored.characterImageUrl ? stored.characterImageUrl : "";
 }
 
 export async function storeCharacterImage(userId: string, sourceUrl: string) {

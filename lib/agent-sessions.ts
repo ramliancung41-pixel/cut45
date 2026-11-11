@@ -38,7 +38,7 @@ export type AgentGeneration = {
   prompt: string;
   modelName: string;
   aspect: string;
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error" | "cancelled";
   url?: string;
   error?: string;
   steps?: AgentStep[];
@@ -111,7 +111,10 @@ function parseGeneration(value: unknown): AgentGeneration | null {
   const id = clip(record.id, 80);
   const sourceId = clip(record.sourceId, 80);
   const kind = record.kind === "video" ? "video" : record.kind === "image" ? "image" : null;
-  const status = record.status === "done" || record.status === "error" || record.status === "running" ? record.status : null;
+  const status =
+    record.status === "done" || record.status === "error" || record.status === "running" || record.status === "cancelled"
+      ? record.status
+      : null;
   if (!id || !sourceId || !kind || !status) return null;
   const url = typeof record.url === "string" && record.url.startsWith("https://") ? record.url.slice(0, 1000) : undefined;
   if (status === "done" && !url) return null;
