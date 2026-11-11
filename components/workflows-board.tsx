@@ -19,48 +19,48 @@ type Workflow = {
 
 const WORKFLOWS: Workflow[] = [
   {
-    id: "short-film",
-    title: "Short Film Pipeline",
-    tag: "Video",
-    description: "Turns one idea into a four-scene short with a consistent hero and an opening clip ready to render.",
-    steps: ["Story outline", "Character sheet", "Scene prompts", "Opening clip"],
-    placeholder: "A lighthouse keeper who finds a message in a bottle",
+    id: "studio",
+    title: "Studio landing page",
+    tag: "Page",
+    description: "Turns one offer into a hero, three features, and a contact close.",
+    steps: ["Offer", "Hero", "Features", "Contact"],
+    placeholder: "A design studio that ships brand sites",
     accent: "from-violet-500/30 to-fuchsia-500/10",
     build: (topic) =>
-      `Run the Short Film Pipeline for: ${topic}.\nStep 1: write a three-act outline split into 4 scenes.\nStep 2: describe the main character's look for a consistent reference sheet.\nStep 3: give each scene a cinematic visual prompt.\nStep 4: suggest the opening 5-second video clip to generate now.`,
+      `Build a studio landing page about: ${topic}.\nSection 1: a short hero headline and subhead.\nSection 2: three features.\nSection 3: a contact close.`,
   },
   {
-    id: "avatar-dialogue",
-    title: "AI Avatar Dialogue",
-    tag: "Dialogue",
-    description: "Designs two talking characters, writes their back-and-forth, and lines up a lip-synced clip.",
-    steps: ["Avatar designs", "Dialogue script", "Portrait still", "Talking clip"],
-    placeholder: "Two founders debating remote vs. office work",
+    id: "product",
+    title: "Product page",
+    tag: "Product",
+    description: "Lays out a product story with benefits, a price block, and a call to action.",
+    steps: ["Audience", "Benefits", "Price", "Call to action"],
+    placeholder: "A matte black reusable water bottle",
     accent: "from-sky-500/30 to-cyan-500/10",
     build: (topic) =>
-      `Run the AI Avatar Dialogue workflow about: ${topic}.\nStep 1: design two distinct characters with names, looks, and personalities.\nStep 2: write a punchy 6-line dialogue between them.\nStep 3: give a portrait prompt for the first character.\nStep 4: suggest a 9:16 5-second talking video clip of them to generate now.`,
+      `Build a product page for: ${topic}.\nSection 1: who it is for.\nSection 2: three benefits.\nSection 3: a simple price block.\nSection 4: a closing call to action.`,
   },
   {
-    id: "tiktok-storyboard",
-    title: "TikTok Viral Storyboard",
-    tag: "Social",
-    description: "Builds a scroll-stopping vertical storyboard: hook, three beats, and a call to action.",
-    steps: ["Hook", "3 story beats", "Call to action", "9:16 clip"],
-    placeholder: "Morning routine of a busy barista",
+    id: "portfolio",
+    title: "Portfolio",
+    tag: "Personal",
+    description: "Builds an introduction, selected work, and a short bio.",
+    steps: ["Intro", "Selected work", "Bio"],
+    placeholder: "A photographer who shoots coastal towns",
     accent: "from-pink-500/30 to-orange-500/10",
     build: (topic) =>
-      `Run the TikTok Viral Storyboard workflow for: ${topic}.\nStep 1: write a 2-second hook line.\nStep 2: outline three fast story beats.\nStep 3: end with a clear call to action.\nStep 4: suggest the 9:16 5-second hook clip to generate now.`,
+      `Build a portfolio page for: ${topic}.\nSection 1: a one-sentence introduction.\nSection 2: three pieces of selected work.\nSection 3: a short bio.`,
   },
   {
-    id: "product-ad",
-    title: "Product Ad Spot",
-    tag: "Brand",
-    description: "Creates a polished product hero shot and a short ad clip using your Brand Kit colors and style.",
-    steps: ["Selling points", "Hero image", "Ad script", "Product clip"],
-    placeholder: "A matte black reusable water bottle",
+    id: "waitlist",
+    title: "Waitlist",
+    tag: "Launch",
+    description: "Creates a single-screen launch page with a headline and an email capture.",
+    steps: ["Headline", "Proof", "Email capture"],
+    placeholder: "A weekly letter about small restaurants",
     accent: "from-emerald-500/30 to-lime-500/10",
     build: (topic) =>
-      `Run the Product Ad Spot workflow for: ${topic}.\nStep 1: list three selling points.\nStep 2: suggest a studio hero image prompt for the product.\nStep 3: write a 10-second voiceover ad script.\nStep 4: suggest the 16:9 product video clip to generate now.`,
+      `Build a waitlist page for: ${topic}.\nSection 1: a launch headline.\nSection 2: one line of proof.\nSection 3: an email capture.`,
   },
 ];
 
@@ -72,7 +72,7 @@ export function WorkflowsBoard() {
     const topic = (topics[workflow.id] ?? "").trim() || workflow.placeholder;
     const sessionId = newAgentSessionId();
     stashAgentDraft({ sessionId, message: workflow.build(topic) });
-    router.push(`/agent?chat=${sessionId}`);
+    router.push(`/builder?template=${workflow.id}`);
   }
 
   return (
@@ -80,7 +80,7 @@ export function WorkflowsBoard() {
       <StudioPageHeader
         eyebrow="Workflows"
         title="Automated creation templates"
-        description="Pick a pipeline, add your topic, and the Co-Pilot runs the whole prompt chain in the Agent workspace, ending with a ready-to-render card."
+        description="Pick a page type, add your topic, and open it in the builder."
       />
       <ul className="grid gap-4 md:grid-cols-2">
         {WORKFLOWS.map((workflow) => (
@@ -132,7 +132,7 @@ export function WorkflowsBoard() {
                 type="submit"
                 className="shrink-0 rounded-full bg-white px-4 py-2 text-xs font-semibold text-black transition hover:bg-white/90"
               >
-                Run in Agent
+                Open in builder
               </button>
             </form>
           </li>

@@ -1,6 +1,6 @@
 import { agentModelGuide, parseAgentSuggestion } from "@/lib/agent-suggestion";
 import { logApiKey } from "@/lib/api-keys";
-import { PROMPT_MAX } from "@/lib/motion-styles";
+import { PROMPT_MAX } from "@/lib/limits";
 import { CLIP_DURATION_SEC, MAX_MOVIE_SCENES, MOVIE_SCENE_COUNT, parseMovieScenes } from "@/lib/scenes";
 
 export const dynamic = "force-dynamic";

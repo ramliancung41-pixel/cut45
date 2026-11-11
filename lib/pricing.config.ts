@@ -1,8 +1,6 @@
 import { BILLING_PLANS, type BillingPlanId } from "@/lib/billing";
-import type { VideoModelId } from "@/lib/video-models";
 
-// Server billing (/api/generate, /api/video/status) reads these through lib/video-models.ts.
-// 720p Veo: 3 credits/sec. A 5s clip is 15 credits ($0.15). A 10s clip is 30 credits ($0.30).
+// 720p rate: 3 credits/sec. A 5s unit is 15 credits. A 10s unit is 30 credits.
 export const VIDEO_RATE_MATRIX = {
   Veo: 3,
 } as const;
@@ -51,12 +49,42 @@ export const CREDIT_PACKS: readonly CreditPack[] = BILLING_PLANS.map((plan) => (
 export const DEFAULT_PACK_ID: CreditPackId = CREDIT_PACKS.find((pack) => pack.popular)?.id ?? CREDIT_PACKS[0].id;
 export const CREDIT_EXPIRY_MONTHS = 12;
 
+export const VIDEO_CLIP_DURATIONS = [5, 10] as const;
+
+export const VIDEO_RESOLUTIONS = [
+  { id: "360p", label: "360p", note: "SD · Low Cost" },
+  { id: "720p", label: "720p", note: "HD · Standard" },
+  { id: "1080p", label: "1080p", note: "Full HD · High Quality" },
+] as const satisfies ReadonlyArray<{ id: PricedResolution; label: string; note: string }>;
+
+export function findVideoModel(nameOrId: string | null | undefined) {
+  const key = (nameOrId ?? "").trim().toLowerCase();
+  if (key === "veo" || key === "wan" || key === "wan 2.1") return { id: "wan" as const, rateKey: "Veo" as const };
+  return null;
+}
+
+export function videoCreditQuote(model: string | null | undefined, _resolution?: string | null, durationSec = 5) {
+  const known = findVideoModel(model);
+  const rateKey: VideoRateKey = known?.rateKey ?? "Veo";
+  const seconds = durationSec >= 10 ? 10 : 5;
+  const billedResolution: PricedResolution = "720p";
+  return {
+    model: known?.id ?? null,
+    modelName: rateKey,
+    resolution: billedResolution,
+    durationSec: seconds,
+    ratePerSecond: VIDEO_RATE_MATRIX[rateKey],
+    multiplier: RESOLUTION_MULTIPLIER[billedResolution],
+    credits: clipCredits(rateKey, billedResolution, seconds),
+  };
+}
+
 export type TierId = "standard" | "pro" | "premium";
 
 export type Tier = {
   id: TierId;
   label: string;
-  modelId: VideoModelId;
+  modelId: "wan";
   modelLabel: string;
   rateKey: VideoRateKey;
   /** Must be a resolution the model renders natively, so the server bills exactly this. */
@@ -97,7 +125,7 @@ export function tierCreditsPerSecond(id: TierId) {
   return VIDEO_RATE_MATRIX[tier.rateKey] * RESOLUTION_MULTIPLIER[tier.resolution];
 }
 
-/** Exactly what /api/generate charges for one voiceless scene on this tier. */
+/** Credits for one priced unit on this tier. */
 export function sceneCost(tier: TierId, seconds: number) {
   const entry = tierById(tier);
   return clipCredits(entry.rateKey, entry.resolution, seconds);

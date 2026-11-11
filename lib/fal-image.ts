@@ -5,7 +5,7 @@ import {
   falResponseError,
   uploadReference,
   type ReferenceImage,
-} from "@/lib/fal-video";
+} from "@/lib/fal-media";
 import { DEFAULT_IMAGE_ASPECT, falImageAspectFields, type ImageAspectId } from "@/lib/image-aspects";
 import { DEFAULT_IMAGE_MODEL, getImageModel, type ImageModelId } from "@/lib/image-models";
 

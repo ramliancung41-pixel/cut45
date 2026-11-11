@@ -1,11 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useCredits, type ArchiveProject } from "@/components/credit-provider";
-import { speakNarration, stopNarration } from "@/lib/browser-speech";
 import type { SavedGalleryItem } from "@/lib/gallery-store";
 import { saveGeneratedFile } from "@/lib/save-media";
-import { resolveVoiceId } from "@/lib/voices";
 import type { VisualEngineId } from "@/lib/visual-engines";
 
 async function downloadProject(project: ArchiveProject) {
@@ -49,8 +47,7 @@ function fromSaved(item: SavedGalleryItem): ArchiveProject {
     prompt: item.prompt,
     durationSec: 45,
     engine,
-    engineLabel:
-      engine === "ultra" ? "Ultra Cinematic AI" : "Budget AI Motion (Fal.ai Image-to-Video)",
+    engineLabel: "Saved file",
     voiceName: item.voiceName,
     voiceId: "",
     script: item.script,
@@ -72,10 +69,7 @@ function rateLine(project: ArchiveProject) {
 export function GalleryBoard() {
   const { projects } = useCredits();
   const [saved, setSaved] = useState<ArchiveProject[]>([]);
-  const [playing, setPlaying] = useState<ArchiveProject | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const trackRef = useRef<HTMLAudioElement | null>(null);
-  const playIdRef = useRef(0);
 
   useEffect(() => {
     let ignore = false;
@@ -96,47 +90,10 @@ export function GalleryBoard() {
     ...saved.filter((item) => !projects.some((project) => project.id === item.id)),
   ];
 
-  function stopPlayback() {
-    playIdRef.current += 1;
-    stopNarration();
-    trackRef.current?.pause();
-    trackRef.current = null;
-    setPlaying(null);
-  }
-
-  function replay(project: ArchiveProject) {
-    playIdRef.current += 1;
-    const playId = playIdRef.current;
-    stopNarration();
-    trackRef.current?.pause();
-    trackRef.current = null;
-    setPlaying(project);
-
-    const finish = () => {
-      if (playIdRef.current === playId) setPlaying(null);
-    };
-
-    if (project.audioSrc) {
-      const track = new Audio(project.audioSrc);
-      trackRef.current = track;
-      track.onended = finish;
-      track.onerror = finish;
-      void track.play();
-      return;
-    }
-    const voiceId = resolveVoiceId(project.voiceId);
-    if (!voiceId) {
-      finish();
-      return;
-    }
-    speakNarration(project.script, voiceId, { onEnd: finish });
-  }
-
   if (listed.length === 0) {
     return (
       <p className="gen-glass rounded-3xl px-5 py-8 text-sm leading-6 text-muted">
-        Finished previews land here. Generate one from AI Generator and it keeps its prompt,
-        length, and engine.
+        Saved images and files land here.
       </p>
     );
   }
@@ -153,14 +110,11 @@ export function GalleryBoard() {
                 alt={project.prompt}
                 className="mb-4 aspect-square w-full rounded-2xl object-cover"
               />
-            ) : project.videoSrc ? (
-              <video
-                src={project.videoSrc}
-                playsInline
-                controls
-                className="mb-4 aspect-[9/16] w-full rounded-2xl bg-black object-cover"
-              />
-            ) : null}
+            ) : (
+              <div className="mb-4 grid aspect-[9/16] w-full place-items-center rounded-2xl bg-zinc-900 text-sm text-muted">
+                Saved file
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full border border-line bg-panel px-2.5 py-1 text-xs text-foreground">
                 {project.prompt}
@@ -192,29 +146,6 @@ export function GalleryBoard() {
         <p role="alert" className="gen-alert mt-4">
           {downloadError}
         </p>
-      ) : null}
-      {playing ? (
-        <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/70 p-4 sm:items-center">
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="replay-title"
-            className="gen-glass w-full max-w-md rounded-3xl p-5"
-          >
-            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">
-              Playing
-            </p>
-            <h2 id="replay-title" className="mt-2 text-lg font-semibold tracking-tight">
-              {playing.prompt}
-            </h2>
-            <p className="mt-2 text-sm text-muted">
-              {playing.durationSec}s · {playing.engineLabel}
-            </p>
-            <button type="button" onClick={stopPlayback} className="gen-ghost mt-5">
-              Stop
-            </button>
-          </div>
-        </div>
       ) : null}
     </>
   );

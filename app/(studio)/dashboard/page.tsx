@@ -5,25 +5,13 @@ import { PageHeader } from "@/components/page-header";
 
 export const metadata: Metadata = {
   title: "Dashboard",
-  description: "Studio board for 45-second faceless shorts.",
+  description: "Manage the websites and landing pages in your studio.",
 };
 
-const JOBS = [
-  {
-    title: "Why night markets stay cheap",
-    voice: "Calm Documentary",
-    status: "Preview ready",
-  },
-  {
-    title: "How to read a train map",
-    voice: "Friendly Explainer",
-    status: "Preview ready",
-  },
-  {
-    title: "The two-minute coffee rule",
-    voice: "Warm Narrator",
-    status: "Draft",
-  },
+const PROJECTS = [
+  { title: "Northwind Studio", template: "Studio", status: "Draft", href: "/builder?template=studio" },
+  { title: "Harbor Goods", template: "Product", status: "Published", href: "/builder?template=product" },
+  { title: "Lumen Notes", template: "Portfolio", status: "Draft", href: "/builder?template=portfolio" },
 ];
 
 export default function DashboardPage() {
@@ -32,7 +20,7 @@ export default function DashboardPage() {
       <PageHeader
         eyebrow="Studio"
         title="Dashboard"
-        description="45-second vertical shorts with no on-camera host. Start a new run or check what the last previews used."
+        description="Your websites live here. Open a project, start from a template, or jump into the builder."
       />
 
       <dl className="gen-glass grid overflow-hidden rounded-3xl sm:grid-cols-3 sm:divide-x sm:divide-white/10">
@@ -43,36 +31,41 @@ export default function DashboardPage() {
           </dd>
         </div>
         <div className="border-t border-line px-5 py-4 sm:border-t-0">
-          <dt className="text-sm text-muted">Length</dt>
-          <dd className="mt-1 text-2xl font-semibold tracking-tight">45s</dd>
+          <dt className="text-sm text-muted">Projects</dt>
+          <dd className="mt-1 text-2xl font-semibold tracking-tight">{PROJECTS.length}</dd>
         </div>
         <div className="border-t border-line px-5 py-4 sm:border-t-0">
-          <dt className="text-sm text-muted">Picture</dt>
-          <dd className="mt-1 text-2xl font-semibold tracking-tight">9:16</dd>
+          <dt className="text-sm text-muted">Library</dt>
+          <dd className="mt-1 text-2xl font-semibold tracking-tight">
+            <Link href="/characters" className="hover:underline">
+              Assets
+            </Link>
+          </dd>
         </div>
       </dl>
 
-      <div className="mt-8 flex items-center justify-between gap-4">
-        <h2 className="text-lg font-semibold tracking-tight">Recent previews</h2>
-        <Link
-          href="/generator"
-          className="gen-cta"
-        >
-          AI Generator
-        </Link>
+      <div className="mt-8 flex flex-wrap items-center justify-between gap-4">
+        <h2 className="text-lg font-semibold tracking-tight">Websites</h2>
+        <div className="flex gap-2">
+          <Link href="/templates" className="gen-ghost">
+            Templates
+          </Link>
+          <Link href="/builder" className="gen-cta">
+            New website
+          </Link>
+        </div>
       </div>
 
       <ul className="gen-glass mt-4 divide-y divide-white/10 overflow-hidden rounded-3xl">
-        {JOBS.map((job) => (
-          <li
-            key={job.title}
-            className="flex items-center justify-between gap-4 px-5 py-4"
-          >
-            <div>
-              <p className="font-medium">{job.title}</p>
-              <p className="mt-1 text-sm text-muted">{job.voice} · 45s · faceless</p>
-            </div>
-            <span className="shrink-0 font-mono text-xs text-ok">{job.status}</span>
+        {PROJECTS.map((project) => (
+          <li key={project.title}>
+            <Link href={project.href} className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-white/[0.03]">
+              <div>
+                <p className="font-medium">{project.title}</p>
+                <p className="mt-1 text-sm text-muted">{project.template} template</p>
+              </div>
+              <span className="shrink-0 font-mono text-xs text-ok">{project.status}</span>
+            </Link>
           </li>
         ))}
       </ul>

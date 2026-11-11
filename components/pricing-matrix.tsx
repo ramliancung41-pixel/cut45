@@ -7,7 +7,7 @@ import {
   findVideoModel,
   videoCreditQuote,
   type VideoRateKey,
-} from "@/lib/video-models";
+} from "@/lib/pricing.config";
 
 export type PricingView = "video" | "voice" | "compare";
 

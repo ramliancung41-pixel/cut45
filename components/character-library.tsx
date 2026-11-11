@@ -26,7 +26,7 @@ export function CharacterLibrary() {
     <div>
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
       {characters.length === 0 && !error ? (
-        <p className="text-sm text-muted">No saved characters yet. Generate a clip, then use Save to Character.</p>
+        <p className="text-sm text-muted">No saved characters yet. Images you store land in the characters bucket.</p>
       ) : null}
       <ul className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
         {characters.map((character) => (
@@ -36,7 +36,7 @@ export function CharacterLibrary() {
             <div className="flex items-center justify-between gap-2 p-3">
               <p className="truncate text-sm font-medium">{character.name}</p>
               <Link
-                href="/generator"
+                href="/builder"
                 className="shrink-0 text-xs text-white/70 hover:text-white"
                 onClick={() => {
                   sessionStorage.setItem(

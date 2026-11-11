@@ -1,6 +1,5 @@
 import { Sora } from "next/font/google";
 import { AppShell } from "@/components/app-shell";
-import { VoiceProvider } from "@/components/use-default-voice";
 
 const sora = Sora({
   subsets: ["latin"],
@@ -14,9 +13,7 @@ export default function StudioLayout({
 }) {
   return (
     <div className={`${sora.variable} studio-type`}>
-      <VoiceProvider>
-        <AppShell>{children}</AppShell>
-      </VoiceProvider>
+      <AppShell>{children}</AppShell>
     </div>
   );
 }

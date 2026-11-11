@@ -1,10 +1,10 @@
-import { PROMPT_MAX } from "@/lib/motion-styles";
+import { PROMPT_MAX } from "@/lib/limits";
 
 export const dynamic = "force-dynamic";
 
-const ENHANCE_PROMPT = `You rewrite a short video idea into one cinematic image-to-video prompt for Fal.ai.
+const ENHANCE_PROMPT = `You rewrite a short website idea into one landing-page brief.
 
-Return only the prompt. Aim for 70 to 110 words. Describe the subject, setting, light, lens, and how the camera and subject move. The frame is vertical 9:16. Keep the original subject. Do not invent a different story.
+Return only the brief. Aim for 70 to 110 words. Describe the audience, offer, page sections, and visual tone. Keep the original subject. Do not invent a different business.
 
 No title, labels, hashtags, quotation marks, or markdown.`;
 

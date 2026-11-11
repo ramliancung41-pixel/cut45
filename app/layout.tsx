@@ -20,7 +20,7 @@ export const metadata: Metadata = {
     default: "Cut45",
     template: "%s · Cut45",
   },
-  description: "Generate 45-second faceless short-form videos.",
+  description: "Build and publish landing pages with Cut45.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

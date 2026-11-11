@@ -7,9 +7,9 @@ import { PricingMatrix, PricingNotes, VoiceSwitch } from "@/components/pricing-m
 import { SiteFooter, SiteHeader } from "@/components/site-chrome";
 import { lumenFonts } from "@/lib/lumen-fonts";
 import { RESOLUTION_MULTIPLIER, STORY_SECONDS, TIERS, VOICE_PREMIUM_CREDITS, formatCredits, storyCost } from "@/lib/pricing.config";
-import { VIDEO_RESOLUTIONS } from "@/lib/video-models";
+import { VIDEO_RESOLUTIONS } from "@/lib/pricing.config";
 
-const LOGIN_HREF = "/login?next=/generator";
+const LOGIN_HREF = "/login?next=/dashboard";
 
 function VoicePricing() {
   const [withVoice, setWithVoice] = useState(false);

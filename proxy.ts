@@ -37,10 +37,16 @@ export async function proxy(request: NextRequest) {
   if (
     pathname === "/create-video" ||
     pathname.startsWith("/create-video/") ||
-    pathname === "/dashboard" ||
-    pathname.startsWith("/dashboard/")
+    pathname === "/generator" ||
+    pathname.startsWith("/generator/") ||
+    pathname === "/create" ||
+    pathname.startsWith("/create/") ||
+    pathname === "/editor" ||
+    pathname.startsWith("/editor/") ||
+    pathname === "/agent" ||
+    pathname.startsWith("/agent/")
   ) {
-    const response = NextResponse.redirect(new URL("/generator", request.url));
+    const response = NextResponse.redirect(new URL("/builder", request.url));
     return applySession(response, session);
   }
 
@@ -97,6 +103,10 @@ export const config = {
   matcher: [
     "/dashboard",
     "/dashboard/:path*",
+    "/builder",
+    "/builder/:path*",
+    "/templates",
+    "/templates/:path*",
     "/create",
     "/create/:path*",
     "/generator",

@@ -1,6 +1,6 @@
 import { parseAgentSuggestion, type AgentSuggestion } from "@/lib/agent-suggestion";
 import { threadTitleFromPrompt } from "@/lib/copilot-history";
-import { PROMPT_MAX } from "@/lib/motion-styles";
+import { PROMPT_MAX } from "@/lib/limits";
 
 export const AGENT_SESSION_PREFIX = "agent_";
 export const AGENT_SESSION_LIMIT = 30;

@@ -7,10 +7,10 @@ import { userFromAccessToken } from "@/lib/supabase/server";
 
 export const metadata: Metadata = {
   title: {
-    absolute: "Cut45 — AI Prompts for Viral Video Content Creation",
+    absolute: "Cut45 — AI Website Builder",
   },
   description:
-    "AI prompts for viral video content creation, with 9:16 short previews and transparent credit pricing.",
+    "Design landing pages in the studio, with templates, a builder, and saved assets.",
 };
 
 type LandingSearch = Record<string, string | string[] | undefined>;
@@ -43,9 +43,9 @@ export default async function LandingPage({
   const refreshToken = jar.get(SUPABASE_REFRESH_COOKIE)?.value;
   if (accessToken) {
     const user = await userFromAccessToken(accessToken).catch(() => null);
-    if (user) redirect("/generator");
+    if (user) redirect("/dashboard");
   } else if (refreshToken) {
-    redirect("/generator");
+    redirect("/dashboard");
   }
   return <LandingHome />;
 }

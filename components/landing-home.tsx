@@ -12,10 +12,10 @@ export function LandingHome() {
       <main>
         <section className="mx-auto w-full max-w-7xl px-3 pt-10 pb-16 sm:px-6 sm:pt-16">
           <h1 className="max-w-4xl text-4xl font-medium tracking-tight text-balance sm:text-6xl">
-            AI Prompts for Viral Video Content Creation.
+            AI landing pages, built from a template.{" "}
           </h1>
           <p className="mt-4 text-sm text-white/55">
-            Transparent per-clip credits.{" "}
+            Start from a template, then edit the page in the builder.{" "}
             <Link href="/pricing" className="text-white underline decoration-white/30 underline-offset-4 hover:decoration-white">
               See pricing
             </Link>

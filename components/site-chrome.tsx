@@ -16,7 +16,7 @@ export function SiteHeader({ active }: { active?: "pricing" }) {
     setStarting(true);
     const signedIn = await hasAccountSession();
     if (signedIn) {
-      router.push("/generator");
+      router.push("/dashboard");
       return;
     }
     setStarting(false);
@@ -39,7 +39,7 @@ export function SiteHeader({ active }: { active?: "pricing" }) {
             >
               Pricing
             </Link>
-            <Link href="/login?next=/generator" className="hidden text-sm text-white/60 hover:text-white sm:inline">
+            <Link href="/login?next=/dashboard" className="hidden text-sm text-white/60 hover:text-white sm:inline">
               Log in
             </Link>
             <button
@@ -62,12 +62,12 @@ export function SiteFooter() {
   return (
     <footer className="border-t border-gray-800">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-3 py-8 text-sm text-white/55 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-        <p>Cut45 · AI short-form video studio</p>
+        <p>Cut45 · AI website builder</p>
         <nav aria-label="Footer" className="flex flex-wrap items-center gap-5">
           <Link href="/pricing" className="hover:text-white">
             Pricing
           </Link>
-          <Link href="/login?next=/generator" className="hover:text-white">
+          <Link href="/login?next=/dashboard" className="hover:text-white">
             Log in
           </Link>
           <a href="mailto:support@codeandbuild.tech" className="hover:text-white">

@@ -4,7 +4,7 @@ import { SettingsForm } from "@/components/settings-form";
 
 export const metadata: Metadata = {
   title: "Settings",
-  description: "Default voice and fixed output settings for Cut45.",
+  description: "Account and studio preferences.",
 };
 
 export default function SettingsPage() {
@@ -13,7 +13,7 @@ export default function SettingsPage() {
       <PageHeader
         eyebrow="Studio"
         title="Settings"
-        description="Choose the voice AI Generator opens with. Length, frame, and the faceless format stay fixed."
+        description="Sign-in and saved files stay with your account. New websites start from the dashboard."
       />
       <SettingsForm />
     </div>

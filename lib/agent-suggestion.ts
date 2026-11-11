@@ -1,4 +1,3 @@
-import { isAspectRatio, type AspectRatio } from "@/lib/frame";
 import { DEFAULT_IMAGE_ASPECT, IMAGE_ASPECTS, isImageAspectId, type ImageAspectId } from "@/lib/image-aspects";
 import {
   DEFAULT_IMAGE_MODEL,
@@ -9,30 +8,26 @@ import {
   type ImageModelId,
 } from "@/lib/image-models";
 import { isImageStyleId, type ImageStyleId } from "@/lib/image-styles";
-import {
-  DEFAULT_VIDEO_MODEL,
-  DEFAULT_VIDEO_RESOLUTION,
-  VIDEO_MODELS,
-  getVideoModel,
-  isVideoModelId,
-  isVideoResolution,
-  VOICE_PREMIUM_CREDITS,
-  videoClipCreditCost,
-  videoClipDuration,
-  type VideoClipDuration,
-  type VideoModelId,
-  type VideoResolution,
-} from "@/lib/video-models";
+import { clipCredits, VOICE_PREMIUM_CREDITS } from "@/lib/pricing.config";
+
+const PAGE_ASPECTS = ["9:16", "1:1", "16:9"] as const;
+type PageAspect = (typeof PAGE_ASPECTS)[number];
+const PAGE_RESOLUTIONS = ["360p", "720p", "1080p"] as const;
+type PageResolution = (typeof PAGE_RESOLUTIONS)[number];
+
+function isPageAspect(value: string): value is PageAspect {
+  return (PAGE_ASPECTS as readonly string[]).includes(value);
+}
 
 export type AgentSuggestion =
   | {
       kind: "video";
       title: string;
       prompt: string;
-      model: VideoModelId;
-      aspect: AspectRatio;
-      durationSec: VideoClipDuration;
-      resolution?: VideoResolution;
+      model: string;
+      aspect: PageAspect;
+      durationSec: 5 | 10;
+      resolution?: PageResolution;
       voice?: "none";
     }
   | {
@@ -45,10 +40,9 @@ export type AgentSuggestion =
     };
 
 export function agentModelGuide() {
-  const video = VIDEO_MODELS.map((model) => `${model.id} = ${model.name} (${model.tier}, ${model.note})`).join("; ");
   const image = IMAGE_MODELS.map((model) => `${model.id} = ${model.name} (${model.badge.toLowerCase()})`).join("; ");
   const aspects = IMAGE_ASPECTS.map((aspect) => aspect.id).join(", ");
-  return `Video models: ${video}. Image models: ${image}. Video aspect: 9:16, 1:1, or 16:9. durationSec: 5 or 10. Image aspect: ${aspects}.`;
+  return `Image models: ${image}. Image aspect: ${aspects}.`;
 }
 
 function text(value: unknown, max: number) {
@@ -69,11 +63,11 @@ export function parseAgentSuggestion(value: unknown, maxPrompt: number): AgentSu
       kind: "video",
       title,
       prompt,
-      model: isVideoModelId(model) ? model : DEFAULT_VIDEO_MODEL,
-      aspect: isAspectRatio(aspect) ? aspect : "9:16",
-      durationSec: videoClipDuration(typeof record.durationSec === "number" ? record.durationSec : 5),
-      ...(typeof record.resolution === "string" && isVideoResolution(record.resolution)
-        ? { resolution: record.resolution }
+      model: model || "wan",
+      aspect: isPageAspect(aspect) ? aspect : "9:16",
+      durationSec: typeof record.durationSec === "number" && record.durationSec >= 10 ? 10 : 5,
+      ...(typeof record.resolution === "string" && (PAGE_RESOLUTIONS as readonly string[]).includes(record.resolution)
+        ? { resolution: record.resolution as PageResolution }
         : {}),
       ...(record.voice === "none" ? { voice: "none" as const } : {}),
     };
@@ -95,7 +89,7 @@ export function parseAgentSuggestion(value: unknown, maxPrompt: number): AgentSu
 }
 
 export function suggestionModelName(suggestion: AgentSuggestion) {
-  return suggestion.kind === "video" ? getVideoModel(suggestion.model).name : getImageModel(suggestion.model).name;
+  return suggestion.kind === "video" ? suggestion.model : getImageModel(suggestion.model).name;
 }
 
 export function suggestionHasVoice(suggestion: AgentSuggestion, voiceoverPlugin: boolean) {
@@ -104,11 +98,11 @@ export function suggestionHasVoice(suggestion: AgentSuggestion, voiceoverPlugin:
 
 export function suggestionCreditCost(suggestion: AgentSuggestion, voiceoverPlugin = false) {
   return suggestion.kind === "video"
-    ? videoClipCreditCost(suggestion.model, suggestionResolution(suggestion), suggestion.durationSec) +
+    ? clipCredits("Veo", "720p", suggestion.durationSec) +
         (suggestionHasVoice(suggestion, voiceoverPlugin) ? VOICE_PREMIUM_CREDITS : 0)
     : imageModelCreditCost(suggestion.model);
 }
 
 export function suggestionResolution(suggestion: Extract<AgentSuggestion, { kind: "video" }>) {
-  return suggestion.resolution ?? DEFAULT_VIDEO_RESOLUTION;
+  return suggestion.resolution ?? "720p";
 }

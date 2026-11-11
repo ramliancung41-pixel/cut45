@@ -4,12 +4,10 @@ import { useState } from "react";
 
 export function SaveCharacterButton({
   imageUrl,
-  videoUrl,
   label = "Save to Character",
   className = "gen-ghost",
 }: {
   imageUrl?: string;
-  videoUrl?: string;
   label?: string;
   className?: string;
 }) {
@@ -24,17 +22,7 @@ export function SaveCharacterButton({
     setSaving(true);
     setError("");
     try {
-      let tempFalUrl = imageUrl && !/\.mp4($|\?)/i.test(imageUrl) ? imageUrl : "";
-      if (!tempFalUrl && videoUrl) {
-        const frame = await fetch("/api/generate-scene", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ extractFrame: true, continueFromVideoUrl: videoUrl }),
-        });
-        const framed = (await frame.json().catch(() => null)) as { frameUrl?: string; error?: string } | null;
-        if (!frame.ok || !framed?.frameUrl) throw new Error(framed?.error ?? "The last frame could not be read.");
-        tempFalUrl = framed.frameUrl;
-      }
+      const tempFalUrl = imageUrl && !/\.mp4($|\?)/i.test(imageUrl) ? imageUrl : "";
       if (!tempFalUrl) throw new Error("There is no character image to save.");
       const response = await fetch("/api/characters/save", {
         method: "POST",

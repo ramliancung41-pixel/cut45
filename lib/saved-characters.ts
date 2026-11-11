@@ -1,3 +1,4 @@
+import { STORAGE_BUCKETS, uploadPublicObject } from "@/lib/storage";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
 export type SavedCharacter = {
@@ -8,7 +9,7 @@ export type SavedCharacter = {
   createdAt: string;
 };
 
-const BUCKET = "characters";
+const BUCKET = STORAGE_BUCKETS.characters;
 
 export function rowToCharacter(row: Record<string, unknown>): SavedCharacter | null {
   const id = typeof row.id === "string" ? row.id : "";
@@ -73,17 +74,12 @@ export async function storeCharacterImage(userId: string, sourceUrl: string) {
   if (bytes.byteLength === 0 || bytes.byteLength > 8_000_000) {
     return { error: "The character image is empty or too large." };
   }
-  const admin = createSupabaseAdminClient();
-  const created = await admin.storage.createBucket(BUCKET, { public: true });
-  if (created.error && !/already exists|duplicate/i.test(created.error.message)) {
-    return { error: "Character storage is not available." };
-  }
-  const path = `characters/${userId}_${Date.now()}.png`;
-  const uploaded = await admin.storage.from(BUCKET).upload(path, bytes, {
+  const stored = await uploadPublicObject({
+    bucket: BUCKET,
+    path: `characters/${userId}_${Date.now()}.png`,
+    bytes,
     contentType: downloaded.headers.get("content-type") || "image/png",
-    upsert: false,
   });
-  if (uploaded.error) return { error: "The character image could not be stored." };
-  const characterImageUrl = admin.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
-  return characterImageUrl ? { characterImageUrl } : { error: "The character image could not be stored." };
+  if (!("publicUrl" in stored)) return { error: "The character image could not be stored." };
+  return { characterImageUrl: stored.publicUrl };
 }

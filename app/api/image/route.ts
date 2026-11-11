@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { renderStudioImage } from "@/lib/fal-image";
-import { parseReferenceImage } from "@/lib/fal-video";
+import { parseReferenceImage } from "@/lib/fal-media";
 import { DEFAULT_IMAGE_ASPECT, isImageAspectId } from "@/lib/image-aspects";
 import { DEFAULT_IMAGE_MODEL, getImageModel, isImageModelId } from "@/lib/image-models";
 import { composeImagePrompt, isImageStyleId } from "@/lib/image-styles";

@@ -14,7 +14,6 @@ import {
   useAgentSessions,
 } from "@/lib/agent-session-store";
 import { newAgentSessionId } from "@/lib/agent-sessions";
-import { useActiveGenerations } from "@/lib/generation-jobs";
 
 type RailItem = {
   href: string;
@@ -27,16 +26,22 @@ type RailItem = {
 const RAIL: RailItem[][] = [
   [
     {
-      href: "/generator",
-      label: "Home",
+      href: "/dashboard",
+      label: "Dashboard",
       icon: <HomeIcon />,
-      match: (pathname, mode) => (pathname === "/generator" || pathname === "/create") && mode !== "video",
+      match: (pathname) => pathname === "/dashboard" || pathname.startsWith("/dashboard/"),
     },
     {
-      href: "/generator?mode=video",
-      label: "45s Story",
-      icon: <VideoIcon />,
-      match: (pathname, mode) => pathname === "/generator" && mode === "video",
+      href: "/builder",
+      label: "Builder",
+      icon: <SparkOutlineIcon />,
+      match: (pathname) => pathname === "/builder" || pathname.startsWith("/builder/"),
+    },
+    {
+      href: "/templates",
+      label: "Templates",
+      icon: <FolderIcon />,
+      match: (pathname) => pathname.startsWith("/templates"),
     },
     {
       href: "/characters",
@@ -85,10 +90,10 @@ function useDesktop() {
 }
 
 const MOBILE_TABS: Array<{ href: string; label: string; icon: React.ReactNode; match: (pathname: string) => boolean }> = [
-  { href: "/generator", label: "Create", icon: <SparkOutlineIcon />, match: (pathname) => pathname === "/generator" || pathname === "/create" },
-  { href: "/gallery", label: "Library", icon: <FolderIcon />, match: (pathname) => pathname.startsWith("/gallery") },
-  { href: "/pricing", label: "Credits", icon: <CoinTabIcon />, match: (pathname) => pathname.startsWith("/credits") },
-  { href: "/settings", label: "API key", icon: <KeyIcon />, match: (pathname) => pathname.startsWith("/settings") },
+  { href: "/dashboard", label: "Projects", icon: <HomeIcon />, match: (pathname) => pathname.startsWith("/dashboard") },
+  { href: "/builder", label: "Build", icon: <SparkOutlineIcon />, match: (pathname) => pathname.startsWith("/builder") },
+  { href: "/templates", label: "Templates", icon: <FolderIcon />, match: (pathname) => pathname.startsWith("/templates") },
+  { href: "/settings", label: "Settings", icon: <KeyIcon />, match: (pathname) => pathname.startsWith("/settings") },
 ];
 
 function cn(...parts: Array<string | false | null | undefined>) {
@@ -96,7 +101,6 @@ function cn(...parts: Array<string | false | null | undefined>) {
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const jobs = useActiveGenerations();
   const pathname = usePathname();
   const [expanded, setExpanded] = useState(false);
   const desktop = useDesktop();
@@ -108,8 +112,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const workspacePage = WORKSPACE_PATHS.includes(pathname);
   const darkPage =
     workspacePage ||
-    pathname === "/generator" ||
-    pathname === "/create" ||
+    pathname === "/dashboard" ||
+    pathname.startsWith("/builder") ||
+    pathname.startsWith("/templates") ||
     pathname.startsWith("/gallery") ||
     pathname.startsWith("/characters") ||
     pathname.startsWith("/credits") ||
@@ -144,11 +149,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <StudioChromeProvider value={setCopilotOpen}>
       <div className={cn(sora.variable, "studio-type studio-light min-h-[100dvh] overflow-x-clip", darkPage && "studio-dark")}>
-        {jobs.length > 0 ? (
-          <div className="fixed right-4 bottom-4 z-[60] rounded-full border border-white/10 bg-zinc-950/95 px-4 py-2 text-sm text-zinc-200 shadow-lg">
-            Generating clip in background...
-          </div>
-        ) : null}
         <div
           aria-hidden
           className={cn(
@@ -176,7 +176,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           )}
         >
           {desktop ? (
-            <Link href="/generator" className="rail-link">
+            <Link href="/dashboard" className="rail-link">
               <PanelIcon />
               <span className="rail-label text-sm font-semibold tracking-tight text-foreground">Cut45</span>
             </Link>
@@ -595,15 +595,6 @@ function HomeIcon() {
   return (
     <Svg>
       <path d="M3.5 9 10 3.5 16.5 9v6.5a1 1 0 0 1-1 1h-3v-4.5h-5V16.5h-3a1 1 0 0 1-1-1Z" />
-    </Svg>
-  );
-}
-
-function VideoIcon() {
-  return (
-    <Svg>
-      <rect x="2.5" y="5" width="11" height="10" rx="2" />
-      <path d="m13.5 8.5 4-2.5v8l-4-2.5" />
     </Svg>
   );
 }

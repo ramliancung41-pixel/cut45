@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
     return loginRedirect(url.origin, "Supabase is not configured.");
   }
 
-  const redirect = NextResponse.redirect(new URL("/generator", url.origin));
+  const redirect = NextResponse.redirect(new URL("/dashboard", url.origin));
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
       getAll() {

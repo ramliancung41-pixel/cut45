@@ -195,7 +195,7 @@ export function AssetsBoard() {
             message: `Help me build on this ${KIND_LABEL[asset.kind].toLowerCase()}: "${asset.title}". Suggest a follow-up shot to generate next.`,
           },
     );
-    router.push(`/agent?chat=${sessionId}`);
+    router.push(`/builder?chat=${sessionId}`);
   }
 
   return (
@@ -269,7 +269,7 @@ export function AssetsBoard() {
         <div className="agent-glass rounded-2xl px-6 py-14 text-center">
           <p className="text-sm font-medium text-white">{galleryReady ? "No assets here yet" : "Loading your library…"}</p>
           <p className="mt-1 text-xs text-zinc-400">
-            Upload images, or generate in the Agent and they will appear here automatically.
+            Upload images, or save them from the builder and they will appear here.
           </p>
         </div>
       ) : (
@@ -286,7 +286,9 @@ export function AssetsBoard() {
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={asset.src} alt="" className="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
                   ) : (
-                    <video src={asset.src} className="h-full w-full object-cover" muted playsInline preload="metadata" />
+                    <span className="grid h-full w-full place-items-center bg-zinc-900 text-xs text-zinc-400">
+                      {KIND_LABEL[asset.kind]}
+                    </span>
                   )}
                   <span className="absolute top-2 left-2 rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-semibold text-white backdrop-blur">
                     {KIND_LABEL[asset.kind]}
@@ -313,7 +315,7 @@ export function AssetsBoard() {
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={preview.src} alt={preview.title} className="max-h-[64dvh] w-auto object-contain" />
               ) : (
-                <video src={preview.src} className="max-h-[64dvh] w-auto" controls playsInline />
+                <div className="grid h-48 w-full place-items-center text-sm text-zinc-400">{KIND_LABEL[preview.kind]}</div>
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2 p-4">

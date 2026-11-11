@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/page-header";
 
 export const metadata: Metadata = {
   title: "Characters",
-  description: "Saved characters for Cut45 image-to-video.",
+  description: "Saved character images in your studio library.",
 };
 
 export default function CharactersPage() {
@@ -13,7 +13,7 @@ export default function CharactersPage() {
       <PageHeader
         eyebrow="Library"
         title="Character Library"
-        description="Every character you save stays here. Use one on the next video so Wan keeps the same face and clothes."
+        description="Characters you save stay in Supabase storage and can be reused on a page."
       />
       <CharacterLibrary />
     </div>

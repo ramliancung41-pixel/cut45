@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { PricingMatrix, PricingNotes, type PricingView } from "@/components/pricing-matrix";
-import { RESOLUTION_MULTIPLIER, VIDEO_RESOLUTIONS } from "@/lib/video-models";
+import { RESOLUTION_MULTIPLIER, VIDEO_RESOLUTIONS } from "@/lib/pricing.config";
 
 const MODES: Array<{ id: PricingView; label: string }> = [
   { id: "video", label: "Video Only" },
