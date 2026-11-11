@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import { AgencyServices } from "@/components/agency-services";
+import { PricingPackages } from "@/components/pricing-packages";
 
 export const metadata: Metadata = {
-  title: "Agency services",
-  description: "Starter, Business, and Custom website packages, plus a form to request a site from the agency.",
+  title: "Pricing",
+  description: "Starter Web at $99, Business Studio at $299, and Custom AI Web App from $499, with a feature comparison and FAQ.",
 };
 
 export default function PricingPage() {
-  return <AgencyServices active="pricing" />;
+  return <PricingPackages />;
 }

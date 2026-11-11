@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import { AgencyServices } from "@/components/agency-services";
+import { AgencyPage } from "@/components/agency-page";
 
 export const metadata: Metadata = {
   title: "Agency",
-  description: "Request a landing page, multi-page site, or custom Next.js app from the Cut45 agency.",
+  description: "Custom Next.js apps, tailored design, fast turnaround, and SEO, plus a form to request a website.",
 };
 
-export default function AgencyPage() {
-  return <AgencyServices active="agency" />;
+export default function AgencyRoute() {
+  return <AgencyPage />;
 }
