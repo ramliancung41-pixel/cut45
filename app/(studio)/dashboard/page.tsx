@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { cookies } from "next/headers";
-import { CreditFigure } from "@/components/credit-provider";
 import { PageHeader } from "@/components/page-header";
+import { countAgencyRequests } from "@/lib/agency-inbox";
 import { SUPABASE_ACCESS_COOKIE } from "@/lib/auth-cookie";
 import { listProjects, type WebsiteProject } from "@/lib/projects";
 import { userFromAccessToken } from "@/lib/supabase/server";
@@ -19,6 +19,8 @@ export default async function DashboardPage() {
   const accessToken = jar.get(SUPABASE_ACCESS_COOKIE)?.value ?? "";
   const user = accessToken ? await userFromAccessToken(accessToken).catch(() => null) : null;
   const listed = user?.id ? await listProjects(user.id) : { projects: [] as WebsiteProject[], unavailable: false };
+  const published = listed.projects.filter((project) => project.published).length;
+  const inquiries = user?.id ? await countAgencyRequests() : 0;
 
   return (
     <div className="gen-stage">
@@ -30,22 +32,16 @@ export default async function DashboardPage() {
 
       <dl className="gen-glass grid overflow-hidden rounded-3xl sm:grid-cols-3 sm:divide-x sm:divide-white/10">
         <div className="px-5 py-4">
-          <dt className="text-sm text-muted">Credits ready</dt>
-          <dd className="mt-1 text-2xl font-semibold tracking-tight">
-            <CreditFigure />
-          </dd>
-        </div>
-        <div className="border-t border-line px-5 py-4 sm:border-t-0">
-          <dt className="text-sm text-muted">Websites</dt>
+          <dt className="text-sm text-muted">Total websites created</dt>
           <dd className="mt-1 text-2xl font-semibold tracking-tight">{listed.projects.length}</dd>
         </div>
         <div className="border-t border-line px-5 py-4 sm:border-t-0">
-          <dt className="text-sm text-muted">Library</dt>
-          <dd className="mt-1 text-2xl font-semibold tracking-tight">
-            <Link href="/characters" className="hover:underline">
-              Assets
-            </Link>
-          </dd>
+          <dt className="text-sm text-muted">Published pages</dt>
+          <dd className="mt-1 text-2xl font-semibold tracking-tight">{published}</dd>
+        </div>
+        <div className="border-t border-line px-5 py-4 sm:border-t-0">
+          <dt className="text-sm text-muted">Agency requests</dt>
+          <dd className="mt-1 text-2xl font-semibold tracking-tight">{inquiries ?? "—"}</dd>
         </div>
       </dl>
 

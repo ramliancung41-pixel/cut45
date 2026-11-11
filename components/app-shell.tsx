@@ -4,7 +4,6 @@ import { Sora } from "next/font/google";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { useCredits } from "@/components/credit-provider";
 import { useStudioAccount } from "@/components/profile-credit-bar";
 import { StudioChromeProvider } from "@/components/studio-chrome";
 import {
@@ -44,19 +43,13 @@ const RAIL: RailItem[][] = [
       match: (pathname) => pathname.startsWith("/templates"),
     },
     {
-      href: "/characters",
-      label: "Characters",
-      icon: <CharacterIcon />,
-      match: (pathname) => pathname.startsWith("/characters"),
+      href: "/assets",
+      label: "Assets",
+      icon: <ImageIcon />,
+      match: (pathname) => pathname.startsWith("/assets"),
     },
   ],
   [
-    {
-      href: "/credits",
-      label: "Credits",
-      icon: <CoinTabIcon />,
-      match: (pathname) => pathname.startsWith("/credits") || pathname.startsWith("/pricing"),
-    },
     {
       href: "/settings",
       label: "Settings",
@@ -90,9 +83,10 @@ function useDesktop() {
 }
 
 const MOBILE_TABS: Array<{ href: string; label: string; icon: React.ReactNode; match: (pathname: string) => boolean }> = [
-  { href: "/dashboard", label: "Projects", icon: <HomeIcon />, match: (pathname) => pathname.startsWith("/dashboard") },
+  { href: "/dashboard", label: "Dashboard", icon: <HomeIcon />, match: (pathname) => pathname.startsWith("/dashboard") },
   { href: "/builder", label: "Build", icon: <SparkOutlineIcon />, match: (pathname) => pathname.startsWith("/builder") },
   { href: "/templates", label: "Templates", icon: <FolderIcon />, match: (pathname) => pathname.startsWith("/templates") },
+  { href: "/assets", label: "Assets", icon: <ImageIcon />, match: (pathname) => pathname.startsWith("/assets") },
   { href: "/settings", label: "Settings", icon: <KeyIcon />, match: (pathname) => pathname.startsWith("/settings") },
 ];
 
@@ -105,7 +99,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [expanded, setExpanded] = useState(false);
   const desktop = useDesktop();
   const open = expanded || desktop;
-  const [copilotOpen, setCopilotOpen] = useState(false);
+  const [, setCopilotOpen] = useState(false);
   const { account, ready, signOut } = useStudioAccount();
   const [railPath, setRailPath] = useState(pathname);
   const agentPage = pathname === "/agent";
@@ -227,11 +221,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </aside>
 
         <div className="min-w-0 pb-[calc(4rem+env(safe-area-inset-bottom))] min-[700px]:pb-0 min-[700px]:pl-[84px] min-[1100px]:pl-[232px]">
-          {copilotOpen || agentPage ? null : (
-            <div className="pointer-events-none fixed top-3 right-4 z-30">
-              <CreditPill dark={darkPage} />
-            </div>
-          )}
           {agentPage || builderPage ? (
             <main className="min-w-0">{children}</main>
           ) : (
@@ -454,7 +443,7 @@ function MobileTabBar({ pathname }: { pathname: string }) {
       aria-label="Primary"
       className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-[var(--surface)]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur min-[700px]:hidden"
     >
-      <ul className="grid grid-cols-4">
+      <ul className="grid grid-cols-5">
         {MOBILE_TABS.map((tab) => {
           const active = tab.match(pathname);
           return (
@@ -475,26 +464,6 @@ function MobileTabBar({ pathname }: { pathname: string }) {
         })}
       </ul>
     </nav>
-  );
-}
-
-function CreditPill({ dark }: { dark: boolean }) {
-  const { credits, balanceReady } = useCredits();
-  if (!balanceReady) return null;
-  return (
-    <Link
-      href="/pricing"
-      className={cn(
-        "pointer-events-auto flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold tabular-nums",
-        dark
-          ? "border-amber-300/20 bg-amber-300/10 text-amber-200 hover:bg-amber-300/15"
-          : "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100",
-      )}
-      aria-label={`${credits.toLocaleString("en-US")} credits`}
-    >
-      <CoinIcon />
-      {credits.toLocaleString("en-US")}
-    </Link>
   );
 }
 
@@ -547,9 +516,6 @@ function AccountMenu({
       {open ? (
         <div className="absolute bottom-0 left-full z-50 ml-2 w-48 rounded-xl border border-line bg-[var(--surface)] p-1.5 shadow-[0_12px_32px_rgba(0,0,0,0.18)]">
           {name ? <p className="truncate px-2.5 py-1.5 text-sm font-medium">{name}</p> : null}
-          <Link href="/credits" onClick={() => setOpen(false)} className="block rounded-lg px-2.5 py-1.5 text-sm hover:bg-panel">
-            Credits
-          </Link>
           <Link href="/settings" onClick={() => setOpen(false)} className="block rounded-lg px-2.5 py-1.5 text-sm hover:bg-panel">
             Settings
           </Link>
@@ -596,15 +562,6 @@ function HomeIcon() {
   return (
     <Svg>
       <path d="M3.5 9 10 3.5 16.5 9v6.5a1 1 0 0 1-1 1h-3v-4.5h-5V16.5h-3a1 1 0 0 1-1-1Z" />
-    </Svg>
-  );
-}
-
-function CharacterIcon() {
-  return (
-    <Svg>
-      <circle cx="10" cy="7" r="2.5" />
-      <path d="M4.5 16.5c1-3 3-4.5 5.5-4.5s4.5 1.5 5.5 4.5" />
     </Svg>
   );
 }
@@ -669,11 +626,12 @@ function SparkOutlineIcon() {
   );
 }
 
-function CoinTabIcon() {
+function ImageIcon() {
   return (
     <Svg>
-      <circle cx="10" cy="10" r="7" />
-      <circle cx="10" cy="10" r="3" />
+      <rect x="3" y="4" width="14" height="12" rx="2" />
+      <circle cx="7.5" cy="8" r="1.2" />
+      <path d="m4 14 3.5-3.5 2.5 2.5 2-2L16 14" />
     </Svg>
   );
 }
@@ -684,14 +642,5 @@ function KeyIcon() {
       <circle cx="7" cy="12.5" r="3.5" />
       <path d="m9.5 10 6.5-6.5M13.5 6l2 2" />
     </Svg>
-  );
-}
-
-function CoinIcon() {
-  return (
-    <svg viewBox="0 0 20 20" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
-      <circle cx="10" cy="10" r="7" />
-      <circle cx="10" cy="10" r="3" />
-    </svg>
   );
 }

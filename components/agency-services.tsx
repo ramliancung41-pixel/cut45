@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { AGENCY_PACKAGES, type AgencyPackageId } from "@/lib/agency";
 import { SiteFooter, SiteHeader } from "@/components/site-chrome";
 
@@ -125,11 +124,7 @@ export function AgencyServices({ active = "pricing" }: { active?: "pricing" | "a
             <a href="mailto:support@codeandbuild.tech" className="text-white underline decoration-white/30 underline-offset-4">
               support@codeandbuild.tech
             </a>
-            . Studio credit packs stay on{" "}
-            <Link href="/login?next=/credits" className="text-white underline decoration-white/30 underline-offset-4">
-              Credits
-            </Link>{" "}
-            after sign-in.
+            . Custom domain setups and website publishing are handled through your agency dashboard.
           </p>
         </section>
       </main>

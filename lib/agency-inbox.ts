@@ -40,6 +40,17 @@ function rowPayload(row: AgencyInboxRow, columns: Set<string>) {
   return payload;
 }
 
+export async function countAgencyRequests() {
+  try {
+    const admin = createSupabaseAdminClient();
+    const counted = await admin.schema("public").from("agency_requests").select("id", { count: "exact", head: true });
+    if (counted.error) return null;
+    return counted.count ?? 0;
+  } catch {
+    return null;
+  }
+}
+
 export async function insertAgencyRequest(row: AgencyInboxRow) {
   const { admin, columns } = await liveColumns();
   const payload = rowPayload(row, columns);
