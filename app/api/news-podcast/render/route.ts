@@ -2,9 +2,9 @@ import { spawn } from "node:child_process";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fal } from "@fal-ai/client";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegPath from "ffmpeg-static";
+import { uploadPublicObject, STORAGE_BUCKETS } from "@/lib/storage";
 
 if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
 
@@ -14,8 +14,8 @@ export const maxDuration = 300;
 type Speaker = "A" | "B";
 type Segment = {
   speaker: Speaker;
-  videoPath: string;
   audioPath: string;
+  audioDataUrl: string;
   durationSec: number;
   imageIndex: number;
   text: string;
@@ -47,10 +47,6 @@ export async function POST(request: Request) {
   if (!jobId || !segments || !ffmpegPath) {
     return Response.json({ error: "Send the lip-sync clips for this podcast job." }, { status: 400 });
   }
-  if (!process.env.FAL_KEY && !process.env.FAL_AI_API_KEY) {
-    return Response.json({ error: "Fal is not configured yet." }, { status: 500 });
-  }
-  fal.config({ credentials: process.env.FAL_KEY || process.env.FAL_AI_API_KEY || "" });
   if (!(await exists(FONT))) {
     return Response.json({ error: "The Burmese subtitle font is missing." }, { status: 400 });
   }
@@ -61,9 +57,8 @@ export async function POST(request: Request) {
     A: (await resolveHost(body?.hostAImage, path.join(directory, "host_a"))) || (await findHost(directory, "host_a")),
     B: (await resolveHost(body?.hostBImage, path.join(directory, "host_b"))) || (await findHost(directory, "host_b")),
   };
-  if (!hosts.A || !hosts.B) {
-    return Response.json({ error: "Upload a portrait for Host A and Host B." }, { status: 400 });
-  }
+  if (!hosts.A) hosts.A = await solidPortrait(path.join(directory, "host_a.png"), "0x243044");
+  if (!hosts.B) hosts.B = await solidPortrait(path.join(directory, "host_b.png"), "0x3a2a44");
   const images = await Promise.all(imageUrls.map((url, index) => downloadImage(url, path.join(directory, `news-${index}`))));
 
   const parts: string[] = [];
@@ -74,8 +69,7 @@ export async function POST(request: Request) {
     const file = path.join(directory, `segment-${String(index).padStart(2, "0")}.mp4`);
     const image = images[segment.imageIndex] || "";
     try {
-      segment.videoPath = await materialize(segment.videoPath, path.join(directory, `talk-${String(index).padStart(2, "0")}.mp4`));
-      segment.audioPath = await materialize(segment.audioPath, path.join(directory, `voice-${String(index).padStart(2, "0")}.mp3`));
+      segment.audioPath = await writeAudio(segment.audioDataUrl, path.join(directory, `voice-${String(index).padStart(2, "0")}.mp3`));
       await renderSegment({ segment, image, title, output: file, hosts });
     } catch (error) {
       const message = error instanceof Error ? error.message : "ffmpeg";
@@ -101,47 +95,48 @@ export async function POST(request: Request) {
   }
 
   const mp4 = await readFile(finalPath);
-  const hosted = await fal.storage.upload(new File([new Uint8Array(mp4)], "cut45-news.mp4", { type: "video/mp4" }));
-  if (!hosted.startsWith("https://")) {
-    return Response.json({ error: "Fal storage did not return an https video URL." }, { status: 502 });
+  let videoUrl = "";
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    const stored = await uploadPublicObject({
+      bucket: STORAGE_BUCKETS.userAssets,
+      path: `news-podcast/${jobId}.mp4`,
+      bytes: mp4,
+      contentType: "video/mp4",
+      upsert: true,
+    });
+    if ("publicUrl" in stored && stored.publicUrl) videoUrl = stored.publicUrl;
   }
+  if (!videoUrl) videoUrl = `data:video/mp4;base64,${mp4.toString("base64")}`;
 
   return Response.json({
     jobId,
     videoPath: finalPath,
-    videoUrl: hosted,
+    videoUrl,
     durationSec: Math.round(cursor * 100) / 100,
   });
 }
 
 function parseSegments(value: unknown, texts: string[]): Segment[] | null {
   if (!Array.isArray(value) || value.length === 0 || value.length > 14) return null;
-  const root = os.tmpdir();
   const segments: Segment[] = [];
   for (let index = 0; index < value.length; index += 1) {
     const item = value[index];
     if (!item || typeof item !== "object") return null;
-    const record = item as { speaker?: unknown; videoPath?: unknown; videoUrl?: unknown; audioPath?: unknown; audioUrl?: unknown; durationSec?: unknown; imageIndex?: unknown };
+    const record = item as { speaker?: unknown; audioDataUrl?: unknown; durationSec?: unknown; imageIndex?: unknown };
     const speaker = record.speaker === "A" || record.speaker === "B" ? record.speaker : null;
-    const videoPath = remoteUrl(record.videoUrl) || safeMedia(record.videoPath, root, ".mp4");
-    const audioPath = remoteUrl(record.audioUrl) || remoteUrl(record.audioPath) || safeMedia(record.audioPath, root, ".mp3");
+    const audioDataUrl = typeof record.audioDataUrl === "string" && record.audioDataUrl.startsWith("data:audio/") ? record.audioDataUrl : "";
     const durationSec = typeof record.durationSec === "number" && record.durationSec > 0 ? Math.min(record.durationSec, 30) : 0;
     const imageIndex = typeof record.imageIndex === "number" && record.imageIndex >= 0 ? Math.min(2, Math.floor(record.imageIndex)) : 0;
-    if (!speaker || !videoPath || !audioPath || !durationSec) return null;
-    segments.push({ speaker, videoPath, audioPath, durationSec, imageIndex, text: (texts[index] || "").slice(0, 240) });
+    if (!speaker || !audioDataUrl || !durationSec) return null;
+    segments.push({ speaker, audioPath: "", audioDataUrl, durationSec, imageIndex, text: (texts[index] || "").slice(0, 240) });
   }
   return segments;
 }
 
-function remoteUrl(value: unknown) {
-  return typeof value === "string" && value.startsWith("https://") ? value : "";
-}
-
-async function materialize(source: string, destination: string) {
-  if (!source.startsWith("https://")) return source;
-  const response = await fetch(source);
-  if (!response.ok) throw new Error(`Could not download media (${response.status}).`);
-  await writeFile(destination, Buffer.from(await response.arrayBuffer()));
+async function writeAudio(dataUrl: string, destination: string) {
+  const match = /^data:audio\/[a-z0-9.+-]+;base64,([a-z0-9+/=\s]+)$/i.exec(dataUrl);
+  if (!match) throw new Error("The voice clip was not a valid audio data URL.");
+  await writeFile(destination, Buffer.from(match[1].replace(/\s/g, ""), "base64"));
   return destination;
 }
 
@@ -150,14 +145,6 @@ async function resolveHost(value: unknown, filePath: string) {
   if (saved) return saved;
   if (typeof value === "string" && value.startsWith("https://")) return downloadImage(value, filePath);
   return "";
-}
-
-function safeMedia(value: unknown, root: string, extension: string) {
-  if (typeof value !== "string") return "";
-  const resolved = path.resolve(value);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative) || !resolved.endsWith(extension)) return "";
-  return resolved;
 }
 
 async function saveHostImage(value: unknown, filePath: string) {
@@ -210,8 +197,8 @@ async function renderSegment(input: { segment: Segment; image: string; title: st
     : `[1:v]drawtext=fontfile='${filterPath(FONT)}':text='${escapeDrawtext(title || "News")}':fontsize=42:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2[news]`;
   const filter = [
     news,
-    `[2:v]scale=480:540:force_original_aspect_ratio=increase,crop=480:540,fps=30,trim=duration=${duration},setpts=PTS-STARTPTS[hosta]`,
-    `[3:v]scale=480:540:force_original_aspect_ratio=increase,crop=480:540,fps=30,trim=duration=${duration},setpts=PTS-STARTPTS[hostb]`,
+    hostFilter(2, talkingA, frames, "hosta"),
+    hostFilter(3, !talkingA, frames, "hostb"),
     `[0:v]drawbox=x=0:y=0:w=1080:h=110:color=0x0c1018:t=fill[bar]`,
     `[bar]drawtext=fontfile='${filterPath(FONT)}':text='CUT45   NEWS':fontsize=34:fontcolor=white:x=60:y=38[brand]`,
     `[brand][news]overlay=60:160[withnews]`,
@@ -226,8 +213,18 @@ async function renderSegment(input: { segment: Segment; image: string; title: st
     "-i",
     `color=c=0x12161f:s=1080x1920:r=30:d=${duration}`,
     ...(image ? ["-loop", "1", "-t", duration, "-i", image] : ["-f", "lavfi", "-i", `color=c=0x1a202c:s=960x560:r=30:d=${duration}`]),
-    ...(talkingA ? ["-t", duration, "-i", segment.videoPath] : ["-loop", "1", "-t", duration, "-i", hosts.A]),
-    ...(!talkingA ? ["-t", duration, "-i", segment.videoPath] : ["-loop", "1", "-t", duration, "-i", hosts.B]),
+    "-loop",
+    "1",
+    "-t",
+    duration,
+    "-i",
+    hosts.A,
+    "-loop",
+    "1",
+    "-t",
+    duration,
+    "-i",
+    hosts.B,
     "-i",
     segment.audioPath,
     "-filter_complex",
@@ -285,6 +282,21 @@ function assTime(seconds: number) {
 
 function escapeAss(value: string) {
   return value.replace(/\\/g, "\\\\").replace(/\{/g, "\\{").replace(/\}/g, "\\}").replace(/\r?\n/g, "\\N");
+}
+
+function hostFilter(input: number, active: boolean, frames: number, label: string) {
+  const pulse = active
+    ? `zoompan=z='1.04+0.035*sin(on/7)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=456x516:fps=30,pad=480:540:12:12:color=0x818cf8`
+    : `scale=456:516:force_original_aspect_ratio=increase,crop=456:516,eq=brightness=-0.22:saturation=0.7,pad=480:540:12:12:color=0x1a1d27,fps=30,trim=duration=${(frames / 30).toFixed(2)}`;
+  return `[${input}:v]scale=700:780:force_original_aspect_ratio=increase,crop=700:780,${pulse},setpts=PTS-STARTPTS[${label}]`;
+}
+
+function solidPortrait(file: string, color: string) {
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn(ffmpegPath || "ffmpeg", ["-y", "-f", "lavfi", "-i", `color=c=${color}:s=480x540`, "-frames:v", "1", file], { windowsHide: true });
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve(file) : reject(new Error("Could not prepare a host portrait."))));
+  });
 }
 
 function escapeDrawtext(value: string) {

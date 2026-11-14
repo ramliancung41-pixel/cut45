@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 const STEPS = ["Writing script", "Recording voices", "3D lip-sync", "Rendering"] as const;
 
 type Line = { speaker: "A" | "B"; text: string; imageIndex: number };
-type Clip = Line & { path: string; audioUrl?: string; durationSec: number };
+type Clip = Line & { path: string; audioDataUrl?: string; durationSec: number };
 type Language = "burmese" | "english";
 type Gender = "male" | "female";
 type Preset = "father-son" | "hosts";
@@ -79,17 +79,14 @@ export default function NewsPodcastPage() {
           ...hosts,
           clips: audio.clips.map((clip) => ({
             speaker: clip.speaker,
-            audioUrl: clip.audioUrl,
-            audioPath: clip.audioUrl || clip.path,
+            audioDataUrl: clip.audioDataUrl,
             durationSec: clip.durationSec,
             imageIndex: clip.imageIndex,
           })),
         }),
       });
       const lipsync = (await lipsyncResponse.json().catch(() => null)) as {
-        videos?: Array<{ speaker: "A" | "B"; videoPath: string; videoUrl?: string; audioPath: string; audioUrl?: string; durationSec: number; imageIndex: number }>;
-        hostAImage?: string;
-        hostBImage?: string;
+        videos?: Array<{ speaker: "A" | "B"; audioDataUrl: string; durationSec: number; imageIndex: number }>;
         error?: string;
       } | null;
       if (!lipsyncResponse.ok || !lipsync?.videos?.length) throw new Error(lipsync?.error ?? "The hosts could not be lip-synced.");
@@ -105,8 +102,8 @@ export default function NewsPodcastPage() {
           imageUrls: newsImages,
           hostAGender,
           hostBGender,
-          hostAImage: hostAImage || lipsync.hostAImage || "",
-          hostBImage: hostBImage || lipsync.hostBImage || "",
+          hostAImage,
+          hostBImage,
           videos: lipsync.videos,
         }),
       });

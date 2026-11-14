@@ -1,7 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fal } from "@fal-ai/client";
 import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
 
 export const dynamic = "force-dynamic";
@@ -30,11 +29,6 @@ export async function POST(request: Request) {
     return Response.json({ error: "Send a language and the dialogue array." }, { status: 400 });
   }
 
-  if (!process.env.FAL_KEY && !process.env.FAL_AI_API_KEY) {
-    return Response.json({ error: "Fal is not configured yet." }, { status: 500 });
-  }
-  fal.config({ credentials: process.env.FAL_KEY || process.env.FAL_AI_API_KEY || "" });
-
   const jobId = crypto.randomUUID();
   const directory = path.join(os.tmpdir(), `podcast-${jobId}`);
   await mkdir(directory, { recursive: true });
@@ -46,14 +40,12 @@ export async function POST(request: Request) {
     try {
       const bytes = await speak(line, language, genders[line.speaker]);
       await writeFile(filePath, bytes);
-      const audioUrl = await fal.storage.upload(new File([new Uint8Array(bytes)], path.basename(filePath), { type: "audio/mpeg" }));
-      if (!audioUrl.startsWith("https://")) throw new Error("Fal storage did not return an https audio URL.");
       clips.push({
         speaker: line.speaker,
         text: line.text,
         imageIndex: line.imageIndex,
         path: filePath,
-        audioUrl,
+        audioDataUrl: `data:audio/mpeg;base64,${bytes.toString("base64")}`,
         durationSec: mp3Duration(bytes),
       });
     } catch (error) {
