@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { chmodSync, existsSync } from "node:fs";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +7,7 @@ import ffmpeg from "fluent-ffmpeg";
 import ffmpegPath from "ffmpeg-static";
 import { uploadPublicObject, STORAGE_BUCKETS } from "@/lib/storage";
 
-if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
+let binary = "";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -44,8 +45,14 @@ export async function POST(request: Request) {
     ? body.lines.map((item) => (item && typeof item === "object" && typeof (item as { text?: unknown }).text === "string" ? (item as { text: string }).text : ""))
     : [];
   const segments = parseSegments(body?.videos, texts);
-  if (!jobId || !segments || !ffmpegPath) {
+  if (!jobId || !segments) {
     return Response.json({ error: "Send the lip-sync clips for this podcast job." }, { status: 400 });
+  }
+  try {
+    await ensureFfmpeg();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "ffmpeg";
+    return Response.json({ error: message }, { status: 500 });
   }
   if (!(await exists(FONT))) {
     return Response.json({ error: "The Burmese subtitle font is missing." }, { status: 400 });
@@ -291,9 +298,50 @@ function hostFilter(input: number, active: boolean, frames: number, label: strin
   return `[${input}:v]scale=700:780:force_original_aspect_ratio=increase,crop=700:780,${pulse},setpts=PTS-STARTPTS[${label}]`;
 }
 
+function markExecutable(file: string) {
+  try {
+    chmodSync(file, 0o755);
+  } catch {
+    return;
+  }
+}
+
+function locateFfmpeg() {
+  const name = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+  const candidates = [
+    binary,
+    typeof ffmpegPath === "string" ? ffmpegPath : "",
+    path.join(process.cwd(), "node_modules", "ffmpeg-static", name),
+    "/var/task/node_modules/ffmpeg-static/ffmpeg",
+    "/tmp/ffmpeg",
+  ];
+  for (const candidate of candidates) {
+    if (!candidate || !existsSync(candidate)) continue;
+    markExecutable(candidate);
+    binary = candidate;
+    ffmpeg.setFfmpegPath(candidate);
+    return candidate;
+  }
+  return "";
+}
+
+async function ensureFfmpeg() {
+  const found = locateFfmpeg();
+  if (found) return found;
+  if (process.platform !== "linux") throw new Error("The ffmpeg binary was not found.");
+  const target = "/tmp/ffmpeg";
+  const response = await fetch("https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-linux-x64");
+  if (!response.ok) throw new Error(`Could not download ffmpeg (${response.status}).`);
+  await writeFile(target, Buffer.from(await response.arrayBuffer()));
+  markExecutable(target);
+  binary = target;
+  ffmpeg.setFfmpegPath(target);
+  return target;
+}
+
 function solidPortrait(file: string, color: string) {
   return new Promise<string>((resolve, reject) => {
-    const child = spawn(ffmpegPath || "ffmpeg", ["-y", "-f", "lavfi", "-i", `color=c=${color}:s=480x540`, "-frames:v", "1", file], { windowsHide: true });
+    const child = spawn(binary, ["-y", "-f", "lavfi", "-i", `color=c=${color}:s=480x540`, "-frames:v", "1", file], { windowsHide: true });
     child.on("error", reject);
     child.on("close", (code) => (code === 0 ? resolve(file) : reject(new Error("Could not prepare a host portrait."))));
   });
@@ -321,8 +369,8 @@ function burnSubtitles(input: string, ass: string, output: string) {
 
 function runFfmpeg(args: string[]) {
   return new Promise<void>((resolve, reject) => {
-    ffmpeg.setFfmpegPath(ffmpegPath || "ffmpeg");
-    const child = spawn(ffmpegPath || "ffmpeg", args, { windowsHide: true });
+    ffmpeg.setFfmpegPath(binary);
+    const child = spawn(binary, args, { windowsHide: true });
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => {
       stderr = `${stderr}${chunk.toString()}`.slice(-1800);
