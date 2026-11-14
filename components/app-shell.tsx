@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AiCopilot } from "@/components/ai-copilot";
+import { StudioModeBar } from "@/components/studio-mode-bar";
 import { useStudioAccount } from "@/components/profile-credit-bar";
 import { StudioChromeProvider } from "@/components/studio-chrome";
 import {
@@ -222,6 +223,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </aside>
 
         <div className="min-w-0 pb-[calc(4rem+env(safe-area-inset-bottom))] min-[700px]:pb-0 min-[700px]:pl-[84px] min-[1100px]:pl-[232px]">
+          <StudioModeBar />
           {agentPage || builderPage ? (
             <main className="min-w-0">{children}</main>
           ) : (

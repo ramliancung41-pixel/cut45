@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { LandingHome } from "@/components/landing-home";
+import { StudioDashboard } from "@/components/studio-dashboard";
 import { SUPABASE_ACCESS_COOKIE, SUPABASE_REFRESH_COOKIE } from "@/lib/auth-cookie";
 import { userFromAccessToken } from "@/lib/supabase/server";
 
@@ -43,7 +44,7 @@ export default async function LandingPage({
   const refreshToken = jar.get(SUPABASE_REFRESH_COOKIE)?.value;
   if (accessToken) {
     const user = await userFromAccessToken(accessToken).catch(() => null);
-    if (user) redirect("/dashboard");
+    if (user) return <StudioDashboard />;
   } else if (refreshToken) {
     redirect("/dashboard");
   }

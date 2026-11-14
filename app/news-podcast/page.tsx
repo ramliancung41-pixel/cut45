@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { StudioModeBar } from "@/components/studio-mode-bar";
 
 const STEPS = ["Writing script", "Recording voices", "3D lip-sync", "Rendering"] as const;
 
@@ -104,7 +105,12 @@ export default function NewsPodcastPage() {
           hostBGender,
           hostAImage,
           hostBImage,
-          videos: lipsync.videos,
+          videos: lipsync.videos.map((clip) => ({
+            speaker: clip.speaker,
+            audioDataUrl: clip.audioDataUrl,
+            durationSec: clip.durationSec,
+            imageIndex: clip.imageIndex,
+          })),
         }),
       });
       const raw = await renderResponse.text();
@@ -138,13 +144,12 @@ export default function NewsPodcastPage() {
 
   function readImage(file: File | undefined, onReady: (value: string) => void) {
     if (!file || !/^image\/(png|jpeg|webp)$/.test(file.type)) return;
-    const reader = new FileReader();
-    reader.onload = () => onReady(typeof reader.result === "string" ? reader.result : "");
-    reader.readAsDataURL(file);
+    void compressImage(file).then(onReady).catch(() => undefined);
   }
 
   return (
     <main className="relative min-h-[100dvh] overflow-hidden bg-[#07090e] text-zinc-100">
+      <StudioModeBar />
       <div className="pointer-events-none absolute -top-40 left-1/4 h-[28rem] w-[28rem] rounded-full bg-indigo-600/20 blur-[120px]" />
       <div className="pointer-events-none absolute top-40 right-0 h-[24rem] w-[24rem] rounded-full bg-blue-500/15 blur-[120px]" />
       <div className="pointer-events-none absolute bottom-0 left-0 h-[22rem] w-[22rem] rounded-full bg-violet-600/15 blur-[120px]" />
@@ -356,9 +361,7 @@ function HostCard({
           const file = event.target.files?.[0];
           event.target.value = "";
           if (!file || !/^image\/(png|jpeg|webp)$/.test(file.type)) return;
-          const reader = new FileReader();
-          reader.onload = () => onImage(typeof reader.result === "string" ? reader.result : "");
-          reader.readAsDataURL(file);
+          void compressImage(file).then(onImage).catch(() => undefined);
         }}
       />
       <div className="relative">
@@ -446,6 +449,33 @@ function HostStill({ image, label, active }: { image: string; label: string; act
       )}
     </div>
   );
+}
+
+function compressImage(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      const scale = Math.min(1, 1080 / Math.max(image.width, 1));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.width * scale));
+      canvas.height = Math.max(1, Math.round(image.height * scale));
+      const context = canvas.getContext("2d");
+      if (!context) {
+        URL.revokeObjectURL(url);
+        reject(new Error("Could not compress the image."));
+        return;
+      }
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL("image/jpeg", 0.8));
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not read the image."));
+    };
+    image.src = url;
+  });
 }
 
 function UploadIcon() {
