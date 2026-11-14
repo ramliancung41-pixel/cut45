@@ -51,7 +51,9 @@ export async function POST(request: Request) {
       videos.push({
         speaker: clip.speaker,
         videoPath,
+        videoUrl,
         audioPath: clip.audioPath,
+        audioUrl: clip.audioPath.startsWith("https://") ? clip.audioPath : "",
         durationSec: clip.durationSec,
         imageIndex: clip.imageIndex,
       });
@@ -62,7 +64,15 @@ export async function POST(request: Request) {
     }
   }
 
-  return Response.json({ jobId, videos });
+  return Response.json({ jobId, videos, hostAImage: avatars.A, hostBImage: avatars.B });
+}
+
+function localMedia(value: string, root: string, extension: string) {
+  if (!value) return "";
+  const resolved = path.resolve(value);
+  const relative = path.relative(root, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative) || !resolved.endsWith(extension)) return "";
+  return resolved;
 }
 
 function parseClips(value: unknown): Clip[] | null {
@@ -71,14 +81,14 @@ function parseClips(value: unknown): Clip[] | null {
   const clips: Clip[] = [];
   for (const item of value) {
     if (!item || typeof item !== "object") return null;
-    const record = item as { speaker?: unknown; audioPath?: unknown; path?: unknown; durationSec?: unknown; imageIndex?: unknown };
+    const record = item as { speaker?: unknown; audioPath?: unknown; audioUrl?: unknown; path?: unknown; durationSec?: unknown; imageIndex?: unknown };
     const speaker = record.speaker === "A" || record.speaker === "B" ? record.speaker : null;
+    const audioUrl = typeof record.audioUrl === "string" && record.audioUrl.startsWith("https://") ? record.audioUrl : "";
     const audioPath = typeof record.audioPath === "string" ? record.audioPath : typeof record.path === "string" ? record.path : "";
-    const resolved = path.resolve(audioPath);
-    const relative = path.relative(root, resolved);
+    const resolved = audioUrl || localMedia(audioPath, root, ".mp3");
     const durationSec = typeof record.durationSec === "number" && record.durationSec > 0 ? record.durationSec : 0;
     const imageIndex = typeof record.imageIndex === "number" && record.imageIndex >= 0 ? Math.min(2, Math.floor(record.imageIndex)) : 0;
-    if (!speaker || relative.startsWith("..") || path.isAbsolute(relative) || !relative.endsWith(".mp3")) return null;
+    if (!speaker || !resolved || !durationSec) return null;
     clips.push({ speaker, audioPath: resolved, durationSec, imageIndex });
   }
   return clips;
@@ -149,7 +159,7 @@ async function fluxPortrait(prompt: string) {
 }
 
 async function lipSync(imageUrl: string, audioPath: string, idleVideos: Map<string, string>) {
-  const audioUrl = await uploadFile(audioPath, "audio/mpeg", path.basename(audioPath));
+  const audioUrl = audioPath.startsWith("https://") ? audioPath : await uploadFile(audioPath, "audio/mpeg", path.basename(audioPath));
   try {
     const result = await fal.subscribe("fal-ai/veed/fabric-1.0", {
       input: { image_url: imageUrl, audio_url: audioUrl, resolution: "480p" },

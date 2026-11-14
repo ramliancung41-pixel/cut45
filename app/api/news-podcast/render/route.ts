@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fal } from "@fal-ai/client";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegPath from "ffmpeg-static";
 
@@ -46,6 +47,10 @@ export async function POST(request: Request) {
   if (!jobId || !segments || !ffmpegPath) {
     return Response.json({ error: "Send the lip-sync clips for this podcast job." }, { status: 400 });
   }
+  if (!process.env.FAL_KEY && !process.env.FAL_AI_API_KEY) {
+    return Response.json({ error: "Fal is not configured yet." }, { status: 500 });
+  }
+  fal.config({ credentials: process.env.FAL_KEY || process.env.FAL_AI_API_KEY || "" });
   if (!(await exists(FONT))) {
     return Response.json({ error: "The Burmese subtitle font is missing." }, { status: 400 });
   }
@@ -53,8 +58,8 @@ export async function POST(request: Request) {
   const directory = path.join(os.tmpdir(), `podcast-${jobId}`);
   await mkdir(directory, { recursive: true });
   const hosts = {
-    A: (await saveHostImage(body?.hostAImage, path.join(directory, "host_a"))) || (await findHost(directory, "host_a")),
-    B: (await saveHostImage(body?.hostBImage, path.join(directory, "host_b"))) || (await findHost(directory, "host_b")),
+    A: (await resolveHost(body?.hostAImage, path.join(directory, "host_a"))) || (await findHost(directory, "host_a")),
+    B: (await resolveHost(body?.hostBImage, path.join(directory, "host_b"))) || (await findHost(directory, "host_b")),
   };
   if (!hosts.A || !hosts.B) {
     return Response.json({ error: "Upload a portrait for Host A and Host B." }, { status: 400 });
@@ -69,6 +74,8 @@ export async function POST(request: Request) {
     const file = path.join(directory, `segment-${String(index).padStart(2, "0")}.mp4`);
     const image = images[segment.imageIndex] || "";
     try {
+      segment.videoPath = await materialize(segment.videoPath, path.join(directory, `talk-${String(index).padStart(2, "0")}.mp4`));
+      segment.audioPath = await materialize(segment.audioPath, path.join(directory, `voice-${String(index).padStart(2, "0")}.mp3`));
       await renderSegment({ segment, image, title, output: file, hosts });
     } catch (error) {
       const message = error instanceof Error ? error.message : "ffmpeg";
@@ -93,10 +100,16 @@ export async function POST(request: Request) {
     return Response.json({ error: `Could not finish the news video. ${message}`.slice(0, 500) }, { status: 502 });
   }
 
+  const mp4 = await readFile(finalPath);
+  const hosted = await fal.storage.upload(new File([new Uint8Array(mp4)], "cut45-news.mp4", { type: "video/mp4" }));
+  if (!hosted.startsWith("https://")) {
+    return Response.json({ error: "Fal storage did not return an https video URL." }, { status: 502 });
+  }
+
   return Response.json({
     jobId,
     videoPath: finalPath,
-    videoUrl: `/api/news-podcast/video/${jobId}`,
+    videoUrl: hosted,
     durationSec: Math.round(cursor * 100) / 100,
   });
 }
@@ -108,16 +121,35 @@ function parseSegments(value: unknown, texts: string[]): Segment[] | null {
   for (let index = 0; index < value.length; index += 1) {
     const item = value[index];
     if (!item || typeof item !== "object") return null;
-    const record = item as { speaker?: unknown; videoPath?: unknown; audioPath?: unknown; durationSec?: unknown; imageIndex?: unknown };
+    const record = item as { speaker?: unknown; videoPath?: unknown; videoUrl?: unknown; audioPath?: unknown; audioUrl?: unknown; durationSec?: unknown; imageIndex?: unknown };
     const speaker = record.speaker === "A" || record.speaker === "B" ? record.speaker : null;
-    const videoPath = safeMedia(record.videoPath, root, ".mp4");
-    const audioPath = safeMedia(record.audioPath, root, ".mp3");
+    const videoPath = remoteUrl(record.videoUrl) || safeMedia(record.videoPath, root, ".mp4");
+    const audioPath = remoteUrl(record.audioUrl) || remoteUrl(record.audioPath) || safeMedia(record.audioPath, root, ".mp3");
     const durationSec = typeof record.durationSec === "number" && record.durationSec > 0 ? Math.min(record.durationSec, 30) : 0;
     const imageIndex = typeof record.imageIndex === "number" && record.imageIndex >= 0 ? Math.min(2, Math.floor(record.imageIndex)) : 0;
     if (!speaker || !videoPath || !audioPath || !durationSec) return null;
     segments.push({ speaker, videoPath, audioPath, durationSec, imageIndex, text: (texts[index] || "").slice(0, 240) });
   }
   return segments;
+}
+
+function remoteUrl(value: unknown) {
+  return typeof value === "string" && value.startsWith("https://") ? value : "";
+}
+
+async function materialize(source: string, destination: string) {
+  if (!source.startsWith("https://")) return source;
+  const response = await fetch(source);
+  if (!response.ok) throw new Error(`Could not download media (${response.status}).`);
+  await writeFile(destination, Buffer.from(await response.arrayBuffer()));
+  return destination;
+}
+
+async function resolveHost(value: unknown, filePath: string) {
+  const saved = await saveHostImage(value, filePath);
+  if (saved) return saved;
+  if (typeof value === "string" && value.startsWith("https://")) return downloadImage(value, filePath);
+  return "";
 }
 
 function safeMedia(value: unknown, root: string, extension: string) {

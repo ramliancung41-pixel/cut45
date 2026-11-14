@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fal } from "@fal-ai/client";
 import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +30,11 @@ export async function POST(request: Request) {
     return Response.json({ error: "Send a language and the dialogue array." }, { status: 400 });
   }
 
+  if (!process.env.FAL_KEY && !process.env.FAL_AI_API_KEY) {
+    return Response.json({ error: "Fal is not configured yet." }, { status: 500 });
+  }
+  fal.config({ credentials: process.env.FAL_KEY || process.env.FAL_AI_API_KEY || "" });
+
   const jobId = crypto.randomUUID();
   const directory = path.join(os.tmpdir(), `podcast-${jobId}`);
   await mkdir(directory, { recursive: true });
@@ -40,13 +46,15 @@ export async function POST(request: Request) {
     try {
       const bytes = await speak(line, language, genders[line.speaker]);
       await writeFile(filePath, bytes);
+      const audioUrl = await fal.storage.upload(new File([new Uint8Array(bytes)], path.basename(filePath), { type: "audio/mpeg" }));
+      if (!audioUrl.startsWith("https://")) throw new Error("Fal storage did not return an https audio URL.");
       clips.push({
         speaker: line.speaker,
         text: line.text,
         imageIndex: line.imageIndex,
         path: filePath,
+        audioUrl,
         durationSec: mp3Duration(bytes),
-        audioBase64: bytes.toString("base64"),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "The voice could not be generated.";
@@ -117,9 +125,16 @@ async function elevenSpeak(line: Line, gender: Gender, modelId: string) {
       body: JSON.stringify({ text: line.text, model_id: modelId }),
     });
     if (response.ok) return Buffer.from(await response.arrayBuffer());
-    const payload = (await response.json().catch(() => null)) as { detail?: { message?: string } | string } | null;
-    const detail = typeof payload?.detail === "string" ? payload.detail : payload?.detail?.message;
-    lastError = detail || `ElevenLabs failed (${response.status}).`;
+    const raw = await response.text();
+    let detail = raw.trim().slice(0, 300);
+    try {
+      const payload = JSON.parse(raw) as { detail?: { message?: string; status?: string } | string; message?: string };
+      const nested = typeof payload.detail === "string" ? payload.detail : payload.detail?.message || payload.detail?.status;
+      detail = nested || payload.message || detail;
+    } catch {
+      detail = detail || "empty error body";
+    }
+    lastError = `ElevenLabs ${response.status}: ${detail}`;
     if (response.status < 500 || attempt === 2) break;
   }
   throw new Error(lastError);

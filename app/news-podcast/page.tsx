@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 const STEPS = ["Writing script", "Recording voices", "3D lip-sync", "Rendering"] as const;
 
 type Line = { speaker: "A" | "B"; text: string; imageIndex: number };
-type Clip = Line & { path: string; durationSec: number; audioBase64: string };
+type Clip = Line & { path: string; audioUrl?: string; durationSec: number };
 type Language = "burmese" | "english";
 type Gender = "male" | "female";
 type Preset = "father-son" | "hosts";
@@ -58,8 +58,16 @@ export default function NewsPodcastPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ language, lines: script.lines, ...hosts }),
       });
-      const audio = (await audioResponse.json().catch(() => null)) as { jobId?: string; clips?: Clip[]; error?: string } | null;
-      if (!audioResponse.ok || !audio?.jobId || !audio.clips?.length) throw new Error(audio?.error ?? "The voices could not be generated.");
+      const audioRaw = await audioResponse.text();
+      let audio: { jobId?: string; clips?: Clip[]; error?: string } | null = null;
+      try {
+        audio = audioRaw ? (JSON.parse(audioRaw) as { jobId?: string; clips?: Clip[]; error?: string }) : null;
+      } catch {
+        audio = null;
+      }
+      if (!audioResponse.ok || !audio?.jobId || !audio.clips?.length) {
+        throw new Error(audio?.error || audioRaw.slice(0, 500) || "The voices could not be generated.");
+      }
 
       setVideoStep(STEPS[2]);
       const lipsyncResponse = await fetch("/api/news-podcast/lipsync", {
@@ -71,14 +79,17 @@ export default function NewsPodcastPage() {
           ...hosts,
           clips: audio.clips.map((clip) => ({
             speaker: clip.speaker,
-            audioPath: clip.path,
+            audioUrl: clip.audioUrl,
+            audioPath: clip.audioUrl || clip.path,
             durationSec: clip.durationSec,
             imageIndex: clip.imageIndex,
           })),
         }),
       });
       const lipsync = (await lipsyncResponse.json().catch(() => null)) as {
-        videos?: Array<{ speaker: "A" | "B"; videoPath: string; audioPath: string; durationSec: number; imageIndex: number }>;
+        videos?: Array<{ speaker: "A" | "B"; videoPath: string; videoUrl?: string; audioPath: string; audioUrl?: string; durationSec: number; imageIndex: number }>;
+        hostAImage?: string;
+        hostBImage?: string;
         error?: string;
       } | null;
       if (!lipsyncResponse.ok || !lipsync?.videos?.length) throw new Error(lipsync?.error ?? "The hosts could not be lip-synced.");
@@ -92,7 +103,10 @@ export default function NewsPodcastPage() {
           title: news.trim().slice(0, 120),
           lines: script.lines,
           imageUrls: newsImages,
-          ...hosts,
+          hostAGender,
+          hostBGender,
+          hostAImage: hostAImage || lipsync.hostAImage || "",
+          hostBImage: hostBImage || lipsync.hostBImage || "",
           videos: lipsync.videos,
         }),
       });
