@@ -16,13 +16,26 @@ export async function GET(_request: Request, context: { params: Promise<{ jobId:
   } catch {
     return new Response("Not found", { status: 404 });
   }
+  const headers = {
+    "Content-Type": "video/mp4",
+    "Accept-Ranges": "bytes",
+    "Content-Disposition": 'inline; filename="cut45-news.mp4"',
+    "Cache-Control": "no-store",
+  };
+  const range = _request.headers.get("range");
+  const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
+  if (match && (match[1] || match[2])) {
+    const start = match[1] ? Number(match[1]) : Math.max(0, size - Number(match[2]));
+    const end = match[2] && match[1] ? Math.min(size - 1, Number(match[2])) : size - 1;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) {
+      return new Response(null, { status: 416, headers: { ...headers, "Content-Range": `bytes */${size}` } });
+    }
+    const stream = Readable.toWeb(createReadStream(file, { start, end })) as ReadableStream;
+    return new Response(stream, {
+      status: 206,
+      headers: { ...headers, "Content-Range": `bytes ${start}-${end}/${size}`, "Content-Length": String(end - start + 1) },
+    });
+  }
   const stream = Readable.toWeb(createReadStream(file)) as ReadableStream;
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "video/mp4",
-      "Content-Length": String(size),
-      "Content-Disposition": 'inline; filename="cut45-news.mp4"',
-      "Cache-Control": "no-store",
-    },
-  });
+  return new Response(stream, { headers: { ...headers, "Content-Length": String(size) } });
 }

@@ -21,10 +21,6 @@ type Segment = {
 };
 
 const FONT = path.join(process.cwd(), "public", "fonts", "NotoSansMyanmar-Regular.ttf");
-const HOSTS = {
-  A: path.join(process.cwd(), "public", "avatars", "host_a.png"),
-  B: path.join(process.cwd(), "public", "avatars", "host_b.png"),
-};
 
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as {
@@ -32,12 +28,16 @@ export async function POST(request: Request) {
     title?: unknown;
     lines?: unknown;
     imageUrls?: unknown;
+    hostAImage?: unknown;
+    hostBImage?: unknown;
     videos?: unknown;
   } | null;
   const jobId = typeof body?.jobId === "string" && /^[a-zA-Z0-9-]{8,80}$/.test(body.jobId) ? body.jobId : "";
   const title = typeof body?.title === "string" ? body.title.trim().slice(0, 120) : "News";
   const imageUrls = Array.isArray(body?.imageUrls)
-    ? body.imageUrls.filter((item): item is string => typeof item === "string" && /^https?:\/\//.test(item)).slice(0, 3)
+    ? body.imageUrls
+        .filter((item): item is string => typeof item === "string" && (/^https?:\/\//.test(item) || item.startsWith("data:image/")))
+        .slice(0, 3)
     : [];
   const texts = Array.isArray(body?.lines)
     ? body.lines.map((item) => (item && typeof item === "object" && typeof (item as { text?: unknown }).text === "string" ? (item as { text: string }).text : ""))
@@ -46,12 +46,19 @@ export async function POST(request: Request) {
   if (!jobId || !segments || !ffmpegPath) {
     return Response.json({ error: "Send the lip-sync clips for this podcast job." }, { status: 400 });
   }
-  if (!(await exists(FONT)) || !(await exists(HOSTS.A)) || !(await exists(HOSTS.B))) {
-    return Response.json({ error: "The hosts or Burmese subtitle font are missing." }, { status: 400 });
+  if (!(await exists(FONT))) {
+    return Response.json({ error: "The Burmese subtitle font is missing." }, { status: 400 });
   }
 
   const directory = path.join(os.tmpdir(), `podcast-${jobId}`);
   await mkdir(directory, { recursive: true });
+  const hosts = {
+    A: (await saveHostImage(body?.hostAImage, path.join(directory, "host_a"))) || (await findHost(directory, "host_a")),
+    B: (await saveHostImage(body?.hostBImage, path.join(directory, "host_b"))) || (await findHost(directory, "host_b")),
+  };
+  if (!hosts.A || !hosts.B) {
+    return Response.json({ error: "Upload a portrait for Host A and Host B." }, { status: 400 });
+  }
   const images = await Promise.all(imageUrls.map((url, index) => downloadImage(url, path.join(directory, `news-${index}`))));
 
   const parts: string[] = [];
@@ -62,7 +69,7 @@ export async function POST(request: Request) {
     const file = path.join(directory, `segment-${String(index).padStart(2, "0")}.mp4`);
     const image = images[segment.imageIndex] || "";
     try {
-      await renderSegment({ segment, image, title, output: file });
+      await renderSegment({ segment, image, title, output: file, hosts });
     } catch (error) {
       const message = error instanceof Error ? error.message : "ffmpeg";
       return Response.json({ error: `Could not assemble segment ${index + 1}. ${message}`.slice(0, 500) }, { status: 502 });
@@ -121,8 +128,34 @@ function safeMedia(value: unknown, root: string, extension: string) {
   return resolved;
 }
 
+async function saveHostImage(value: unknown, filePath: string) {
+  if (typeof value !== "string") return "";
+  const match = /^data:image\/(png|jpeg|jpg|webp);base64,([a-z0-9+/=\s]+)$/i.exec(value);
+  if (!match) return "";
+  const extension = match[1].toLowerCase() === "png" ? ".png" : match[1].toLowerCase() === "webp" ? ".webp" : ".jpg";
+  const target = `${filePath}${extension}`;
+  await writeFile(target, Buffer.from(match[2].replace(/\s/g, ""), "base64"));
+  return target;
+}
+
+async function findHost(directory: string, name: string) {
+  for (const extension of [".png", ".jpg", ".webp"]) {
+    const file = path.join(directory, `${name}${extension}`);
+    if (await exists(file)) return file;
+  }
+  return "";
+}
+
 async function downloadImage(url: string, filePath: string) {
   try {
+    if (url.startsWith("data:image/")) {
+      const match = /^data:image\/(png|jpeg|jpg|webp);base64,([a-z0-9+/=\s]+)$/i.exec(url);
+      if (!match) return "";
+      const extension = match[1].toLowerCase() === "png" ? ".png" : match[1].toLowerCase() === "webp" ? ".webp" : ".jpg";
+      const target = `${filePath}${extension}`;
+      await writeFile(target, Buffer.from(match[2].replace(/\s/g, ""), "base64"));
+      return target;
+    }
     const response = await fetch(url);
     if (!response.ok) return "";
     const type = response.headers.get("content-type") || "";
@@ -135,8 +168,8 @@ async function downloadImage(url: string, filePath: string) {
   }
 }
 
-async function renderSegment(input: { segment: Segment; image: string; title: string; output: string }) {
-  const { segment, image, title, output } = input;
+async function renderSegment(input: { segment: Segment; image: string; title: string; output: string; hosts: { A: string; B: string } }) {
+  const { segment, image, title, output, hosts } = input;
   const duration = segment.durationSec.toFixed(2);
   const frames = Math.max(8, Math.round(segment.durationSec * 30));
   const talkingA = segment.speaker === "A";
@@ -161,8 +194,8 @@ async function renderSegment(input: { segment: Segment; image: string; title: st
     "-i",
     `color=c=0x12161f:s=1080x1920:r=30:d=${duration}`,
     ...(image ? ["-loop", "1", "-t", duration, "-i", image] : ["-f", "lavfi", "-i", `color=c=0x1a202c:s=960x560:r=30:d=${duration}`]),
-    ...(talkingA ? ["-t", duration, "-i", segment.videoPath] : ["-loop", "1", "-t", duration, "-i", HOSTS.A]),
-    ...(!talkingA ? ["-t", duration, "-i", segment.videoPath] : ["-loop", "1", "-t", duration, "-i", HOSTS.B]),
+    ...(talkingA ? ["-t", duration, "-i", segment.videoPath] : ["-loop", "1", "-t", duration, "-i", hosts.A]),
+    ...(!talkingA ? ["-t", duration, "-i", segment.videoPath] : ["-loop", "1", "-t", duration, "-i", hosts.B]),
     "-i",
     segment.audioPath,
     "-filter_complex",
