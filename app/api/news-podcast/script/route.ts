@@ -9,6 +9,10 @@ type Body = {
   imageCount?: unknown;
 };
 
+const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash"] as const;
+
+class QuotaError extends Error {}
+
 const PRESETS = {
   "father-son": "Father and son. Host A is the son, curious and asking short questions. Host B is the father, calm and explaining clearly.",
   hosts: "Male and female news hosts. Host A asks short questions. Host B explains the news clearly.",
@@ -44,9 +48,20 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
 
   let raw = "";
   try {
-    raw = geminiKey ? await geminiScript(geminiKey, system, news) : await openaiScript(openaiKey, system, news);
-  } catch {
-    return Response.json({ error: "The script could not be written." }, { status: 502 });
+    raw = geminiKey ? await geminiChain(geminiKey, system, news) : await openaiScript(openaiKey, system, news);
+  } catch (error) {
+    if (error instanceof QuotaError) return Response.json({ lines: localScript(news, language) });
+    const message = error instanceof Error ? error.message : "The script could not be written.";
+    if (geminiKey && openaiKey) {
+      try {
+        raw = await openaiScript(openaiKey, system, news);
+      } catch (fallback) {
+        const second = fallback instanceof Error ? fallback.message : message;
+        return Response.json({ error: second }, { status: 502 });
+      }
+    } else {
+      return Response.json({ error: message }, { status: 502 });
+    }
   }
 
   const lines = parseLines(raw, imageCount);
@@ -54,8 +69,21 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
   return Response.json({ lines });
 }
 
-async function geminiScript(apiKey: string, system: string, news: string) {
-  const endpoint = new URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent");
+async function geminiChain(apiKey: string, system: string, news: string) {
+  let last = "Gemini quota exceeded.";
+  for (const model of GEMINI_MODELS) {
+    try {
+      return await geminiScript(apiKey, model, system, news);
+    } catch (error) {
+      if (!(error instanceof QuotaError)) throw error;
+      last = error.message;
+    }
+  }
+  throw new QuotaError(last);
+}
+
+async function geminiScript(apiKey: string, model: string, system: string, news: string) {
+  const endpoint = new URL(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`);
   endpoint.searchParams.set("key", apiKey);
   const response = await fetch(endpoint, {
     method: "POST",
@@ -65,17 +93,29 @@ async function geminiScript(apiKey: string, system: string, news: string) {
       contents: [{ role: "user", parts: [{ text: news }] }],
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 2048,
+        maxOutputTokens: 4096,
         responseMimeType: "application/json",
-        thinkingConfig: { thinkingBudget: 0 },
       },
     }),
   });
   const payload = (await response.json().catch(() => null)) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    error?: { message?: string; status?: string };
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }>;
   } | null;
-  if (!response.ok) throw new Error("gemini");
-  return (payload?.candidates?.[0]?.content?.parts ?? []).map((part) => part.text ?? "").join("");
+  if (!response.ok) {
+    const message = payload?.error?.message || `Gemini could not write the script (${response.status}).`;
+    if (response.status === 429 || payload?.error?.status === "RESOURCE_EXHAUSTED" || /quota|rate.?limit|resource.?exhausted/i.test(message)) {
+      throw new QuotaError(message);
+    }
+    throw new Error(message);
+  }
+  const text = (payload?.candidates?.[0]?.content?.parts ?? [])
+    .filter((part) => !part.thought)
+    .map((part) => part.text ?? "")
+    .join("")
+    .trim();
+  if (!text) throw new Error(payload?.error?.message || "Gemini returned an empty script.");
+  return text;
 }
 
 async function openaiScript(apiKey: string, system: string, news: string) {
@@ -93,10 +133,30 @@ async function openaiScript(apiKey: string, system: string, news: string) {
     }),
   });
   const payload = (await response.json().catch(() => null)) as {
+    error?: { message?: string };
     choices?: Array<{ message?: { content?: string } }>;
   } | null;
-  if (!response.ok) throw new Error("openai");
+  if (!response.ok) throw new Error(payload?.error?.message || `OpenAI could not write the script (${response.status}).`);
   return payload?.choices?.[0]?.message?.content ?? "";
+}
+
+function localScript(news: string, language: "burmese" | "english"): Line[] {
+  const parts = news
+    .split(language === "burmese" ? /[။!?\n]+/ : /[\n.!?]+/)
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter((part) => part.length > 12)
+    .slice(0, 3);
+  const facts = parts.length > 0 ? parts : [news.replace(/\s+/g, " ").trim().slice(0, 220)];
+  const questions =
+    language === "burmese"
+      ? ["ဒီသတင်းက ဘာဖြစ်တာလဲ။", "အဓိကအချက်က ဘာလဲ။", "နောက်ဆက်တွဲ ဘာသိထားသင့်လဲ။"]
+      : ["What happened in this story?", "What is the main point?", "What should people know next?"];
+  const lines: Line[] = [];
+  facts.forEach((fact, index) => {
+    lines.push({ speaker: "A", text: questions[index] ?? questions[0], imageIndex: 0 });
+    lines.push({ speaker: "B", text: fact.slice(0, 240), imageIndex: 0 });
+  });
+  return lines.slice(0, 6);
 }
 
 function parseLines(raw: string, imageCount: number): Line[] | null {
