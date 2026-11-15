@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
+import { Communicate } from "edge-tts-universal";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -74,31 +74,34 @@ function parseLines(value: unknown): Line[] | null {
 }
 
 async function speak(line: Line, language: "english" | "burmese", gender: Gender) {
-  if (language === "burmese") return burmeseSpeak(line, gender);
-  return elevenSpeak(line, gender, "eleven_flash_v2_5");
+  try {
+    return await Promise.race([
+      edgeSpeak(line, language, gender),
+      new Promise<Buffer>((_, reject) => {
+        setTimeout(() => reject(new Error("Edge TTS timed out.")), 10000);
+      }),
+    ]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Edge TTS failed.";
+    console.error("[news-podcast] edge tts failed", message);
+    return elevenSpeak(line, gender, language === "burmese" ? "eleven_v3" : "eleven_flash_v2_5");
+  }
 }
 
-async function burmeseSpeak(line: Line, gender: Gender) {
-  const voice = gender === "female" ? "my-MM-NilarNeural" : "my-MM-ThihaNeural";
-  let lastError = "The Burmese voice could not be reached.";
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const tts = new MsEdgeTTS({ connectionTimeoutMs: 20000, synthesisTimeoutMs: 30000 });
-    try {
-      await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
-      const { audioStream } = tts.toStream(line.text, { rate: "+5%" });
-      const chunks: Buffer[] = [];
-      for await (const chunk of audioStream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      const bytes = Buffer.concat(chunks);
-      if (bytes.length < 200) throw new Error("The Burmese voice returned empty audio.");
-      return bytes;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : lastError;
-      if (attempt === 2) break;
-    } finally {
-      tts.close();
-    }
+function edgeVoice(language: "english" | "burmese", gender: Gender) {
+  if (language === "burmese") return gender === "female" ? "my-MM-NilarNeural" : "my-MM-ThihaNeural";
+  return gender === "female" ? "en-US-AvaNeural" : "en-US-AndrewNeural";
+}
+
+async function edgeSpeak(line: Line, language: "english" | "burmese", gender: Gender) {
+  const communicate = new Communicate(line.text, { voice: edgeVoice(language, gender), connectionTimeout: 10000 });
+  const chunks: Buffer[] = [];
+  for await (const chunk of communicate.stream()) {
+    if (chunk.type === "audio" && chunk.data) chunks.push(Buffer.isBuffer(chunk.data) ? chunk.data : Buffer.from(chunk.data));
   }
-  throw new Error(lastError);
+  const bytes = Buffer.concat(chunks);
+  if (bytes.length < 200) throw new Error("Edge TTS returned empty audio.");
+  return bytes;
 }
 
 async function elevenSpeak(line: Line, gender: Gender, modelId: string) {
