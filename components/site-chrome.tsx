@@ -16,7 +16,7 @@ export function SiteHeader({ active }: { active?: "pricing" | "agency" }) {
     setStarting(true);
     const signedIn = await hasAccountSession();
     if (signedIn) {
-      router.push("/dashboard");
+      router.push("/news-podcast");
       return;
     }
     setStarting(false);

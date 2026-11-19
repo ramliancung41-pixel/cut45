@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { StudioModeBar } from "@/components/studio-mode-bar";
+import Link from "next/link";
+import { CreditBar } from "@/components/credit-provider";
+import { useStudioAccount } from "@/components/profile-credit-bar";
 
 const STEPS = ["Writing script", "Recording voices", "3D lip-sync", "Rendering"] as const;
 
@@ -23,6 +25,7 @@ export default function NewsPodcastPage() {
   const [hostAImage, setHostAImage] = useState("");
   const [hostBImage, setHostBImage] = useState("");
   const [lines, setLines] = useState<Line[]>([]);
+  const [clips, setClips] = useState<Clip[]>([]);
   const [captionIndex, setCaptionIndex] = useState(0);
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
@@ -41,6 +44,7 @@ export default function NewsPodcastPage() {
     setVideoUrl("");
     setShowPlayer(true);
     setLines([]);
+    setClips([]);
     setCaptionIndex(0);
     try {
       setVideoStep(STEPS[0]);
@@ -69,28 +73,7 @@ export default function NewsPodcastPage() {
       if (!audioResponse.ok || !audio?.jobId || !audio.clips?.length) {
         throw new Error(audio?.error || audioRaw.slice(0, 500) || "The voices could not be generated.");
       }
-
-      setVideoStep(STEPS[2]);
-      const lipsyncResponse = await fetch("/api/news-podcast/lipsync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jobId: audio.jobId,
-          preset,
-          ...hosts,
-          clips: audio.clips.map((clip) => ({
-            speaker: clip.speaker,
-            audioDataUrl: clip.audioDataUrl,
-            durationSec: clip.durationSec,
-            imageIndex: clip.imageIndex,
-          })),
-        }),
-      });
-      const lipsync = (await lipsyncResponse.json().catch(() => null)) as {
-        videos?: Array<{ speaker: "A" | "B"; audioDataUrl: string; durationSec: number; imageIndex: number }>;
-        error?: string;
-      } | null;
-      if (!lipsyncResponse.ok || !lipsync?.videos?.length) throw new Error(lipsync?.error ?? "The hosts could not be lip-synced.");
+      setClips(audio.clips);
 
       setVideoStep("Rendering");
       const renderResponse = await fetch("/api/news-podcast/render", {
@@ -105,7 +88,7 @@ export default function NewsPodcastPage() {
           hostBGender,
           hostAImage,
           hostBImage,
-          videos: lipsync.videos.map((clip) => ({
+          videos: audio.clips.map((clip) => ({
             speaker: clip.speaker,
             audioDataUrl: clip.audioDataUrl,
             durationSec: clip.durationSec,
@@ -142,6 +125,19 @@ export default function NewsPodcastPage() {
     return () => window.clearInterval(timer);
   }, [running, lines]);
 
+  async function playVoices() {
+    for (const clip of clips) {
+      if (!clip.audioDataUrl) continue;
+      const audio = new Audio(clip.audioDataUrl);
+      audio.volume = 1;
+      await audio.play();
+      await new Promise<void>((resolve) => {
+        audio.onended = () => resolve();
+        audio.onerror = () => resolve();
+      });
+    }
+  }
+
   function readImage(file: File | undefined, onReady: (value: string) => void) {
     if (!file || !/^image\/(png|jpeg|webp)$/.test(file.type)) return;
     void compressImage(file).then(onReady).catch(() => undefined);
@@ -149,7 +145,7 @@ export default function NewsPodcastPage() {
 
   return (
     <main className="relative min-h-[100dvh] overflow-hidden bg-[#07090e] text-zinc-100">
-      <StudioModeBar />
+      <NewsHeader />
       <div className="pointer-events-none absolute -top-40 left-1/4 h-[28rem] w-[28rem] rounded-full bg-indigo-600/20 blur-[120px]" />
       <div className="pointer-events-none absolute top-40 right-0 h-[24rem] w-[24rem] rounded-full bg-blue-500/15 blur-[120px]" />
       <div className="pointer-events-none absolute bottom-0 left-0 h-[22rem] w-[22rem] rounded-full bg-violet-600/15 blur-[120px]" />
@@ -279,7 +275,7 @@ export default function NewsPodcastPage() {
           <div className="mx-auto w-full max-w-[320px]">
             <div className="relative aspect-[9/16] max-h-[700px] overflow-hidden rounded-[1.6rem] border border-white/[0.1] bg-black shadow-[0_16px_48px_rgba(0,0,0,0.55)]">
               {videoUrl && showPlayer ? (
-                <video src={videoUrl} controls autoPlay playsInline className="absolute inset-0 h-full w-full rounded-xl object-contain" />
+                <video src={videoUrl} controls autoPlay playsInline className="absolute inset-0 h-full w-full rounded-xl bg-black object-contain" />
               ) : (
                 <LiveStage
                   newsImage={newsImages[lines[captionIndex]?.imageIndex] || newsImages[0] || ""}
@@ -292,24 +288,42 @@ export default function NewsPodcastPage() {
               )}
             </div>
             {error && !(videoUrl && showPlayer) ? <p className="mt-3 text-sm text-red-300">{error}</p> : null}
-            {videoUrl ? (
-              <div className="mt-3 flex flex-col gap-2">
-                <a
-                  href={videoUrl}
-                  download="cut45-news.mp4"
-                  className="flex h-11 items-center justify-center rounded-2xl bg-gradient-to-r from-white to-indigo-100 text-sm font-semibold text-black"
-                >
-                  Download MP4
-                </a>
+            <div className="mt-3 flex flex-col gap-2">
+              {clips.length > 0 ? (
                 <button
                   type="button"
-                  onClick={() => setShowPlayer((current) => !current)}
-                  className="h-11 rounded-2xl border border-white/15 text-sm text-zinc-200"
+                  onClick={() => void playVoices()}
+                  className="h-11 rounded-2xl bg-white text-sm font-semibold text-black"
                 >
-                  {showPlayer ? "Back to Stage Preview" : "Play video"}
+                  Play voices
                 </button>
-              </div>
-            ) : null}
+              ) : null}
+              {videoUrl ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setShowPlayer(true)}
+                    className="h-11 rounded-2xl border border-white/15 text-sm font-semibold text-white"
+                  >
+                    Play video
+                  </button>
+                  <a
+                    href={videoUrl}
+                    download="cut45-news.mp4"
+                    className="flex h-11 items-center justify-center rounded-2xl bg-gradient-to-r from-indigo-400 to-violet-400 text-sm font-semibold text-white"
+                  >
+                    Download MP4
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => setShowPlayer(false)}
+                    className="h-11 rounded-2xl border border-white/10 text-sm text-zinc-300"
+                  >
+                    Back to stage
+                  </button>
+                </>
+              ) : null}
+            </div>
           </div>
         </aside>
       </div>
@@ -476,6 +490,28 @@ function compressImage(file: File) {
     };
     image.src = url;
   });
+}
+
+function NewsHeader() {
+  const { account, ready, signOut } = useStudioAccount();
+  return (
+    <header className="sticky top-0 z-40 flex items-center justify-between gap-3 border-b border-white/10 bg-[#07090e]/80 px-4 py-3 backdrop-blur-2xl">
+      <span className="text-sm font-semibold tracking-wide text-white">CUT45</span>
+      <div className="flex min-w-0 items-center gap-3 text-sm text-zinc-200">
+        {ready && account?.name ? <span className="max-w-[8rem] truncate">{account.name}</span> : null}
+        <CreditBar />
+        {ready && account ? (
+          <button type="button" onClick={() => void signOut()} className="rounded-full border border-white/15 px-3 py-1.5 text-xs">
+            Logout
+          </button>
+        ) : (
+          <Link href="/login" className="rounded-full border border-white/15 px-3 py-1.5 text-xs">
+            Sign in
+          </Link>
+        )}
+      </div>
+    </header>
+  );
 }
 
 function UploadIcon() {

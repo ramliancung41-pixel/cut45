@@ -47,10 +47,11 @@ function searchOf(next: string) {
 }
 
 export function studioDestination(next: string | null) {
-  if (!next || !next.startsWith("/") || next.startsWith("//")) return "/dashboard";
+  if (!next || !next.startsWith("/") || next.startsWith("//")) return "/news-podcast";
   const path = pathOnly(next);
   const search = searchOf(next);
+  if (path === "/news-podcast" || path.startsWith("/news-podcast/")) return `${path}${search}`;
   if (isBuilderAlias(path)) return `/builder${search}`;
   if (isStudioPath(path)) return `${path}${search}`;
-  return "/dashboard";
+  return "/news-podcast";
 }

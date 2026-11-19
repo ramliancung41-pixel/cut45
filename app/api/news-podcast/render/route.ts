@@ -95,7 +95,13 @@ export async function POST(request: Request) {
   await writeFile(assPath, assFile(cues));
   try {
     await runFfmpeg(["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", silentPath]);
-    await burnSubtitles(silentPath, assPath, finalPath);
+    try {
+      await burnSubtitles(silentPath, assPath, finalPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (!/no such filter|ass/i.test(message)) throw error;
+      await runFfmpeg(["-y", "-i", silentPath, "-c", "copy", finalPath]);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "ffmpeg";
     return Response.json({ error: `Could not finish the news video. ${message}`.slice(0, 500) }, { status: 502 });
@@ -195,20 +201,19 @@ async function downloadImage(url: string, filePath: string) {
 }
 
 async function renderSegment(input: { segment: Segment; image: string; title: string; output: string; hosts: { A: string; B: string } }) {
-  const { segment, image, title, output, hosts } = input;
+  const { segment, image, output, hosts } = input;
   const duration = segment.durationSec.toFixed(2);
   const frames = Math.max(8, Math.round(segment.durationSec * 30));
   const talkingA = segment.speaker === "A";
   const news = image
     ? `[1:v]scale=1400:820:force_original_aspect_ratio=increase,crop=1400:820,zoompan=z='min(1+0.0007*on,1.12)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=960x560:fps=30[news]`
-    : `[1:v]drawtext=fontfile='${filterPath(FONT)}':text='${escapeDrawtext(title || "News")}':fontsize=42:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2[news]`;
+    : `[1:v]scale=960:560,setsar=1[news]`;
   const filter = [
     news,
     hostFilter(2, talkingA, frames, "hosta"),
     hostFilter(3, !talkingA, frames, "hostb"),
     `[0:v]drawbox=x=0:y=0:w=1080:h=110:color=0x0c1018:t=fill[bar]`,
-    `[bar]drawtext=fontfile='${filterPath(FONT)}':text='CUT45   NEWS':fontsize=34:fontcolor=white:x=60:y=38[brand]`,
-    `[brand][news]overlay=60:160[withnews]`,
+    `[bar][news]overlay=60:160[withnews]`,
     `[withnews][hosta]overlay=40:760[witha]`,
     `[witha][hostb]overlay=560:760[withb]`,
     `[withb]drawbox=x=40:y=1280:w=1000:h=28:color=0x2c3448:t=fill[vout]`,
@@ -250,7 +255,10 @@ async function renderSegment(input: { segment: Segment; image: string; title: st
     "yuv420p",
     "-c:a",
     "aac",
-    "-shortest",
+    "-ar",
+    "44100",
+    "-b:a",
+    "160k",
     output,
   ];
   await runFfmpeg(args);
