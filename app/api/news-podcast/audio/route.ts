@@ -184,14 +184,15 @@ const PITCH_FACTOR: Record<VoiceType, number> = {
 
 async function pitchShift(bytes: Buffer, voiceType: VoiceType) {
   const factor = PITCH_FACTOR[voiceType];
-  if (Math.abs(factor - 1) < 0.02 || typeof ffmpegPath !== "string" || !ffmpegPath) return bytes;
+  const binary = typeof ffmpegPath === "string" ? ffmpegPath : "";
+  if (Math.abs(factor - 1) < 0.02 || !binary) return bytes;
   const id = crypto.randomUUID();
   const input = path.join(os.tmpdir(), `${id}.mp3`);
   const output = path.join(os.tmpdir(), `${id}-pitched.mp3`);
   await writeFile(input, bytes);
   const filter = `asetrate=${Math.round(24000 * factor)},aresample=24000,atempo=${(1 / factor).toFixed(3)}`;
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(ffmpegPath, ["-y", "-i", input, "-af", filter, "-c:a", "libmp3lame", "-q:a", "5", output], { windowsHide: true });
+    const child = spawn(binary, ["-y", "-i", input, "-af", filter, "-c:a", "libmp3lame", "-q:a", "5", output], { windowsHide: true });
     child.on("error", reject);
     child.on("close", (code) => (code === 0 ? resolve() : reject(new Error("Pitch shift failed."))));
   }).catch(() => null);

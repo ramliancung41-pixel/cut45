@@ -431,7 +431,7 @@ function parseLines(raw: string, imageCount: number, subtitleLanguage: Caption, 
     if (!item || typeof item !== "object") return [];
     const record = item as { speaker?: unknown; voiceType?: unknown; voiceText?: unknown; text?: unknown; subtitleText?: unknown; subtitle?: unknown; imageIndex?: unknown };
     const speaker = record.speaker === "A" || record.speaker === "B" ? record.speaker : null;
-    const voiceType = record.voiceType === "female" || record.voiceType === "child" || record.voiceType === "male" ? record.voiceType : speaker === "B" ? "female" : "male";
+    const voiceType = normalizeRole(record.voiceType) || (speaker === "B" ? "female" : "male");
     const voiceText = (typeof record.voiceText === "string" ? record.voiceText : typeof record.text === "string" ? record.text : "").trim().slice(0, 400);
     const supplied = (typeof record.subtitleText === "string" ? record.subtitleText : typeof record.subtitle === "string" ? record.subtitle : "").trim().slice(0, 500);
     const subtitleText = subtitleLanguage === "none" ? "" : supplied || captionFor(voiceText, voiceLanguage, subtitleLanguage);
