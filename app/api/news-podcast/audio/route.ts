@@ -120,7 +120,7 @@ function parseLines(value: unknown): Line[] | null {
 
 async function speak(line: Line, language: "english" | "burmese", voiceType: VoiceType) {
   try {
-    return await edgeSpeak(line, language, voiceType, 3500);
+    return await edgeSpeak(line, language, voiceType, 5500);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Edge TTS failed.";
     console.error("[news-podcast] edge tts failed", message);
@@ -174,23 +174,24 @@ async function googleSpeak(text: string, language: "english" | "burmese", voiceT
 }
 
 const PITCH_FACTOR: Record<VoiceType, number> = {
-  male: 0.8,
-  male_elder: 0.73,
+  male: 0.89,
+  male_elder: 0.83,
   female: 1,
-  female_elder: 0.92,
-  child_boy: 1.26,
-  child_girl: 1.26,
+  female_elder: 0.94,
+  child_boy: 1.15,
+  child_girl: 1.13,
 };
 
 async function pitchShift(bytes: Buffer, voiceType: VoiceType) {
   const factor = PITCH_FACTOR[voiceType];
   const binary = typeof ffmpegPath === "string" ? ffmpegPath : "";
-  if (Math.abs(factor - 1) < 0.02 || !binary) return bytes;
+  if (!binary) return bytes;
   const id = crypto.randomUUID();
   const input = path.join(os.tmpdir(), `${id}.mp3`);
   const output = path.join(os.tmpdir(), `${id}-pitched.mp3`);
   await writeFile(input, bytes);
-  const filter = `asetrate=${Math.round(24000 * factor)},aresample=24000,atempo=${(1 / factor).toFixed(3)}`;
+  const pitch = Math.abs(factor - 1) < 0.02 ? "" : `asetrate=${Math.round(24000 * factor)},aresample=24000,atempo=${(1 / factor).toFixed(3)},`;
+  const filter = `${pitch}highpass=f=85,lowpass=f=7800,acompressor=threshold=-18dB:ratio=3:attack=5:release=50`;
   await new Promise<void>((resolve, reject) => {
     const child = spawn(binary, ["-y", "-i", input, "-af", filter, "-c:a", "libmp3lame", "-q:a", "5", output], { windowsHide: true });
     child.on("error", reject);

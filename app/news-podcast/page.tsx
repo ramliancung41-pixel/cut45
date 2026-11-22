@@ -191,6 +191,26 @@ export default function NewsPodcastPage() {
     return () => window.clearInterval(timer);
   }, [running, lines]);
 
+  async function saveVideo(url: string) {
+    const response = await fetch(url);
+    const blob = await response.blob();
+    const file = new File([blob], "cut45-recap.mp4", { type: "video/mp4" });
+    const nav = navigator as Navigator & { canShare?: (data: ShareData) => boolean };
+    if (nav.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: "CUT45 Video" });
+        return;
+      } catch {
+        return;
+      }
+    }
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "cut45-recap.mp4";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
   async function playVoices() {
     for (const clip of clips) {
       if (!clip.audioDataUrl) continue;
@@ -663,13 +683,13 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                   >
                     Play video
                   </button>
-                  <a
-                    href={videoUrl}
-                    download="cut45-news.mp4"
+                  <button
+                    type="button"
+                    onClick={() => void saveVideo(videoUrl)}
                     className="flex h-11 items-center justify-center rounded-2xl bg-gradient-to-r from-indigo-400 to-violet-400 text-sm font-semibold text-white"
                   >
-                    Download MP4
-                  </a>
+                    Save to Gallery / Download MP4
+                  </button>
                   <button
                     type="button"
                     onClick={() => setShowPlayer(false)}
