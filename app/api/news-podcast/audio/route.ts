@@ -6,8 +6,9 @@ import { Communicate } from "edge-tts-universal";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-type Line = { speaker: "A" | "B"; text: string; imageIndex: number };
+type Line = { speaker: "A" | "B"; text: string; imageIndex: number; voiceType: "male" | "female" | "child" };
 type Gender = "male" | "female";
+type VoiceType = Line["voiceType"];
 
 const MALE_VOICE = "pNInz6obpgDQGcFmaJgB";
 const FEMALE_VOICE = "EXAVITQu4vr4xnSDxMaL";
@@ -18,6 +19,7 @@ export async function POST(request: Request) {
     language?: unknown;
     hostAGender?: unknown;
     hostBGender?: unknown;
+    mediaMode?: unknown;
   } | null;
   const language = body?.language === "burmese" ? "burmese" : body?.language === "english" ? "english" : "";
   const lines = parseLines(body?.lines);
@@ -38,7 +40,8 @@ export async function POST(request: Request) {
     const line = lines[index];
     const filePath = path.join(directory, `${String(index).padStart(2, "0")}-${line.speaker}.mp3`);
     try {
-      const bytes = await speak(line, language, genders[line.speaker]);
+      const detected = body?.mediaMode === "video" ? line.voiceType : genders[line.speaker];
+      const bytes = await speak(line, language, detected);
       await writeFile(filePath, bytes);
       clips.push({
         speaker: line.speaker,
@@ -63,32 +66,40 @@ function parseLines(value: unknown): Line[] | null {
   const lines: Line[] = [];
   for (const item of value) {
     if (!item || typeof item !== "object") return null;
-    const record = item as { speaker?: unknown; voiceText?: unknown; text?: unknown; imageIndex?: unknown };
+    const record = item as { speaker?: unknown; voiceType?: unknown; voiceText?: unknown; text?: unknown; imageIndex?: unknown };
     const speaker = record.speaker === "A" || record.speaker === "B" ? record.speaker : null;
     const text = (typeof record.voiceText === "string" ? record.voiceText : typeof record.text === "string" ? record.text : "").trim().slice(0, 400);
+    const voiceType = record.voiceType === "female" || record.voiceType === "child" || record.voiceType === "male" ? record.voiceType : speaker === "B" ? "female" : "male";
     const imageIndex = typeof record.imageIndex === "number" && record.imageIndex >= 0 ? Math.min(2, Math.floor(record.imageIndex)) : 0;
     if (!speaker || !text) return null;
-    lines.push({ speaker, text, imageIndex });
+    lines.push({ speaker, text, imageIndex, voiceType });
   }
   return lines;
 }
 
-async function speak(line: Line, language: "english" | "burmese", gender: Gender) {
-  if (language === "burmese") return burmeseSpeak(line, gender);
+async function speak(line: Line, language: "english" | "burmese", voiceType: VoiceType) {
+  if (language === "burmese") return burmeseSpeak(line, voiceType);
   try {
-    return await edgeSpeak(line, language, gender, 10000);
+    return await edgeSpeak(line, language, voiceType, 10000);
   } catch (error) {
+    if (voiceType === "child") {
+      try {
+        return await edgeSpeak(line, language, voiceType, 10000, "en-US-AvaNeural");
+      } catch {
+        return elevenSpeak(line, "female", "eleven_flash_v2_5");
+      }
+    }
     const message = error instanceof Error ? error.message : "Edge TTS failed.";
     console.error("[news-podcast] edge tts failed", message);
-    return elevenSpeak(line, gender, "eleven_flash_v2_5");
+    return elevenSpeak(line, voiceType === "male" ? "male" : "female", "eleven_flash_v2_5");
   }
 }
 
-async function burmeseSpeak(line: Line, gender: Gender) {
+async function burmeseSpeak(line: Line, voiceType: VoiceType) {
   let lastError = "The Burmese voice could not be reached.";
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      return await edgeSpeak(line, "burmese", gender, 25000);
+      return await edgeSpeak(line, "burmese", voiceType, 25000);
     } catch (error) {
       lastError = error instanceof Error ? error.message : lastError;
       console.error("[news-podcast] burmese voice failed", attempt, lastError);
@@ -97,13 +108,19 @@ async function burmeseSpeak(line: Line, gender: Gender) {
   throw new Error(lastError);
 }
 
-function edgeVoice(language: "english" | "burmese", gender: Gender) {
-  if (language === "burmese") return gender === "female" ? "my-MM-NilarNeural" : "my-MM-ThihaNeural";
-  return gender === "female" ? "en-US-AvaNeural" : "en-US-AndrewNeural";
+function edgeVoice(language: "english" | "burmese", voiceType: VoiceType) {
+  if (voiceType === "child") return language === "burmese" ? "my-MM-NilarNeural" : "en-US-AnaNeural";
+  if (language === "burmese") return voiceType === "female" ? "my-MM-NilarNeural" : "my-MM-ThihaNeural";
+  return voiceType === "female" ? "en-US-AvaNeural" : "en-US-AndrewNeural";
 }
 
-async function edgeSpeak(line: Line, language: "english" | "burmese", gender: Gender, timeoutMs: number) {
-  const communicate = new Communicate(line.text, { voice: edgeVoice(language, gender), connectionTimeout: timeoutMs });
+async function edgeSpeak(line: Line, language: "english" | "burmese", voiceType: VoiceType, timeoutMs: number, voiceOverride?: string) {
+  const child = voiceType === "child";
+  const communicate = new Communicate(line.text, {
+    voice: voiceOverride || edgeVoice(language, voiceType),
+    connectionTimeout: timeoutMs,
+    ...(child ? { pitch: "+38Hz", rate: "+6%" } : {}),
+  });
   const audio = (async () => {
     const chunks: Buffer[] = [];
     for await (const chunk of communicate.stream()) {

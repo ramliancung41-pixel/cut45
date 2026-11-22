@@ -109,7 +109,7 @@ export async function POST(request: Request) {
   const silentPath = path.join(directory, "joined.mp4");
   const finalPath = path.join(directory, "final.mp4");
   await writeFile(listPath, parts.join("\n"));
-  await writeFile(assPath, assFile(cues));
+  await writeFile(assPath, assFile(cues, Boolean(sourceVideo)));
   try {
     await runFfmpeg(["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", silentPath]);
     try {
@@ -239,21 +239,26 @@ async function renderSegment(input: {
   const duration = segment.durationSec.toFixed(2);
   const frames = Math.max(8, Math.round(segment.durationSec * 30));
   const talkingA = segment.speaker === "A";
-  const news = sourceVideo
-    ? `[1:v]scale=960:560:force_original_aspect_ratio=increase,crop=960:560,setsar=1,fps=30[news]`
-    : image
-      ? `[1:v]scale=1400:820:force_original_aspect_ratio=increase,crop=1400:820,zoompan=z='min(1+0.0007*on,1.12)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=960x560:fps=30[news]`
-      : `[1:v]scale=960:560,setsar=1[news]`;
-  const filter = [
-    news,
-    hostFilter(2, talkingA, frames, "hosta"),
-    hostFilter(3, !talkingA, frames, "hostb"),
-    `[0:v]drawbox=x=0:y=0:w=1080:h=110:color=0x0c1018:t=fill[bar]`,
-    `[bar][news]overlay=60:160[withnews]`,
-    `[withnews][hosta]overlay=40:760[witha]`,
-    `[witha][hostb]overlay=560:760[withb]`,
-    `[withb]drawbox=x=40:y=1280:w=1000:h=28:color=0x2c3448:t=fill[vout]`,
-  ].join(";");
+  const news = image
+    ? `[1:v]scale=1400:820:force_original_aspect_ratio=increase,crop=1400:820,zoompan=z='min(1+0.0007*on,1.12)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=960x560:fps=30[news]`
+    : `[1:v]scale=960:560,setsar=1[news]`;
+  const filter = sourceVideo
+    ? [
+        "[1:v]split[bg][fg]",
+        "[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4,setsar=1[blur]",
+        "[fg]scale=1080:1920:force_original_aspect_ratio=decrease,setsar=1[fit]",
+        "[blur][fit]overlay=(W-w)/2:(H-h)/2[vout]",
+      ].join(";")
+    : [
+        news,
+        hostFilter(2, talkingA, frames, "hosta"),
+        hostFilter(3, !talkingA, frames, "hostb"),
+        `[0:v]drawbox=x=0:y=0:w=1080:h=110:color=0x0c1018:t=fill[bar]`,
+        `[bar][news]overlay=60:160[withnews]`,
+        `[withnews][hosta]overlay=40:760[witha]`,
+        `[witha][hostb]overlay=560:760[withb]`,
+        `[withb]drawbox=x=40:y=1280:w=1000:h=28:color=0x2c3448:t=fill[vout]`,
+      ].join(";");
   const args = [
     "-y",
     "-f",
@@ -265,18 +270,9 @@ async function renderSegment(input: {
       : image
         ? ["-loop", "1", "-t", duration, "-i", image]
         : ["-f", "lavfi", "-i", `color=c=0x1a202c:s=960x560:r=30:d=${duration}`]),
-    "-loop",
-    "1",
-    "-t",
-    duration,
-    "-i",
-    hosts.A,
-    "-loop",
-    "1",
-    "-t",
-    duration,
-    "-i",
-    hosts.B,
+    ...(sourceVideo
+      ? []
+      : ["-loop", "1", "-t", duration, "-i", hosts.A, "-loop", "1", "-t", duration, "-i", hosts.B]),
     "-i",
     segment.audioPath,
     "-filter_complex",
@@ -284,7 +280,7 @@ async function renderSegment(input: {
     "-map",
     "[vout]",
     "-map",
-    "4:a:0",
+    sourceVideo ? "2:a:0" : "4:a:0",
     "-t",
     duration,
     "-r",
@@ -304,7 +300,7 @@ async function renderSegment(input: {
   await runFfmpeg(args);
 }
 
-function assFile(cues: Array<{ start: number; end: number; text: string }>) {
+function assFile(cues: Array<{ start: number; end: number; text: string }>, fullFrame = false) {
   const events = cues
     .filter((cue) => cue.text.trim())
     .map((cue) => {
@@ -320,8 +316,8 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: News,Noto Sans Myanmar,46,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,70,70,430,1
-Style: Dual,Noto Sans Myanmar,36,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,70,70,400,1
+Style: News,Noto Sans Myanmar,46,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,70,70,${fullFrame ? 90 : 430},1
+Style: Dual,Noto Sans Myanmar,36,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,70,70,${fullFrame ? 70 : 400},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

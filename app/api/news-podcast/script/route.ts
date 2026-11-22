@@ -3,7 +3,8 @@ export const maxDuration = 300;
 
 type Spoken = "burmese" | "english";
 type Caption = Spoken | "dual" | "none";
-type Line = { speaker: "A" | "B"; voiceText: string; subtitleText: string; imageIndex: number };
+type VoiceType = "male" | "female" | "child";
+type Line = { speaker: "A" | "B"; voiceType: VoiceType; voiceText: string; subtitleText: string; imageIndex: number };
 
 type Body = {
   news?: unknown;
@@ -53,15 +54,16 @@ export async function POST(request: Request) {
   const longform = Boolean(videoUrl);
   const system = `You write an original news commentary. Do not copy dialogue, narration, or captions from the source. Describe what happens in the hosts' own words.
 ${PRESETS[preset]}
-"voiceText" is what the hosts speak. Write it as original commentary in ${voiceLanguage === "burmese" ? "natural spoken Burmese (စကားပြောဟန်), not formal written Burmese" : "natural spoken English"}. Do not transcribe the source.
+"voiceText" is what is spoken. Write it as original commentary in ${voiceLanguage === "burmese" ? "natural spoken Burmese (စကားပြောဟန်), not formal written Burmese" : "natural spoken English"}. Do not transcribe the source.
 ${subtitleInstruction(subtitleLanguage, voiceLanguage)}
+For every line set "voiceType" to "male", "female", or "child" from who is speaking or narrating that moment. A child character uses "child".
 Host A only asks questions. Host B only explains. Alternate speakers, starting with A.
 ${
   longform
     ? "The source may be up to 5 minutes. Return 25 to 35 short lines that follow the events in order."
     : "Return 8 to 14 short lines."
 }
-Return JSON only, an array of {"speaker":"A"|"B","voiceText":string,"subtitleText":string,"imageIndex":number}.
+Return JSON only, an array of {"speaker":"A"|"B","voiceType":"male"|"female"|"child","voiceText":string,"subtitleText":string,"imageIndex":number}.
 imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when there are no images.`;
 
   let raw = "";
@@ -89,11 +91,16 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
 
 async function geminiChain(apiKey: string, system: string, news: string, videoUrl: string) {
   let fileUri = "";
-  if (videoUrl) fileUri = await uploadVideoToGemini(apiKey, videoUrl);
+  let fileMime = "video/mp4";
+  if (videoUrl) {
+    const uploaded = await uploadVideoToGemini(apiKey, videoUrl);
+    fileUri = uploaded.uri;
+    fileMime = uploaded.mime;
+  }
   let last = "Gemini quota exceeded.";
   for (const model of GEMINI_MODELS) {
     try {
-      return await geminiScript(apiKey, model, system, news, fileUri);
+      return await geminiScript(apiKey, model, system, news, fileUri, fileMime);
     } catch (error) {
       if (error instanceof QuotaError || error instanceof UnavailableModelError) {
         last = error.message;
@@ -108,8 +115,8 @@ async function geminiChain(apiKey: string, system: string, news: string, videoUr
 async function uploadVideoToGemini(apiKey: string, videoUrl: string) {
   const source = await fetch(videoUrl);
   if (!source.ok) throw new Error(`The uploaded video could not be read (${source.status}).`);
-  const mime = source.headers.get("content-type")?.split(";")[0] || "video/mp4";
   const bytes = Buffer.from(await source.arrayBuffer());
+  const mime = sniffVideoMime(bytes) || fallbackVideoMime(source.headers.get("content-type") || "", videoUrl);
   if (bytes.byteLength < 1000 || bytes.byteLength > 80_000_000) {
     throw new Error("The video must be under 80 MB so it can be analyzed.");
   }
@@ -137,15 +144,33 @@ async function uploadVideoToGemini(apiKey: string, videoUrl: string) {
     },
     body: bytes,
   });
-  const payload = (await uploaded.json().catch(() => null)) as { file?: { uri?: string } } | null;
+  const payload = (await uploaded.json().catch(() => null)) as { file?: { uri?: string; mimeType?: string } } | null;
   const uri = payload?.file?.uri ?? "";
   if (!uploaded.ok || !uri.startsWith("https://")) throw new Error("Gemini did not return a video file.");
-  return uri;
+  return { uri, mime };
 }
 
-async function geminiScript(apiKey: string, model: string, system: string, news: string, fileUri: string) {
+function sniffVideoMime(bytes: Buffer) {
+  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return "video/webm";
+  if (bytes.length >= 12 && bytes.subarray(4, 8).toString("ascii") === "ftyp") {
+    const brand = bytes.subarray(8, 12).toString("ascii");
+    return brand.startsWith("qt") ? "video/quicktime" : "video/mp4";
+  }
+  return "";
+}
+
+function fallbackVideoMime(header: string, videoUrl: string) {
+  const headerMime = header.split(";")[0]?.trim().toLowerCase() || "";
+  if (headerMime === "video/webm" || headerMime === "video/mp4" || headerMime === "video/quicktime") return headerMime;
+  const lower = videoUrl.toLowerCase();
+  if (lower.includes(".webm")) return "video/webm";
+  if (lower.includes(".mov")) return "video/quicktime";
+  return "video/mp4";
+}
+
+async function geminiScript(apiKey: string, model: string, system: string, news: string, fileUri: string, fileMime: string) {
   const parts: Array<{ text?: string; file_data?: { mime_type: string; file_uri: string } }> = [];
-  if (fileUri) parts.push({ file_data: { mime_type: "video/mp4", file_uri: fileUri } });
+  if (fileUri) parts.push({ file_data: { mime_type: fileMime, file_uri: fileUri } });
   parts.push({ text: news || "Watch the video and write original host commentary about what happens. Do not transcribe it word for word." });
   const endpoint = new URL(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`);
   const response = await fetch(endpoint, {
@@ -235,8 +260,8 @@ function localScript(news: string, language: Spoken, subtitle: Caption): Line[] 
   facts.forEach((fact, index) => {
     const question = questions[index] ?? questions[0];
     const answer = fact.slice(0, 240);
-    lines.push({ speaker: "A", voiceText: question, subtitleText: captionFor(question, language, subtitle), imageIndex: 0 });
-    lines.push({ speaker: "B", voiceText: answer, subtitleText: captionFor(answer, language, subtitle), imageIndex: 0 });
+    lines.push({ speaker: "A", voiceType: "male", voiceText: question, subtitleText: captionFor(question, language, subtitle), imageIndex: 0 });
+    lines.push({ speaker: "B", voiceType: "female", voiceText: answer, subtitleText: captionFor(answer, language, subtitle), imageIndex: 0 });
   });
   return lines.slice(0, 6);
 }
@@ -261,13 +286,14 @@ function parseLines(raw: string, imageCount: number, subtitleLanguage: Caption, 
   const maxIndex = Math.max(imageCount - 1, 0);
   const lines = list.slice(0, 36).flatMap((item): Line[] => {
     if (!item || typeof item !== "object") return [];
-    const record = item as { speaker?: unknown; voiceText?: unknown; text?: unknown; subtitleText?: unknown; subtitle?: unknown; imageIndex?: unknown };
+    const record = item as { speaker?: unknown; voiceType?: unknown; voiceText?: unknown; text?: unknown; subtitleText?: unknown; subtitle?: unknown; imageIndex?: unknown };
     const speaker = record.speaker === "A" || record.speaker === "B" ? record.speaker : null;
+    const voiceType = record.voiceType === "female" || record.voiceType === "child" || record.voiceType === "male" ? record.voiceType : speaker === "B" ? "female" : "male";
     const voiceText = (typeof record.voiceText === "string" ? record.voiceText : typeof record.text === "string" ? record.text : "").trim().slice(0, 400);
     const supplied = (typeof record.subtitleText === "string" ? record.subtitleText : typeof record.subtitle === "string" ? record.subtitle : "").trim().slice(0, 500);
     const subtitleText = subtitleLanguage === "none" ? "" : supplied || captionFor(voiceText, voiceLanguage, subtitleLanguage);
     const imageIndex = typeof record.imageIndex === "number" && record.imageIndex >= 0 ? Math.min(maxIndex, Math.floor(record.imageIndex)) : 0;
-    return speaker && voiceText ? [{ speaker, voiceText, subtitleText, imageIndex }] : [];
+    return speaker && voiceText ? [{ speaker, voiceType, voiceText, subtitleText, imageIndex }] : [];
   });
   return lines.length >= 4 ? lines : null;
 }

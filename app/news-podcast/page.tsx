@@ -79,7 +79,7 @@ export default function NewsPodcastPage() {
       const audioResponse = await fetch("/api/news-podcast/audio", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ language: voiceLanguage, lines: script.lines, ...hosts }),
+        body: JSON.stringify({ language: voiceLanguage, lines: script.lines, mediaMode, ...hosts }),
       });
       const audioRaw = await audioResponse.text();
       let audio: { jobId?: string; clips?: Clip[]; error?: string } | null = null;
@@ -333,7 +333,7 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                     onClick={() => setMediaMode(mode)}
                     className={`h-8 rounded-full px-3 ${mediaMode === mode ? "bg-white text-black" : "text-zinc-400"}`}
                   >
-                    {mode === "images" ? "Images (up to 3)" : "Video (up to 5 min)"}
+                    {mode === "images" ? "News Podcast" : "Video Recap"}
                   </button>
                 ))}
               </div>
@@ -431,10 +431,12 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
             )}
           </section>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <HostCard title="Host A" detail="Questioner · Left" gender={hostAGender} image={hostAImage} onGender={setHostAGender} onImage={setHostAImage} />
-            <HostCard title="Host B" detail="Main Speaker · Right" gender={hostBGender} image={hostBImage} onGender={setHostBGender} onImage={setHostBImage} />
-          </div>
+          {mediaMode === "images" ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <HostCard title="Host A" detail="Questioner · Left" gender={hostAGender} image={hostAImage} onGender={setHostAGender} onImage={setHostAImage} />
+              <HostCard title="Host B" detail="Main Speaker · Right" gender={hostBGender} image={hostBImage} onGender={setHostBGender} onImage={setHostBImage} />
+            </div>
+          ) : null}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
@@ -461,6 +463,7 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                 <option value="none" className="bg-[#07090e]">None (Off)</option>
               </select>
             </label>
+            {mediaMode === "images" ? (
             <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
               <span className="text-xs tracking-wide text-zinc-500 uppercase">Character preset</span>
               <select
@@ -472,15 +475,16 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                 <option value="father-son" className="bg-[#07090e]">Father & Son</option>
               </select>
             </label>
+            ) : null}
           </div>
 
           <button
             type="button"
-            disabled={running || (news.trim().length < 8 && !sourceVideoUrl)}
+            disabled={running || (mediaMode === "video" ? !sourceVideoUrl : news.trim().length < 8)}
             onClick={() => void generateVideo()}
             className="h-12 rounded-2xl bg-gradient-to-r from-indigo-500 via-blue-500 to-violet-500 text-sm font-semibold text-white shadow-[0_0_32px_rgba(99,102,241,0.45)] transition hover:brightness-110 disabled:opacity-40"
           >
-            {running ? videoStep : "Generate News Video"}
+            {running ? videoStep : mediaMode === "video" ? "Generate Video Recap" : "Generate News Video"}
           </button>
           {error ? <p className="text-sm text-red-300">{error}</p> : null}
         </div>
@@ -496,6 +500,8 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                 <video src={videoUrl} controls autoPlay playsInline className="absolute inset-0 h-full w-full rounded-xl bg-black object-contain" />
               ) : (
                 <LiveStage
+                  mode={mediaMode}
+                  sourcePreview={sourcePreview}
                   newsImage={newsImages[lines[captionIndex]?.imageIndex] || newsImages[0] || ""}
                   hostA={hostAImage}
                   hostB={hostBImage}
@@ -635,6 +641,8 @@ function HostCard({
 }
 
 function LiveStage({
+  mode,
+  sourcePreview,
   newsImage,
   hostA,
   hostB,
@@ -642,6 +650,8 @@ function LiveStage({
   caption,
   running,
 }: {
+  mode: "images" | "video";
+  sourcePreview: string;
   newsImage: string;
   hostA: string;
   hostB: string;
@@ -649,6 +659,23 @@ function LiveStage({
   caption: string;
   running: boolean;
 }) {
+  if (mode === "video") {
+    return (
+      <div className="absolute inset-0 bg-black">
+        {sourcePreview ? (
+          <>
+            <video src={sourcePreview} muted className="absolute inset-0 h-full w-full scale-110 object-cover blur-2xl" />
+            <video src={sourcePreview} muted playsInline className="absolute inset-0 h-full w-full object-contain" />
+          </>
+        ) : (
+          <div className="grid h-full place-items-center px-6 text-center text-[11px] tracking-[0.16em] text-zinc-500 uppercase">Full-screen video recap</div>
+        )}
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-4 pt-10 pb-6">
+          <p className="line-clamp-4 text-center text-[11px] leading-4 text-zinc-100">{caption || (running ? "Writing subtitles..." : "Subtitles appear here...")}</p>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="absolute inset-0 flex flex-col bg-[#0b0e16]">
       <div className="relative h-[35%] overflow-hidden border-b border-white/10">
