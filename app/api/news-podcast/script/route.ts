@@ -55,14 +55,14 @@ export async function POST(request: Request) {
 
   const dubbing = Boolean(videoUrl);
   const system = dubbing
-    ? `You dub the spoken lines in this video. Do not invent a Host A and Host B interview.
-Listen in order. For each spoken line return when it starts and ends.
-voiceText is a natural ${voiceLanguage === "burmese" ? "spoken Burmese" : "spoken English"} translation of what that person says. During a silent gap you may add one short line of context. Otherwise translate only the speech.
+    ? `You translate the spoken dialogue in this video. Do not invent a Host A and Host B interview.
+Listen to every spoken line and narration from 0 seconds through ${videoDurationSec ? `${videoDurationSec.toFixed(1)} seconds` : "the end of the video"}.
+Return 8 to 15 chronological cues that together cover that whole span. The first cue starts near 0. The last cue ends near the end of the video.
+voiceText is a natural ${voiceLanguage === "burmese" ? "spoken Burmese" : "spoken English"} translation of what that person says.
 ${subtitleInstruction(subtitleLanguage, voiceLanguage)}
 speakerType is "male", "female", or "child" for the person who is speaking.
 Keep voiceText short enough to say inside endSec - startSec.
-Return JSON only, an array of {"startSec":number,"endSec":number,"speakerType":"male"|"female"|"child","voiceText":string,"subtitleText":string}.
-Times are seconds from the start of the video.${videoDurationSec ? ` The video is ${videoDurationSec.toFixed(1)} seconds long. Every endSec must stay inside that length.` : ""} Cover up to 5 minutes. Return at most 60 cues.`
+Return JSON only, an array of {"startSec":number,"endSec":number,"speakerType":"male"|"female"|"child","voiceText":string,"subtitleText":string}.`
     : `You write an original news commentary. Do not copy dialogue, narration, or captions from the source. Describe what happens in the hosts' own words.
 ${PRESETS[preset]}
 "voiceText" is what is spoken. Write it as original commentary in ${voiceLanguage === "burmese" ? "natural spoken Burmese (စကားပြောဟန်), not formal written Burmese" : "natural spoken English"}. Do not transcribe the source.
@@ -78,7 +78,8 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
     raw = geminiKey ? await geminiChain(geminiKey, system, news, videoUrl) : await openaiScript(openaiKey, system, news);
   } catch (error) {
     if (error instanceof QuotaError) {
-      return Response.json({ lines: dubbing ? dubFallback(voiceLanguage, subtitleLanguage) : localScript(news, voiceLanguage, subtitleLanguage) });
+      if (dubbing) return Response.json({ error: error.message }, { status: 502 });
+      return Response.json({ lines: localScript(news, voiceLanguage, subtitleLanguage) });
     }
     const message = error instanceof Error ? error.message : "The script could not be written.";
     if (geminiKey && openaiKey) {
@@ -95,23 +96,18 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
 
   const lines = dubbing ? parseDubCues(raw, subtitleLanguage, voiceLanguage) : parseLines(raw, imageCount, subtitleLanguage, voiceLanguage);
   if (!lines) {
-    return Response.json({ lines: dubbing ? dubFallback(voiceLanguage, subtitleLanguage) : localScript(news, voiceLanguage, subtitleLanguage) });
+    if (dubbing) return Response.json({ error: "Gemini did not return the spoken lines for this video." }, { status: 502 });
+    return Response.json({ lines: localScript(news, voiceLanguage, subtitleLanguage) });
   }
   return Response.json({ lines });
 }
 
 async function geminiChain(apiKey: string, system: string, news: string, videoUrl: string) {
-  let fileUri = "";
-  let fileMime = "video/mp4";
-  if (videoUrl) {
-    const uploaded = await uploadVideoToGemini(apiKey, videoUrl);
-    fileUri = uploaded.uri;
-    fileMime = uploaded.mime;
-  }
+  const video = videoUrl ? await prepareGeminiVideo(apiKey, videoUrl) : null;
   let last = "Gemini quota exceeded.";
   for (const model of GEMINI_MODELS) {
     try {
-      return await geminiScript(apiKey, model, system, news, fileUri, fileMime);
+      return await geminiScript(apiKey, model, system, news, video);
     } catch (error) {
       last = error instanceof Error ? error.message : "Gemini could not write the script.";
       continue;
@@ -120,7 +116,7 @@ async function geminiChain(apiKey: string, system: string, news: string, videoUr
   throw new QuotaError(last);
 }
 
-async function uploadVideoToGemini(apiKey: string, videoUrl: string) {
+async function prepareGeminiVideo(apiKey: string, videoUrl: string) {
   const source = await fetch(videoUrl);
   if (!source.ok) throw new Error(`The uploaded video could not be read (${source.status}).`);
   const bytes = Buffer.from(await source.arrayBuffer());
@@ -128,6 +124,27 @@ async function uploadVideoToGemini(apiKey: string, videoUrl: string) {
   if (bytes.byteLength < 1000 || bytes.byteLength > 80_000_000) {
     throw new Error("The video must be under 80 MB so it can be analyzed.");
   }
+  if (bytes.byteLength <= 18_000_000) return { mime, inline: bytes.toString("base64") };
+  const uploaded = await uploadVideoToGemini(apiKey, bytes, mime);
+  await waitUntilActive(apiKey, uploaded.name);
+  return { mime, uri: uploaded.uri };
+}
+
+async function waitUntilActive(apiKey: string, name: string) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/${name}`, {
+      headers: { "x-goog-api-key": apiKey },
+    });
+    const payload = (await response.json().catch(() => null)) as { state?: string; error?: { message?: string } } | null;
+    if (!response.ok) throw new Error(payload?.error?.message || `Gemini could not check the video (${response.status}).`);
+    if (payload?.state === "ACTIVE") return;
+    if (payload?.state === "FAILED") throw new Error("Gemini could not process the video.");
+  }
+  throw new Error("Gemini did not finish processing the video.");
+}
+
+async function uploadVideoToGemini(apiKey: string, bytes: Buffer, mime: string) {
   const start = await fetch("https://generativelanguage.googleapis.com/upload/v1beta/files", {
     method: "POST",
     headers: {
@@ -152,10 +169,11 @@ async function uploadVideoToGemini(apiKey: string, videoUrl: string) {
     },
     body: bytes,
   });
-  const payload = (await uploaded.json().catch(() => null)) as { file?: { uri?: string; mimeType?: string } } | null;
+  const payload = (await uploaded.json().catch(() => null)) as { file?: { uri?: string; name?: string } } | null;
   const uri = payload?.file?.uri ?? "";
-  if (!uploaded.ok || !uri.startsWith("https://")) throw new Error("Gemini did not return a video file.");
-  return { uri, mime };
+  const name = payload?.file?.name ?? "";
+  if (!uploaded.ok || !uri.startsWith("https://") || !name.startsWith("files/")) throw new Error("Gemini did not return a video file.");
+  return { uri, name };
 }
 
 function sniffVideoMime(bytes: Buffer) {
@@ -176,10 +194,17 @@ function fallbackVideoMime(header: string, videoUrl: string) {
   return "video/mp4";
 }
 
-async function geminiScript(apiKey: string, model: string, system: string, news: string, fileUri: string, fileMime: string) {
-  const parts: Array<{ text?: string; file_data?: { mime_type: string; file_uri: string } }> = [];
-  if (fileUri) parts.push({ file_data: { mime_type: fileMime, file_uri: fileUri } });
-  parts.push({ text: news || "Watch the video and write original host commentary about what happens. Do not transcribe it word for word." });
+async function geminiScript(
+  apiKey: string,
+  model: string,
+  system: string,
+  news: string,
+  video: { mime: string; uri?: string; inline?: string } | null,
+) {
+  const parts: Array<{ text?: string; file_data?: { mime_type: string; file_uri: string }; inline_data?: { mime_type: string; data: string } }> = [];
+  if (video?.inline) parts.push({ inline_data: { mime_type: video.mime, data: video.inline } });
+  else if (video?.uri) parts.push({ file_data: { mime_type: video.mime, file_uri: video.uri } });
+  parts.push({ text: news || "Listen to every spoken line in this video and translate each one in time order." });
   const endpoint = new URL(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`);
   const response = await fetch(endpoint, {
     method: "POST",
@@ -259,11 +284,6 @@ function captionFor(text: string, voice: Spoken, subtitle: Caption) {
   if (subtitle === "none") return "";
   if (subtitle === voice) return text;
   return "";
-}
-
-function dubFallback(language: Spoken, subtitle: Caption) {
-  const voiceText = language === "burmese" ? "ဒီဇာတ်ကားထဲက စကားကို အသံသစ်နဲ့ ပြန်ပြောထားပါတယ်။" : "The spoken lines in this clip are dubbed in a new voice.";
-  return [{ startSec: 0, endSec: 6, speakerType: "female" as const, voiceText, subtitleText: captionFor(voiceText, language, subtitle) }];
 }
 
 function parseDubCues(raw: string, subtitleLanguage: Caption, voiceLanguage: Spoken) {
