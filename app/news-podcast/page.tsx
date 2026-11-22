@@ -9,9 +9,10 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 const STEPS = ["Writing script", "Recording voices", "3D lip-sync", "Rendering"] as const;
 
-type Line = { speaker: "A" | "B"; text: string; imageIndex: number };
+type Line = { speaker: "A" | "B"; voiceText?: string; text?: string; subtitleText?: string; subtitle?: string; imageIndex: number };
 type Clip = Line & { path: string; audioDataUrl?: string; durationSec: number };
 type Language = "burmese" | "english";
+type SubtitleLanguage = Language | "dual" | "none";
 type Gender = "male" | "female";
 type Preset = "father-son" | "hosts";
 
@@ -25,7 +26,8 @@ export default function NewsPodcastPage() {
   const [sourcePreview, setSourcePreview] = useState("");
   const [sourceDuration, setSourceDuration] = useState(0);
   const [uploadingVideo, setUploadingVideo] = useState(false);
-  const [language, setLanguage] = useState<Language>("english");
+  const [voiceLanguage, setVoiceLanguage] = useState<Language>("english");
+  const [subtitleLanguage, setSubtitleLanguage] = useState<SubtitleLanguage>("english");
   const [preset, setPreset] = useState<Preset>("hosts");
   const [hostAGender, setHostAGender] = useState<Gender>("male");
   const [hostBGender, setHostBGender] = useState<Gender>("female");
@@ -58,7 +60,14 @@ export default function NewsPodcastPage() {
       const scriptResponse = await fetch("/api/news-podcast/script", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ news, language, preset, imageCount: newsImages.length, videoUrl: mediaMode === "video" ? sourceVideoUrl : "" }),
+        body: JSON.stringify({
+          news,
+          voiceLanguage,
+          subtitleLanguage,
+          preset,
+          imageCount: newsImages.length,
+          videoUrl: mediaMode === "video" ? sourceVideoUrl : "",
+        }),
       });
       const script = (await scriptResponse.json().catch(() => null)) as { lines?: Line[]; error?: string } | null;
       if (!scriptResponse.ok || !script?.lines) throw new Error(script?.error ?? "The script could not be written.");
@@ -68,7 +77,7 @@ export default function NewsPodcastPage() {
       const audioResponse = await fetch("/api/news-podcast/audio", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ language, lines: script.lines, ...hosts }),
+        body: JSON.stringify({ language: voiceLanguage, lines: script.lines, ...hosts }),
       });
       const audioRaw = await audioResponse.text();
       let audio: { jobId?: string; clips?: Clip[]; error?: string } | null = null;
@@ -332,14 +341,27 @@ export default function NewsPodcastPage() {
 
           <div className="grid gap-4 sm:grid-cols-2">
             <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
-              <span className="text-xs tracking-wide text-zinc-500 uppercase">Language</span>
+              <span className="text-xs tracking-wide text-zinc-500 uppercase">Voice language</span>
               <select
-                value={language}
-                onChange={(event) => setLanguage(event.target.value as Language)}
+                value={voiceLanguage}
+                onChange={(event) => setVoiceLanguage(event.target.value as Language)}
                 className="bg-transparent text-sm outline-none"
               >
                 <option value="english" className="bg-[#07090e]">English</option>
                 <option value="burmese" className="bg-[#07090e]">Burmese</option>
+              </select>
+            </label>
+            <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
+              <span className="text-xs tracking-wide text-zinc-500 uppercase">Subtitle language</span>
+              <select
+                value={subtitleLanguage}
+                onChange={(event) => setSubtitleLanguage(event.target.value as SubtitleLanguage)}
+                className="bg-transparent text-sm outline-none"
+              >
+                <option value="english" className="bg-[#07090e]">English</option>
+                <option value="burmese" className="bg-[#07090e]">Burmese</option>
+                <option value="dual" className="bg-[#07090e]">Dual (Burmese + English)</option>
+                <option value="none" className="bg-[#07090e]">None (Off)</option>
               </select>
             </label>
             <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
@@ -381,7 +403,12 @@ export default function NewsPodcastPage() {
                   hostA={hostAImage}
                   hostB={hostBImage}
                   speaker={lines[captionIndex]?.speaker}
-                  caption={error || lines[captionIndex]?.text || ""}
+                  caption={
+                    error ||
+                    (subtitleLanguage === "none"
+                      ? "Subtitles off"
+                      : lines[captionIndex]?.subtitleText || lines[captionIndex]?.subtitle || lines[captionIndex]?.voiceText || lines[captionIndex]?.text || "")
+                  }
                   running={running}
                 />
               )}

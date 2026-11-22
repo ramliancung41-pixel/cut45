@@ -43,7 +43,13 @@ export async function POST(request: Request) {
         .slice(0, 3)
     : [];
   const texts = Array.isArray(body?.lines)
-    ? body.lines.map((item) => (item && typeof item === "object" && typeof (item as { text?: unknown }).text === "string" ? (item as { text: string }).text : ""))
+    ? body.lines.map((item) => {
+        if (!item || typeof item !== "object") return "";
+        const record = item as { subtitleText?: unknown; subtitle?: unknown; text?: unknown };
+        if (typeof record.subtitleText === "string") return record.subtitleText;
+        if (typeof record.subtitle === "string") return record.subtitle;
+        return typeof record.text === "string" ? record.text : "";
+      })
     : [];
   const segments = parseSegments(body?.videos, texts);
   if (!jobId || !segments) {
@@ -301,7 +307,10 @@ async function renderSegment(input: {
 function assFile(cues: Array<{ start: number; end: number; text: string }>) {
   const events = cues
     .filter((cue) => cue.text.trim())
-    .map((cue) => `Dialogue: 0,${assTime(cue.start)},${assTime(cue.end)},News,,0,0,0,,${escapeAss(cue.text)}`)
+    .map((cue) => {
+      const style = cue.text.includes("\n") ? "Dual" : "News";
+      return `Dialogue: 0,${assTime(cue.start)},${assTime(cue.end)},${style},,0,0,0,,${escapeAss(cue.text)}`;
+    })
     .join("\n");
   return `[Script Info]
 ScriptType: v4.00+
@@ -312,6 +321,7 @@ WrapStyle: 0
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: News,Noto Sans Myanmar,46,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,70,70,430,1
+Style: Dual,Noto Sans Myanmar,36,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,70,70,400,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

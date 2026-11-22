@@ -63,9 +63,9 @@ function parseLines(value: unknown): Line[] | null {
   const lines: Line[] = [];
   for (const item of value) {
     if (!item || typeof item !== "object") return null;
-    const record = item as { speaker?: unknown; text?: unknown; imageIndex?: unknown };
+    const record = item as { speaker?: unknown; voiceText?: unknown; text?: unknown; imageIndex?: unknown };
     const speaker = record.speaker === "A" || record.speaker === "B" ? record.speaker : null;
-    const text = typeof record.text === "string" ? record.text.trim().slice(0, 400) : "";
+    const text = (typeof record.voiceText === "string" ? record.voiceText : typeof record.text === "string" ? record.text : "").trim().slice(0, 400);
     const imageIndex = typeof record.imageIndex === "number" && record.imageIndex >= 0 ? Math.min(2, Math.floor(record.imageIndex)) : 0;
     if (!speaker || !text) return null;
     lines.push({ speaker, text, imageIndex });

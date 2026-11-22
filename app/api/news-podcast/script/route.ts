@@ -1,11 +1,15 @@
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-type Line = { speaker: "A" | "B"; text: string; imageIndex: number };
+type Spoken = "burmese" | "english";
+type Caption = Spoken | "dual" | "none";
+type Line = { speaker: "A" | "B"; voiceText: string; subtitleText: string; imageIndex: number };
 
 type Body = {
   news?: unknown;
   language?: unknown;
+  voiceLanguage?: unknown;
+  subtitleLanguage?: unknown;
   preset?: unknown;
   imageCount?: unknown;
   videoUrl?: unknown;
@@ -24,12 +28,17 @@ const PRESETS = {
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as Body | null;
   const news = typeof body?.news === "string" ? body.news.trim().slice(0, 8000) : "";
-  const language = body?.language === "burmese" ? "burmese" : body?.language === "english" ? "english" : "";
+  const legacy = body?.language === "burmese" ? "burmese" : body?.language === "english" ? "english" : "";
+  const voiceLanguage: Spoken | "" = body?.voiceLanguage === "burmese" || body?.voiceLanguage === "english" ? body.voiceLanguage : legacy;
+  const subtitleLanguage: Caption =
+    body?.subtitleLanguage === "burmese" || body?.subtitleLanguage === "english" || body?.subtitleLanguage === "dual" || body?.subtitleLanguage === "none"
+      ? body.subtitleLanguage
+      : voiceLanguage || "english";
   const preset = body?.preset === "father-son" || body?.preset === "hosts" ? body.preset : "";
   const imageCount = typeof body?.imageCount === "number" ? Math.max(0, Math.min(3, Math.floor(body.imageCount))) : 0;
   const videoUrl = typeof body?.videoUrl === "string" && body.videoUrl.startsWith("https://") ? body.videoUrl : "";
-  if ((news.length < 8 && !videoUrl) || !language || !preset) {
-    return Response.json({ error: "Add a news topic or a video, plus a language and a character preset." }, { status: 400 });
+  if ((news.length < 8 && !videoUrl) || !voiceLanguage || !preset) {
+    return Response.json({ error: "Add a news topic or a video, plus a voice language and a character preset." }, { status: 400 });
   }
 
   const geminiKey = process.env.GEMINI_API_KEY?.trim() ?? "";
@@ -44,25 +53,22 @@ export async function POST(request: Request) {
   const longform = Boolean(videoUrl);
   const system = `You write an original news commentary. Do not copy dialogue, narration, or captions from the source. Describe what happens in the hosts' own words.
 ${PRESETS[preset]}
-${
-  language === "burmese"
-    ? "Write natural spoken Burmese (စကားပြောဟန်) in short subtitle sentences. Do not use formal written Burmese."
-    : "Write natural spoken English in short subtitle sentences."
-}
+"voiceText" is what the hosts speak. Write it as original commentary in ${voiceLanguage === "burmese" ? "natural spoken Burmese (စကားပြောဟန်), not formal written Burmese" : "natural spoken English"}. Do not transcribe the source.
+${subtitleInstruction(subtitleLanguage, voiceLanguage)}
 Host A only asks questions. Host B only explains. Alternate speakers, starting with A.
 ${
   longform
     ? "The source may be up to 5 minutes. Return 25 to 35 short lines that follow the events in order."
     : "Return 8 to 14 short lines."
 }
-Return JSON only, an array of {"speaker":"A"|"B","text":string,"imageIndex":number}.
+Return JSON only, an array of {"speaker":"A"|"B","voiceText":string,"subtitleText":string,"imageIndex":number}.
 imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when there are no images.`;
 
   let raw = "";
   try {
     raw = geminiKey ? await geminiChain(geminiKey, system, news, videoUrl) : await openaiScript(openaiKey, system, news);
   } catch (error) {
-    if (error instanceof QuotaError) return Response.json({ lines: localScript(news, language) });
+    if (error instanceof QuotaError) return Response.json({ lines: localScript(news, voiceLanguage, subtitleLanguage) });
     const message = error instanceof Error ? error.message : "The script could not be written.";
     if (geminiKey && openaiKey) {
       try {
@@ -76,7 +82,7 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
     }
   }
 
-  const lines = parseLines(raw, imageCount);
+  const lines = parseLines(raw, imageCount, subtitleLanguage, voiceLanguage);
   if (!lines) return Response.json({ error: "The script came back in an unexpected shape." }, { status: 502 });
   return Response.json({ lines });
 }
@@ -201,7 +207,20 @@ async function openaiScript(apiKey: string, system: string, news: string) {
   return payload?.choices?.[0]?.message?.content ?? "";
 }
 
-function localScript(news: string, language: "burmese" | "english"): Line[] {
+function subtitleInstruction(subtitle: Caption, voice: Spoken) {
+  if (subtitle === "none") return 'Set every "subtitleText" field to an empty string. Captions are off.';
+  if (subtitle === "dual") return 'Set "subtitleText" to the same line in Burmese, then a newline, then the same line in English.';
+  if (subtitle === voice) return 'Set "subtitleText" to the same words as "voiceText".';
+  return `Set "subtitleText" to a natural ${subtitle === "burmese" ? "spoken Burmese" : "spoken English"} caption of the same line. Keep "voiceText" in the voice language.`;
+}
+
+function captionFor(text: string, voice: Spoken, subtitle: Caption) {
+  if (subtitle === "none") return "";
+  if (subtitle === voice) return text;
+  return "";
+}
+
+function localScript(news: string, language: Spoken, subtitle: Caption): Line[] {
   const parts = news
     .split(language === "burmese" ? /[။!?\n]+/ : /[\n.!?]+/)
     .map((part) => part.replace(/\s+/g, " ").trim())
@@ -214,13 +233,15 @@ function localScript(news: string, language: "burmese" | "english"): Line[] {
       : ["What happened in this story?", "What is the main point?", "What should people know next?"];
   const lines: Line[] = [];
   facts.forEach((fact, index) => {
-    lines.push({ speaker: "A", text: questions[index] ?? questions[0], imageIndex: 0 });
-    lines.push({ speaker: "B", text: fact.slice(0, 240), imageIndex: 0 });
+    const question = questions[index] ?? questions[0];
+    const answer = fact.slice(0, 240);
+    lines.push({ speaker: "A", voiceText: question, subtitleText: captionFor(question, language, subtitle), imageIndex: 0 });
+    lines.push({ speaker: "B", voiceText: answer, subtitleText: captionFor(answer, language, subtitle), imageIndex: 0 });
   });
   return lines.slice(0, 6);
 }
 
-function parseLines(raw: string, imageCount: number): Line[] | null {
+function parseLines(raw: string, imageCount: number, subtitleLanguage: Caption, voiceLanguage: Spoken): Line[] | null {
   const start = raw.indexOf("[");
   const end = raw.lastIndexOf("]");
   const objectStart = raw.indexOf("{");
@@ -240,11 +261,13 @@ function parseLines(raw: string, imageCount: number): Line[] | null {
   const maxIndex = Math.max(imageCount - 1, 0);
   const lines = list.slice(0, 36).flatMap((item): Line[] => {
     if (!item || typeof item !== "object") return [];
-    const record = item as { speaker?: unknown; text?: unknown; imageIndex?: unknown };
+    const record = item as { speaker?: unknown; voiceText?: unknown; text?: unknown; subtitleText?: unknown; subtitle?: unknown; imageIndex?: unknown };
     const speaker = record.speaker === "A" || record.speaker === "B" ? record.speaker : null;
-    const text = typeof record.text === "string" ? record.text.trim().slice(0, 400) : "";
+    const voiceText = (typeof record.voiceText === "string" ? record.voiceText : typeof record.text === "string" ? record.text : "").trim().slice(0, 400);
+    const supplied = (typeof record.subtitleText === "string" ? record.subtitleText : typeof record.subtitle === "string" ? record.subtitle : "").trim().slice(0, 500);
+    const subtitleText = subtitleLanguage === "none" ? "" : supplied || captionFor(voiceText, voiceLanguage, subtitleLanguage);
     const imageIndex = typeof record.imageIndex === "number" && record.imageIndex >= 0 ? Math.min(maxIndex, Math.floor(record.imageIndex)) : 0;
-    return speaker && text ? [{ speaker, text, imageIndex }] : [];
+    return speaker && voiceText ? [{ speaker, voiceText, subtitleText, imageIndex }] : [];
   });
   return lines.length >= 4 ? lines : null;
 }
