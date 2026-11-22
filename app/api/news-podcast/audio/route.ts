@@ -44,32 +44,43 @@ export async function POST(request: Request) {
   await mkdir(directory, { recursive: true });
 
   const clips = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const filePath = path.join(directory, `${String(index).padStart(2, "0")}-${line.speaker}.mp3`);
-    try {
-      const detected = body?.mediaMode === "video" ? line.voiceType : genders[line.speaker];
-      const bytes = await speak(line, language, detected);
-      await writeFile(filePath, bytes);
-      clips.push({
-        speaker: line.speaker,
-        speakerType: line.voiceType,
-        text: line.text,
-        subtitleText: line.subtitleText ?? "",
-        imageIndex: line.imageIndex,
-        startSec: line.startSec,
-        endSec: line.endSec,
-        actualDurationSec: mp3Duration(bytes),
-        path: filePath,
-        audioDataUrl: `data:audio/mpeg;base64,${bytes.toString("base64")}`,
-        durationSec: mp3Duration(bytes),
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "The voice could not be generated.";
-      console.error("[news-podcast] voice failed", message);
-      return Response.json({ error: `Could not voice line ${index + 1}. ${message}`.slice(0, 400), jobId, clips }, { status: 502 });
-    }
+  for (let start = 0; start < lines.length; start += 4) {
+    const batch = lines.slice(start, start + 4);
+    const spoken = await Promise.all(
+      batch.map(async (line, offset) => {
+        const index = start + offset;
+        const detected = body?.mediaMode === "video" ? line.voiceType : genders[line.speaker];
+        let bytes: Buffer | null = null;
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          try {
+            bytes = await speak(line, language, detected);
+            break;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "The voice could not be generated.";
+            console.error("[news-podcast] voice failed", index + 1, attempt, message);
+          }
+        }
+        if (!bytes) return null;
+        const filePath = path.join(directory, `${String(index).padStart(2, "0")}-${line.speaker}.mp3`);
+        await writeFile(filePath, bytes);
+        return {
+          speaker: line.speaker,
+          speakerType: detected,
+          text: line.text,
+          subtitleText: line.subtitleText ?? "",
+          imageIndex: line.imageIndex,
+          startSec: line.startSec,
+          endSec: line.endSec,
+          actualDurationSec: mp3Duration(bytes),
+          path: filePath,
+          audioDataUrl: `data:audio/mpeg;base64,${bytes.toString("base64")}`,
+          durationSec: mp3Duration(bytes),
+        };
+      }),
+    );
+    clips.push(...spoken.filter((clip) => clip !== null));
   }
+  if (clips.length === 0) return Response.json({ error: "The voices could not be generated." }, { status: 502 });
 
   return Response.json({ jobId, clips });
 }
@@ -106,34 +117,44 @@ function parseLines(value: unknown): Line[] | null {
 }
 
 async function speak(line: Line, language: "english" | "burmese", voiceType: VoiceType) {
-  if (language === "burmese") return burmeseSpeak(line, voiceType);
   try {
-    return await edgeSpeak(line, language, voiceType, 10000);
+    return await edgeSpeak(line, language, voiceType, 3500);
   } catch (error) {
-    if (voiceType === "child") {
-      try {
-        return await edgeSpeak(line, language, voiceType, 10000, "en-US-AvaNeural");
-      } catch {
-        return elevenSpeak(line, "female", "eleven_flash_v2_5");
-      }
-    }
     const message = error instanceof Error ? error.message : "Edge TTS failed.";
     console.error("[news-podcast] edge tts failed", message);
-    return elevenSpeak(line, voiceType === "male" ? "male" : "female", "eleven_flash_v2_5");
   }
+  try {
+    return await googleSpeak(line.text, language);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Google TTS failed.";
+    console.error("[news-podcast] google tts failed", message);
+  }
+  return elevenSpeak(line, voiceType === "male" ? "male" : "female", language === "burmese" ? "eleven_v3" : "eleven_flash_v2_5");
 }
 
-async function burmeseSpeak(line: Line, voiceType: VoiceType) {
-  let lastError = "The Burmese voice could not be reached.";
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      return await edgeSpeak(line, "burmese", voiceType, 25000);
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : lastError;
-      console.error("[news-podcast] burmese voice failed", attempt, lastError);
-    }
+function speechChunks(text: string) {
+  const pieces = text.split(/(?<=[။.!?])\s+/).flatMap((part) => {
+    const words = part.trim();
+    if (!words) return [];
+    if (words.length <= 180) return [words];
+    const chunks: string[] = [];
+    for (let index = 0; index < words.length; index += 180) chunks.push(words.slice(index, index + 180));
+    return chunks;
+  });
+  return pieces.length > 0 ? pieces : [text.slice(0, 180)];
+}
+
+async function googleSpeak(text: string, language: "english" | "burmese") {
+  const buffers: Buffer[] = [];
+  for (const chunk of speechChunks(text)) {
+    const url = `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=${language === "burmese" ? "my" : "en"}&q=${encodeURIComponent(chunk)}`;
+    const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) });
+    if (!response.ok) throw new Error(`Google TTS could not speak that line (${response.status}).`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length < 200) throw new Error("Google TTS returned empty audio.");
+    buffers.push(bytes);
   }
-  throw new Error(lastError);
+  return Buffer.concat(buffers);
 }
 
 function edgeVoice(language: "english" | "burmese", voiceType: VoiceType) {
