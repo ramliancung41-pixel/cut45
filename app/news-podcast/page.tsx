@@ -26,6 +26,8 @@ export default function NewsPodcastPage() {
   const [sourcePreview, setSourcePreview] = useState("");
   const [sourceDuration, setSourceDuration] = useState(0);
   const [uploadingVideo, setUploadingVideo] = useState(false);
+  const [optimizeProgress, setOptimizeProgress] = useState(0);
+  const [sourceMeta, setSourceMeta] = useState("");
   const [voiceLanguage, setVoiceLanguage] = useState<Language>("english");
   const [subtitleLanguage, setSubtitleLanguage] = useState<SubtitleLanguage>("english");
   const [preset, setPreset] = useState<Preset>("hosts");
@@ -173,35 +175,122 @@ export default function NewsPodcastPage() {
       setError(duration > 300 ? "Keep the source video under 5 minutes." : "That video could not be read.");
       return;
     }
+    setSourceMeta(`${formatSize(file.size)} · ${formatClock(duration)}`);
+    setSourceDuration(duration);
     setUploadingVideo(true);
+    setOptimizeProgress(0);
     setError("");
+    let uploadFile = file;
+    let previewUrl = localUrl;
     try {
+      if (file.size > 42 * 1024 * 1024) {
+        uploadFile = await compressStudioVideo(file, duration, setOptimizeProgress);
+        if (uploadFile.size > 48 * 1024 * 1024) {
+          throw new Error("This clip is still over 48 MB after optimizing. Use a shorter clip or a lower-resolution file.");
+        }
+        previewUrl = URL.createObjectURL(uploadFile);
+        URL.revokeObjectURL(localUrl);
+        setSourceMeta(`${formatSize(uploadFile.size)} · ${formatClock(duration)}`);
+      }
       const ticketResponse = await fetch("/api/news-podcast/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contentType: file.type }),
+        body: JSON.stringify({ contentType: uploadFile.type || "video/webm" }),
       });
       const ticket = (await ticketResponse.json().catch(() => null)) as { path?: string; token?: string; publicUrl?: string; error?: string } | null;
       if (!ticketResponse.ok || !ticket?.path || !ticket.token || !ticket.publicUrl) {
         throw new Error(ticket?.error ?? "The video upload could not be started.");
       }
-      const uploaded = await createSupabaseBrowserClient().storage.from("user_assets").uploadToSignedUrl(ticket.path, ticket.token, file);
+      const uploaded = await createSupabaseBrowserClient().storage.from("user_assets").uploadToSignedUrl(ticket.path, ticket.token, uploadFile);
       if (uploaded.error) throw new Error(uploaded.error.message);
       setSourcePreview((current) => {
         if (current) URL.revokeObjectURL(current);
-        return localUrl;
+        return previewUrl;
       });
       setSourceVideoUrl(ticket.publicUrl);
       setSourceDuration(duration);
     } catch (caught) {
+      if (previewUrl !== localUrl) URL.revokeObjectURL(previewUrl);
       URL.revokeObjectURL(localUrl);
       setError(caught instanceof Error ? caught.message : "The video could not be uploaded.");
     } finally {
       setUploadingVideo(false);
+      setOptimizeProgress(0);
     }
   }
 
-  function readImage(file: File | undefined, onReady: (value: string) => void) {
+  function formatSize(bytes: number) {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatClock(seconds: number) {
+  const whole = Math.max(0, Math.round(seconds));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+function compressStudioVideo(file: File, duration: number, onProgress: (percent: number) => void) {
+  return new Promise<File>((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    video.src = url;
+    video.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("That video could not be optimized."));
+    };
+    video.onloadeddata = () => {
+      const longest = Math.max(video.videoWidth, video.videoHeight, 1);
+      const scale = Math.min(1, 1280 / longest);
+      const width = Math.max(2, Math.round((video.videoWidth * scale) / 2) * 2);
+      const height = Math.max(2, Math.round((video.videoHeight * scale) / 2) * 2);
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context || typeof canvas.captureStream !== "function" || typeof MediaRecorder === "undefined") {
+        URL.revokeObjectURL(url);
+        reject(new Error("This browser cannot optimize the video."));
+        return;
+      }
+      const mime = ["video/webm;codecs=vp8", "video/webm", "video/mp4"].find((item) => MediaRecorder.isTypeSupported(item)) ?? "";
+      if (!mime) {
+        URL.revokeObjectURL(url);
+        reject(new Error("This browser cannot optimize the video."));
+        return;
+      }
+      const recorder = new MediaRecorder(canvas.captureStream(24), { mimeType: mime, videoBitsPerSecond: 1_200_000 });
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
+      recorder.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("The video could not be optimized."));
+      };
+      recorder.onstop = () => {
+        URL.revokeObjectURL(url);
+        const type = mime.startsWith("video/mp4") ? "video/mp4" : "video/webm";
+        onProgress(100);
+        resolve(new File([new Blob(chunks, { type })], type === "video/mp4" ? "news.mp4" : "news.webm", { type }));
+      };
+      const draw = () => {
+        context.drawImage(video, 0, 0, width, height);
+        onProgress(Math.min(99, Math.round((video.currentTime / Math.max(duration, 0.1)) * 100)));
+        if (!video.ended && !video.paused) requestAnimationFrame(draw);
+      };
+      video.onended = () => recorder.stop();
+      recorder.start(500);
+      void video.play().then(draw).catch(() => {
+        URL.revokeObjectURL(url);
+        reject(new Error("The video could not be played for optimizing."));
+      });
+    };
+  });
+}
+
+function readImage(file: File | undefined, onReady: (value: string) => void) {
     if (!file || !/^image\/(png|jpeg|webp)$/.test(file.type)) return;
     void compressImage(file).then(onReady).catch(() => undefined);
   }
@@ -325,11 +414,19 @@ export default function NewsPodcastPage() {
                 ) : (
                   <>
                     <UploadIcon />
-                    <span className="text-sm text-zinc-300">{uploadingVideo ? "Uploading..." : "Drop a video or click to choose"}</span>
+                    <span className="text-sm text-zinc-300">
+                      {optimizeProgress > 0
+                        ? `Optimizing video for studio upload... ${optimizeProgress}%`
+                        : uploadingVideo
+                          ? "Uploading..."
+                          : "Drop a video or click to choose"}
+                    </span>
                     <span className="text-xs text-zinc-500">MP4, WebM, or MOV · 5 minutes maximum</span>
                   </>
                 )}
-                {sourceVideoUrl ? <span className="text-xs text-emerald-300">Uploaded · {Math.round(sourceDuration)}s</span> : null}
+                {sourceMeta ? <span className="text-xs text-zinc-300">{sourceMeta}</span> : null}
+                {optimizeProgress > 0 ? <span className="text-xs text-indigo-200">Optimizing video for studio upload... {optimizeProgress}%</span> : null}
+                {sourceVideoUrl ? <span className="text-xs text-emerald-300">Uploaded · {formatClock(sourceDuration)}</span> : null}
               </label>
             )}
           </section>
