@@ -167,7 +167,7 @@ async function uploadVideoToGemini(apiKey: string, bytes: Buffer, mime: string) 
       "X-Goog-Upload-Offset": "0",
       "X-Goog-Upload-Command": "upload, finalize",
     },
-    body: bytes,
+    body: new Uint8Array(bytes),
   });
   const payload = (await uploaded.json().catch(() => null)) as { file?: { uri?: string; name?: string } } | null;
   const uri = payload?.file?.uri ?? "";
