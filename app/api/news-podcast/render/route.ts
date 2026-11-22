@@ -205,10 +205,11 @@ async function renderDub(source: string, cues: DubCue[], directory: string, outp
   }
   const mix = cues.length === 1 ? "" : `${labels.join("")}amix=inputs=${cues.length}:duration=longest:dropout_transition=0:normalize=0[aout]`;
   const audioLabel = cues.length === 1 ? labels[0] : "[aout]";
+  const duration = Math.max(...cues.map((cue) => cue.endSec), 1).toFixed(2);
   const filter = [
     "[0:v]split[bg][fg]",
     "[bg]scale=36:64:force_original_aspect_ratio=increase,crop=36:64,scale=720:1280:flags=bilinear,eq=brightness=-0.12:saturation=1.1,setsar=1[blur]",
-    "[fg]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1[fit]",
+    `[fg]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1,drawbox=x=0:y=0:w=iw:h=ih:color=white@0.8:t=2,drawbox=x=2:y=ih-6:w='max(2\\,(iw-4)*t/${duration})':h=4:color=white@0.95:t=fill[fit]`,
     "[blur][fit]overlay=(W-w)/2:(H-h)/2[vout]",
     ...audioFilters,
     mix,
@@ -217,8 +218,7 @@ async function renderDub(source: string, cues: DubCue[], directory: string, outp
     .join(";");
   const silentPath = path.join(directory, "dubbed.mp4");
   const assPath = path.join(directory, "subtitles.ass");
-  await writeFile(assPath, assFile(cues.map((cue) => ({ start: cue.startSec, end: cue.endSec, text: cue.text })), true));
-  const duration = Math.max(...cues.map((cue) => cue.endSec)).toFixed(2);
+  await writeFile(assPath, assFile(cues.map((cue) => ({ start: cue.startSec, end: cue.endSec, text: cue.text })), true, Number(duration)));
   await runFfmpeg([
     ...inputs,
     "-filter_complex",
@@ -416,7 +416,8 @@ async function renderSegment(input: {
   await runFfmpeg(args);
 }
 
-function assFile(cues: Array<{ start: number; end: number; text: string }>, fullFrame = false) {
+function assFile(cues: Array<{ start: number; end: number; text: string }>, fullFrame = false, durationSec = 0) {
+  const brand = fullFrame ? `Dialogue: 0,${assTime(0)},${assTime(Math.max(durationSec, 1))},Brand,,0,0,0,,CUT45 STUDIO\n` : "";
   const events = cues
     .filter((cue) => cue.text.trim())
     .map((cue) => {
@@ -434,10 +435,11 @@ WrapStyle: 0
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: News,Noto Sans Myanmar,46,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,70,70,${fullFrame ? 90 : 430},1
 Style: Dual,Noto Sans Myanmar,36,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,70,70,${fullFrame ? 70 : 400},1
+Style: Brand,Noto Sans Myanmar,22,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,2,0,1,0,0,8,40,40,64,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-${events}
+${brand}${events}
 `;
 }
 
