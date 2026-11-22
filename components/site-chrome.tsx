@@ -32,21 +32,7 @@ export function SiteHeader({ active }: { active?: "pricing" | "agency" }) {
             <span className="text-sm font-medium tracking-tight">Cut45</span>
           </Link>
           <nav aria-label="Main" className="flex items-center gap-3 sm:gap-6">
-            <Link
-              href="/pricing"
-              aria-current={active === "pricing" ? "page" : undefined}
-              className={`text-sm ${active === "pricing" ? "text-white" : "text-white/60 hover:text-white"}`}
-            >
-              Pricing
-            </Link>
-            <Link
-              href="/agency"
-              aria-current={active === "agency" ? "page" : undefined}
-              className={`text-sm ${active === "agency" ? "text-white" : "text-white/60 hover:text-white"}`}
-            >
-              Agency
-            </Link>
-            <Link href="/login?next=/dashboard" className="hidden text-sm text-white/60 hover:text-white sm:inline">
+            <Link href="/login?next=/news-podcast" className="hidden text-sm text-white/60 hover:text-white sm:inline">
               Log in
             </Link>
             <button
@@ -69,15 +55,9 @@ export function SiteFooter() {
   return (
     <footer className="border-t border-gray-800">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-3 py-8 text-sm text-white/55 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-        <p>Cut45 · AI website builder</p>
+        <p>Cut45 · AI News Studio</p>
         <nav aria-label="Footer" className="flex flex-wrap items-center gap-5">
-          <Link href="/pricing" className="hover:text-white">
-            Pricing
-          </Link>
-          <Link href="/agency" className="hover:text-white">
-            Agency
-          </Link>
-          <Link href="/login?next=/dashboard" className="hover:text-white">
+          <Link href="/login?next=/news-podcast" className="hover:text-white">
             Log in
           </Link>
           <a href="mailto:support@codeandbuild.tech" className="hover:text-white">

@@ -33,6 +33,7 @@ export async function POST(request: Request) {
     hostAImage?: unknown;
     hostBImage?: unknown;
     videos?: unknown;
+    sourceVideoUrl?: unknown;
   } | null;
   const jobId = typeof body?.jobId === "string" && /^[a-zA-Z0-9-]{8,80}$/.test(body.jobId) ? body.jobId : "";
   const title = typeof body?.title === "string" ? body.title.trim().slice(0, 120) : "News";
@@ -67,6 +68,16 @@ export async function POST(request: Request) {
   if (!hosts.A) hosts.A = await solidPortrait(path.join(directory, "host_a.png"), "0x243044");
   if (!hosts.B) hosts.B = await solidPortrait(path.join(directory, "host_b.png"), "0x3a2a44");
   const images = await Promise.all(imageUrls.map((url, index) => downloadImage(url, path.join(directory, `news-${index}`))));
+  const sourceVideoUrl = typeof body?.sourceVideoUrl === "string" && body.sourceVideoUrl.startsWith("https://") ? body.sourceVideoUrl : "";
+  let sourceVideo = "";
+  if (sourceVideoUrl) {
+    try {
+      sourceVideo = await downloadSourceVideo(sourceVideoUrl, path.join(directory, "source.mp4"));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The source video could not be downloaded.";
+      return Response.json({ error: message }, { status: 502 });
+    }
+  }
 
   const parts: string[] = [];
   let cursor = 0;
@@ -77,7 +88,7 @@ export async function POST(request: Request) {
     const image = images[segment.imageIndex] || "";
     try {
       segment.audioPath = await writeAudio(segment.audioDataUrl, path.join(directory, `voice-${String(index).padStart(2, "0")}.mp3`));
-      await renderSegment({ segment, image, title, output: file, hosts });
+      await renderSegment({ segment, image, title, output: file, hosts, sourceVideo, sourceStart: cursor });
     } catch (error) {
       const message = error instanceof Error ? error.message : "ffmpeg";
       return Response.json({ error: `Could not assemble segment ${index + 1}. ${message}`.slice(0, 500) }, { status: 502 });
@@ -130,7 +141,7 @@ export async function POST(request: Request) {
 }
 
 function parseSegments(value: unknown, texts: string[]): Segment[] | null {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 14) return null;
+  if (!Array.isArray(value) || value.length === 0 || value.length > 36) return null;
   const segments: Segment[] = [];
   for (let index = 0; index < value.length; index += 1) {
     const item = value[index];
@@ -200,14 +211,33 @@ async function downloadImage(url: string, filePath: string) {
   }
 }
 
-async function renderSegment(input: { segment: Segment; image: string; title: string; output: string; hosts: { A: string; B: string } }) {
-  const { segment, image, output, hosts } = input;
+async function downloadSourceVideo(url: string, filePath: string) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`The source video could not be downloaded (${response.status}).`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.byteLength > 80_000_000) throw new Error("The source video must be under 80 MB.");
+  await writeFile(filePath, bytes);
+  return filePath;
+}
+
+async function renderSegment(input: {
+  segment: Segment;
+  image: string;
+  title: string;
+  output: string;
+  hosts: { A: string; B: string };
+  sourceVideo: string;
+  sourceStart: number;
+}) {
+  const { segment, image, output, hosts, sourceVideo, sourceStart } = input;
   const duration = segment.durationSec.toFixed(2);
   const frames = Math.max(8, Math.round(segment.durationSec * 30));
   const talkingA = segment.speaker === "A";
-  const news = image
-    ? `[1:v]scale=1400:820:force_original_aspect_ratio=increase,crop=1400:820,zoompan=z='min(1+0.0007*on,1.12)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=960x560:fps=30[news]`
-    : `[1:v]scale=960:560,setsar=1[news]`;
+  const news = sourceVideo
+    ? `[1:v]scale=960:560:force_original_aspect_ratio=increase,crop=960:560,setsar=1,fps=30[news]`
+    : image
+      ? `[1:v]scale=1400:820:force_original_aspect_ratio=increase,crop=1400:820,zoompan=z='min(1+0.0007*on,1.12)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=960x560:fps=30[news]`
+      : `[1:v]scale=960:560,setsar=1[news]`;
   const filter = [
     news,
     hostFilter(2, talkingA, frames, "hosta"),
@@ -224,7 +254,11 @@ async function renderSegment(input: { segment: Segment; image: string; title: st
     "lavfi",
     "-i",
     `color=c=0x12161f:s=1080x1920:r=30:d=${duration}`,
-    ...(image ? ["-loop", "1", "-t", duration, "-i", image] : ["-f", "lavfi", "-i", `color=c=0x1a202c:s=960x560:r=30:d=${duration}`]),
+    ...(sourceVideo
+      ? ["-ss", sourceStart.toFixed(2), "-t", duration, "-an", "-i", sourceVideo]
+      : image
+        ? ["-loop", "1", "-t", duration, "-i", image]
+        : ["-f", "lavfi", "-i", `color=c=0x1a202c:s=960x560:r=30:d=${duration}`]),
     "-loop",
     "1",
     "-t",

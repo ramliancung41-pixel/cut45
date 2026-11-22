@@ -21,7 +21,7 @@ export async function POST(request: Request) {
 }
 
 function parseClips(value: unknown): Clip[] | null {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 14) return null;
+  if (!Array.isArray(value) || value.length === 0 || value.length > 36) return null;
   const clips: Clip[] = [];
   for (const item of value) {
     if (!item || typeof item !== "object") return null;

@@ -2,10 +2,13 @@ import { createClient } from "@supabase/supabase-js";
 import { NextResponse, type NextRequest } from "next/server";
 import { SUPABASE_ACCESS_COOKIE, SUPABASE_REFRESH_COOKIE, withSupabaseCookies } from "@/lib/auth-cookie";
 import { loginDestination } from "@/lib/billing";
-import { isStudioPath } from "@/lib/studio-paths";
+import { isRetiredBuilderPath, isStudioPath } from "@/lib/studio-paths";
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  if (pathname === "/agency" || pathname.startsWith("/agency/")) {
+    return NextResponse.redirect(new URL("/", request.url));
+  }
   const studio = isStudioPath(pathname);
   const login = pathname === "/login";
   if (!studio && !login) return NextResponse.next();
@@ -34,19 +37,8 @@ export async function proxy(request: NextRequest) {
     return applySession(response, session);
   }
 
-  if (
-    pathname === "/create-video" ||
-    pathname.startsWith("/create-video/") ||
-    pathname === "/generator" ||
-    pathname.startsWith("/generator/") ||
-    pathname === "/create" ||
-    pathname.startsWith("/create/") ||
-    pathname === "/editor" ||
-    pathname.startsWith("/editor/") ||
-    pathname === "/agent" ||
-    pathname.startsWith("/agent/")
-  ) {
-    const response = NextResponse.redirect(new URL("/builder", request.url));
+  if (studio && isRetiredBuilderPath(pathname)) {
+    const response = NextResponse.redirect(new URL("/news-podcast", request.url));
     return applySession(response, session);
   }
 

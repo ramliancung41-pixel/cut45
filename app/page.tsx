@@ -7,10 +7,9 @@ import { userFromAccessToken } from "@/lib/supabase/server";
 
 export const metadata: Metadata = {
   title: {
-    absolute: "Cut45 — AI Website Builder",
+    absolute: "Cut45 — AI News Studio",
   },
-  description:
-    "Design landing pages in the studio, with templates, a builder, and saved assets.",
+  description: "Sign in to turn a news story into a vertical host video.",
 };
 
 type LandingSearch = Record<string, string | string[] | undefined>;

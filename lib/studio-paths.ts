@@ -17,23 +17,12 @@ const STUDIO_PATHS = [
   "/brand",
 ] as const;
 
-export function isStudioPath(pathname: string) {
-  return STUDIO_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+export function isRetiredBuilderPath(pathname: string) {
+  return STUDIO_PATHS.some((path) => path !== "/credits" && path !== "/settings" && (pathname === path || pathname.startsWith(`${path}/`)));
 }
 
-function isBuilderAlias(next: string) {
-  return (
-    next === "/create-video" ||
-    next.startsWith("/create-video/") ||
-    next === "/create" ||
-    next.startsWith("/create/") ||
-    next === "/generator" ||
-    next.startsWith("/generator/") ||
-    next === "/editor" ||
-    next.startsWith("/editor/") ||
-    next === "/agent" ||
-    next.startsWith("/agent/")
-  );
+export function isStudioPath(pathname: string) {
+  return STUDIO_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
 }
 
 function pathOnly(next: string) {
@@ -51,7 +40,6 @@ export function studioDestination(next: string | null) {
   const path = pathOnly(next);
   const search = searchOf(next);
   if (path === "/news-podcast" || path.startsWith("/news-podcast/")) return `${path}${search}`;
-  if (isBuilderAlias(path)) return `/builder${search}`;
-  if (isStudioPath(path)) return `${path}${search}`;
+  if (path === "/credits" || path.startsWith("/credits/") || path === "/settings" || path.startsWith("/settings/")) return `${path}${search}`;
   return "/news-podcast";
 }

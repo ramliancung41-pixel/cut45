@@ -5,6 +5,8 @@ import Link from "next/link";
 import { CreditBar } from "@/components/credit-provider";
 import { useStudioAccount } from "@/components/profile-credit-bar";
 
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
+
 const STEPS = ["Writing script", "Recording voices", "3D lip-sync", "Rendering"] as const;
 
 type Line = { speaker: "A" | "B"; text: string; imageIndex: number };
@@ -13,11 +15,16 @@ type Language = "burmese" | "english";
 type Gender = "male" | "female";
 type Preset = "father-son" | "hosts";
 
-const glass = "bg-white/[0.03] backdrop-blur-2xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.45)] rounded-2xl";
+const glass = "bg-white/[0.04] backdrop-blur-2xl border border-white/[0.12] shadow-[0_8px_40px_rgba(0,0,0,0.6)] ring-1 ring-inset ring-white/10 rounded-2xl";
 
 export default function NewsPodcastPage() {
   const [news, setNews] = useState("");
   const [images, setImages] = useState<string[]>(["", "", ""]);
+  const [mediaMode, setMediaMode] = useState<"images" | "video">("images");
+  const [sourceVideoUrl, setSourceVideoUrl] = useState("");
+  const [sourcePreview, setSourcePreview] = useState("");
+  const [sourceDuration, setSourceDuration] = useState(0);
+  const [uploadingVideo, setUploadingVideo] = useState(false);
   const [language, setLanguage] = useState<Language>("english");
   const [preset, setPreset] = useState<Preset>("hosts");
   const [hostAGender, setHostAGender] = useState<Gender>("male");
@@ -51,7 +58,7 @@ export default function NewsPodcastPage() {
       const scriptResponse = await fetch("/api/news-podcast/script", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ news, language, preset, imageCount: newsImages.length }),
+        body: JSON.stringify({ news, language, preset, imageCount: newsImages.length, videoUrl: mediaMode === "video" ? sourceVideoUrl : "" }),
       });
       const script = (await scriptResponse.json().catch(() => null)) as { lines?: Line[]; error?: string } | null;
       if (!scriptResponse.ok || !script?.lines) throw new Error(script?.error ?? "The script could not be written.");
@@ -83,7 +90,8 @@ export default function NewsPodcastPage() {
           jobId: audio.jobId,
           title: news.trim().slice(0, 120),
           lines: script.lines,
-          imageUrls: newsImages,
+          imageUrls: mediaMode === "images" ? newsImages : [],
+          sourceVideoUrl: mediaMode === "video" ? sourceVideoUrl : "",
           hostAGender,
           hostBGender,
           hostAImage,
@@ -138,17 +146,63 @@ export default function NewsPodcastPage() {
     }
   }
 
+  async function acceptSourceVideo(file: File | undefined) {
+    if (!file || !/^video\/(mp4|webm|quicktime)$/.test(file.type)) {
+      setError("Upload an MP4, WebM, or MOV.");
+      return;
+    }
+    const localUrl = URL.createObjectURL(file);
+    const duration = await new Promise<number>((resolve) => {
+      const probe = document.createElement("video");
+      probe.preload = "metadata";
+      probe.onloadedmetadata = () => resolve(Number.isFinite(probe.duration) ? probe.duration : 0);
+      probe.onerror = () => resolve(0);
+      probe.src = localUrl;
+    });
+    if (duration <= 0 || duration > 300) {
+      URL.revokeObjectURL(localUrl);
+      setError(duration > 300 ? "Keep the source video under 5 minutes." : "That video could not be read.");
+      return;
+    }
+    setUploadingVideo(true);
+    setError("");
+    try {
+      const ticketResponse = await fetch("/api/news-podcast/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contentType: file.type }),
+      });
+      const ticket = (await ticketResponse.json().catch(() => null)) as { path?: string; token?: string; publicUrl?: string; error?: string } | null;
+      if (!ticketResponse.ok || !ticket?.path || !ticket.token || !ticket.publicUrl) {
+        throw new Error(ticket?.error ?? "The video upload could not be started.");
+      }
+      const uploaded = await createSupabaseBrowserClient().storage.from("user_assets").uploadToSignedUrl(ticket.path, ticket.token, file);
+      if (uploaded.error) throw new Error(uploaded.error.message);
+      setSourcePreview((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return localUrl;
+      });
+      setSourceVideoUrl(ticket.publicUrl);
+      setSourceDuration(duration);
+    } catch (caught) {
+      URL.revokeObjectURL(localUrl);
+      setError(caught instanceof Error ? caught.message : "The video could not be uploaded.");
+    } finally {
+      setUploadingVideo(false);
+    }
+  }
+
   function readImage(file: File | undefined, onReady: (value: string) => void) {
     if (!file || !/^image\/(png|jpeg|webp)$/.test(file.type)) return;
     void compressImage(file).then(onReady).catch(() => undefined);
   }
 
   return (
-    <main className="relative min-h-[100dvh] overflow-hidden bg-[#07090e] text-zinc-100">
+    <main className="relative min-h-[100dvh] overflow-hidden bg-[#070914] text-zinc-100">
       <NewsHeader />
-      <div className="pointer-events-none absolute -top-40 left-1/4 h-[28rem] w-[28rem] rounded-full bg-indigo-600/20 blur-[120px]" />
-      <div className="pointer-events-none absolute top-40 right-0 h-[24rem] w-[24rem] rounded-full bg-blue-500/15 blur-[120px]" />
-      <div className="pointer-events-none absolute bottom-0 left-0 h-[22rem] w-[22rem] rounded-full bg-violet-600/15 blur-[120px]" />
+      <div className="pointer-events-none absolute -top-48 left-1/3 h-[36rem] w-[36rem] rounded-full bg-indigo-500/25 blur-[140px]" />
+      <div className="pointer-events-none absolute top-24 right-0 h-[28rem] w-[28rem] rounded-full bg-blue-500/15 blur-[130px]" />
+      <div className="pointer-events-none absolute bottom-0 left-0 h-[24rem] w-[24rem] rounded-full bg-violet-600/20 blur-[130px]" />
 
       <div className="relative mx-auto grid w-full max-w-6xl gap-8 px-5 py-10 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="flex flex-col gap-6">
@@ -171,59 +225,104 @@ export default function NewsPodcastPage() {
           </label>
 
           <section className={`${glass} p-4`}>
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-medium">News Media</h2>
-              <span className="text-xs text-zinc-500">Up to 3 images</span>
-            </div>
-            <input
-              ref={newsPicker}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              className="hidden"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                const index = slotRef.current;
-                event.target.value = "";
-                readImage(file, (value) => {
-                  setImages((current) => current.map((item, itemIndex) => (itemIndex === index ? value : item)));
-                });
-              }}
-            />
-            <div className="grid grid-cols-3 gap-3">
-              {images.map((value, index) => (
-                <div key={index} className="relative">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-sm font-medium">Media</h2>
+              <div className="grid grid-cols-2 rounded-full border border-white/10 bg-black/30 p-1 text-xs">
+                {(["images", "video"] as const).map((mode) => (
                   <button
+                    key={mode}
                     type="button"
-                    onClick={() => {
-                      if (value) return;
-                      slotRef.current = index;
-                      newsPicker.current?.click();
-                    }}
-                    className="aspect-[4/3] w-full overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.03] transition hover:border-indigo-300/40 hover:shadow-[0_0_24px_rgba(99,102,241,0.25)]"
+                    onClick={() => setMediaMode(mode)}
+                    className={`h-8 rounded-full px-3 ${mediaMode === mode ? "bg-white text-black" : "text-zinc-400"}`}
                   >
-                    {value ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={value} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                      <span className="flex h-full flex-col items-center justify-center gap-2 text-zinc-500">
-                        <UploadIcon />
-                        <span className="text-[11px]">Add image</span>
-                      </span>
-                    )}
+                    {mode === "images" ? "Images (up to 3)" : "Video (up to 5 min)"}
                   </button>
-                  {value ? (
-                    <button
-                      type="button"
-                      aria-label={`Remove image ${index + 1}`}
-                      onClick={() => setImages((current) => current.map((item, itemIndex) => (itemIndex === index ? "" : item)))}
-                      className="absolute top-2 right-2 grid h-6 w-6 place-items-center rounded-full border border-white/20 bg-black/70 text-sm"
-                    >
-                      ×
-                    </button>
-                  ) : null}
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
+            {mediaMode === "images" ? (
+              <>
+                <input
+                  ref={newsPicker}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    const index = slotRef.current;
+                    event.target.value = "";
+                    readImage(file, (value) => {
+                      setImages((current) => current.map((item, itemIndex) => (itemIndex === index ? value : item)));
+                    });
+                  }}
+                />
+                <div className="grid grid-cols-3 gap-3">
+                  {images.map((value, index) => (
+                    <div key={index} className="relative">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (value) return;
+                          slotRef.current = index;
+                          newsPicker.current?.click();
+                        }}
+                        className="aspect-[4/3] w-full overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] ring-1 ring-inset ring-white/10 transition hover:border-indigo-300/50 hover:shadow-[0_0_28px_rgba(99,102,241,0.28)]"
+                      >
+                        {value ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={value} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <span className="flex h-full flex-col items-center justify-center gap-2 text-zinc-500">
+                            <UploadIcon />
+                            <span className="text-[11px]">Add image</span>
+                          </span>
+                        )}
+                      </button>
+                      {value ? (
+                        <button
+                          type="button"
+                          aria-label={`Remove image ${index + 1}`}
+                          onClick={() => setImages((current) => current.map((item, itemIndex) => (itemIndex === index ? "" : item)))}
+                          className="absolute top-2 right-2 grid h-6 w-6 place-items-center rounded-full border border-white/20 bg-black/70 text-sm"
+                        >
+                          ×
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <label
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  void acceptSourceVideo(event.dataTransfer.files?.[0]);
+                }}
+                className="flex min-h-52 cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-white/15 bg-white/[0.03] p-4 text-center ring-1 ring-inset ring-white/10 transition hover:border-indigo-300/50 hover:shadow-[0_0_32px_rgba(99,102,241,0.25)]"
+              >
+                <input
+                  type="file"
+                  accept="video/mp4,video/webm,video/quicktime"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    void acceptSourceVideo(file);
+                  }}
+                />
+                {sourcePreview ? (
+                  <video src={sourcePreview} controls className="max-h-64 w-full rounded-xl bg-black" />
+                ) : (
+                  <>
+                    <UploadIcon />
+                    <span className="text-sm text-zinc-300">{uploadingVideo ? "Uploading..." : "Drop a video or click to choose"}</span>
+                    <span className="text-xs text-zinc-500">MP4, WebM, or MOV · 5 minutes maximum</span>
+                  </>
+                )}
+                {sourceVideoUrl ? <span className="text-xs text-emerald-300">Uploaded · {Math.round(sourceDuration)}s</span> : null}
+              </label>
+            )}
           </section>
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -258,7 +357,7 @@ export default function NewsPodcastPage() {
 
           <button
             type="button"
-            disabled={running || news.trim().length < 8}
+            disabled={running || (news.trim().length < 8 && !sourceVideoUrl)}
             onClick={() => void generateVideo()}
             className="h-12 rounded-2xl bg-gradient-to-r from-indigo-500 via-blue-500 to-violet-500 text-sm font-semibold text-white shadow-[0_0_32px_rgba(99,102,241,0.45)] transition hover:brightness-110 disabled:opacity-40"
           >
@@ -349,18 +448,18 @@ function HostCard({
   const picker = useRef<HTMLInputElement>(null);
 
   return (
-    <section className={`${glass} flex flex-col gap-4 p-4`}>
+    <section className={`${glass} flex flex-col gap-4 p-4 transition hover:shadow-[0_0_28px_rgba(129,140,248,0.18)]`}>
       <div>
         <h2 className="text-sm font-medium">{title}</h2>
         <p className="text-xs text-zinc-500">{detail}</p>
       </div>
-      <div className="grid grid-cols-2 rounded-full border border-white/[0.08] bg-black/30 p-1 text-xs">
+      <div className="grid grid-cols-2 rounded-full border border-white/10 bg-black/40 p-1 text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
         {(["male", "female"] as const).map((option) => (
           <button
             key={option}
             type="button"
             onClick={() => onGender(option)}
-            className={`h-8 rounded-full capitalize ${gender === option ? "bg-white text-black" : "text-zinc-400"}`}
+            className={`h-8 rounded-full capitalize transition ${gender === option ? "bg-gradient-to-r from-white to-indigo-100 text-black shadow-[0_0_16px_rgba(255,255,255,0.25)]" : "text-zinc-400 hover:text-white"}`}
           >
             {option}
           </button>
@@ -384,7 +483,7 @@ function HostCard({
           onClick={() => {
             if (!image) picker.current?.click();
           }}
-          className="aspect-square w-full overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.03] transition hover:border-violet-300/40 hover:shadow-[0_0_24px_rgba(139,92,246,0.25)]"
+          className="aspect-square w-full overflow-hidden rounded-2xl border border-white/12 bg-white/[0.03] ring-1 ring-inset ring-white/10 transition hover:border-violet-300/60 hover:shadow-[0_0_28px_rgba(139,92,246,0.35)]"
         >
           {image ? (
             // eslint-disable-next-line @next/next/no-img-element

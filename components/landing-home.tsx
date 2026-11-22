@@ -1,32 +1,29 @@
 "use client";
 
 import Link from "next/link";
-import { BuilderSlideshow } from "@/components/builder-slideshow";
-import { SiteFooter, SiteHeader } from "@/components/site-chrome";
 
 export function LandingHome() {
   return (
-    <div className="min-h-dvh bg-black text-white">
-      <SiteHeader />
-
-      <main>
-        <section className="mx-auto w-full max-w-7xl px-3 pt-10 pb-16 sm:px-6 sm:pt-16">
-          <h1 className="max-w-4xl text-4xl font-medium tracking-tight text-balance sm:text-6xl">
-            Choose a template, edit it live, then publish.
-          </h1>
-          <p className="mt-4 max-w-2xl text-sm leading-6 text-white/55">
-            Three steps from a blank studio to a page you can export or put on a custom domain.{" "}
-            <Link href="/pricing" className="text-white underline decoration-white/30 underline-offset-4 hover:decoration-white">
-              See pricing
-            </Link>
-          </p>
-          <div className="mt-8 sm:mt-12">
-            <BuilderSlideshow />
-          </div>
-        </section>
-      </main>
-
-      <SiteFooter />
-    </div>
+    <main className="relative min-h-[100dvh] overflow-hidden bg-[#07090e] text-zinc-100">
+      <div className="pointer-events-none absolute -top-32 left-1/4 h-96 w-96 rounded-full bg-indigo-600/20 blur-[120px]" />
+      <div className="pointer-events-none absolute right-0 bottom-0 h-80 w-80 rounded-full bg-violet-600/15 blur-[120px]" />
+      <div className="relative mx-auto flex min-h-[100dvh] w-full max-w-3xl flex-col justify-center px-5 py-16">
+        <p className="text-xs tracking-[0.22em] text-zinc-500 uppercase">Cut45</p>
+        <h1 className="mt-4 bg-gradient-to-r from-white via-indigo-200 to-violet-300 bg-clip-text text-4xl font-semibold tracking-tight text-transparent sm:text-6xl">
+          AI News Studio
+        </h1>
+        <p className="mt-4 max-w-xl text-sm leading-6 text-zinc-400">
+          Turn a news story into a vertical host conversation, with Burmese or English voices and a finished video.
+        </p>
+        <div className="mt-8">
+          <Link
+            href="/login?next=/news-podcast"
+            className="inline-flex h-12 items-center rounded-2xl bg-gradient-to-r from-indigo-500 via-blue-500 to-violet-500 px-6 text-sm font-semibold text-white"
+          >
+            Sign in
+          </Link>
+        </div>
+      </div>
+    </main>
   );
 }

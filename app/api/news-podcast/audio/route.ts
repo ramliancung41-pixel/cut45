@@ -59,7 +59,7 @@ export async function POST(request: Request) {
 }
 
 function parseLines(value: unknown): Line[] | null {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 14) return null;
+  if (!Array.isArray(value) || value.length === 0 || value.length > 36) return null;
   const lines: Line[] = [];
   for (const item of value) {
     if (!item || typeof item !== "object") return null;
@@ -74,18 +74,27 @@ function parseLines(value: unknown): Line[] | null {
 }
 
 async function speak(line: Line, language: "english" | "burmese", gender: Gender) {
+  if (language === "burmese") return burmeseSpeak(line, gender);
   try {
-    return await Promise.race([
-      edgeSpeak(line, language, gender),
-      new Promise<Buffer>((_, reject) => {
-        setTimeout(() => reject(new Error("Edge TTS timed out.")), 10000);
-      }),
-    ]);
+    return await edgeSpeak(line, language, gender, 10000);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Edge TTS failed.";
     console.error("[news-podcast] edge tts failed", message);
-    return elevenSpeak(line, gender, language === "burmese" ? "eleven_v3" : "eleven_flash_v2_5");
+    return elevenSpeak(line, gender, "eleven_flash_v2_5");
   }
+}
+
+async function burmeseSpeak(line: Line, gender: Gender) {
+  let lastError = "The Burmese voice could not be reached.";
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await edgeSpeak(line, "burmese", gender, 25000);
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : lastError;
+      console.error("[news-podcast] burmese voice failed", attempt, lastError);
+    }
+  }
+  throw new Error(lastError);
 }
 
 function edgeVoice(language: "english" | "burmese", gender: Gender) {
@@ -93,15 +102,26 @@ function edgeVoice(language: "english" | "burmese", gender: Gender) {
   return gender === "female" ? "en-US-AvaNeural" : "en-US-AndrewNeural";
 }
 
-async function edgeSpeak(line: Line, language: "english" | "burmese", gender: Gender) {
-  const communicate = new Communicate(line.text, { voice: edgeVoice(language, gender), connectionTimeout: 10000 });
-  const chunks: Buffer[] = [];
-  for await (const chunk of communicate.stream()) {
-    if (chunk.type === "audio" && chunk.data) chunks.push(Buffer.isBuffer(chunk.data) ? chunk.data : Buffer.from(chunk.data));
+async function edgeSpeak(line: Line, language: "english" | "burmese", gender: Gender, timeoutMs: number) {
+  const communicate = new Communicate(line.text, { voice: edgeVoice(language, gender), connectionTimeout: timeoutMs });
+  const audio = (async () => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of communicate.stream()) {
+      if (chunk.type === "audio" && chunk.data) chunks.push(Buffer.isBuffer(chunk.data) ? chunk.data : Buffer.from(chunk.data));
+    }
+    const bytes = Buffer.concat(chunks);
+    if (bytes.length < 200) throw new Error("The Myanmar voice returned empty audio.");
+    return bytes;
+  })();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<Buffer>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(language === "burmese" ? "The Myanmar voice timed out." : "Edge TTS timed out.")), timeoutMs);
+  });
+  try {
+    return await Promise.race([audio, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
-  const bytes = Buffer.concat(chunks);
-  if (bytes.length < 200) throw new Error("Edge TTS returned empty audio.");
-  return bytes;
 }
 
 async function elevenSpeak(line: Line, gender: Gender, modelId: string) {

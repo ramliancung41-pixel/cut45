@@ -1,4 +1,5 @@
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 type Line = { speaker: "A" | "B"; text: string; imageIndex: number };
 
@@ -7,11 +8,13 @@ type Body = {
   language?: unknown;
   preset?: unknown;
   imageCount?: unknown;
+  videoUrl?: unknown;
 };
 
-const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash"] as const;
+const GEMINI_MODELS = ["gemini-4-hydrogen", "gemini-3.5-flash-lite", "gemini-3.8-flash"] as const;
 
 class QuotaError extends Error {}
+class UnavailableModelError extends Error {}
 
 const PRESETS = {
   "father-son": "Father and son. Host A is the son, curious and asking short questions. Host B is the father, calm and explaining clearly.",
@@ -24,8 +27,9 @@ export async function POST(request: Request) {
   const language = body?.language === "burmese" ? "burmese" : body?.language === "english" ? "english" : "";
   const preset = body?.preset === "father-son" || body?.preset === "hosts" ? body.preset : "";
   const imageCount = typeof body?.imageCount === "number" ? Math.max(0, Math.min(3, Math.floor(body.imageCount))) : 0;
-  if (news.length < 8 || !language || !preset) {
-    return Response.json({ error: "Add a news topic, a language, and a character preset." }, { status: 400 });
+  const videoUrl = typeof body?.videoUrl === "string" && body.videoUrl.startsWith("https://") ? body.videoUrl : "";
+  if ((news.length < 8 && !videoUrl) || !language || !preset) {
+    return Response.json({ error: "Add a news topic or a video, plus a language and a character preset." }, { status: 400 });
   }
 
   const geminiKey = process.env.GEMINI_API_KEY?.trim() ?? "";
@@ -33,22 +37,30 @@ export async function POST(request: Request) {
   if (!geminiKey && !openaiKey) {
     return Response.json({ error: "A language model key is not configured yet." }, { status: 500 });
   }
+  if (!geminiKey && videoUrl) {
+    return Response.json({ error: "Gemini is required to write commentary from a video." }, { status: 500 });
+  }
 
-  const system = `You write a 45 to 60 second news conversation.
+  const longform = Boolean(videoUrl);
+  const system = `You write an original news commentary. Do not copy dialogue, narration, or captions from the source. Describe what happens in the hosts' own words.
 ${PRESETS[preset]}
 ${
   language === "burmese"
-    ? "Write natural spoken Burmese (စကားပြောဟန်) in short sentences that can be shown as subtitles. Do not use formal written Burmese."
-    : "Write natural spoken English in short sentences that can be shown as subtitles."
+    ? "Write natural spoken Burmese (စကားပြောဟန်) in short subtitle sentences. Do not use formal written Burmese."
+    : "Write natural spoken English in short subtitle sentences."
 }
 Host A only asks questions. Host B only explains. Alternate speakers, starting with A.
-Cover only the news the user provided. Do not add unrelated facts.
-Return JSON only, an array of 8 to 14 lines: {"speaker":"A"|"B","text":string,"imageIndex":number}.
+${
+  longform
+    ? "The source may be up to 5 minutes. Return 25 to 35 short lines that follow the events in order."
+    : "Return 8 to 14 short lines."
+}
+Return JSON only, an array of {"speaker":"A"|"B","text":string,"imageIndex":number}.
 imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when there are no images.`;
 
   let raw = "";
   try {
-    raw = geminiKey ? await geminiChain(geminiKey, system, news) : await openaiScript(openaiKey, system, news);
+    raw = geminiKey ? await geminiChain(geminiKey, system, news, videoUrl) : await openaiScript(openaiKey, system, news);
   } catch (error) {
     if (error instanceof QuotaError) return Response.json({ lines: localScript(news, language) });
     const message = error instanceof Error ? error.message : "The script could not be written.";
@@ -69,31 +81,80 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
   return Response.json({ lines });
 }
 
-async function geminiChain(apiKey: string, system: string, news: string) {
+async function geminiChain(apiKey: string, system: string, news: string, videoUrl: string) {
+  let fileUri = "";
+  if (videoUrl) fileUri = await uploadVideoToGemini(apiKey, videoUrl);
   let last = "Gemini quota exceeded.";
   for (const model of GEMINI_MODELS) {
     try {
-      return await geminiScript(apiKey, model, system, news);
+      return await geminiScript(apiKey, model, system, news, fileUri);
     } catch (error) {
-      if (!(error instanceof QuotaError)) throw error;
-      last = error.message;
+      if (error instanceof QuotaError || error instanceof UnavailableModelError) {
+        last = error.message;
+        continue;
+      }
+      throw error;
     }
   }
   throw new QuotaError(last);
 }
 
-async function geminiScript(apiKey: string, model: string, system: string, news: string) {
+  throw new QuotaError(last);
+}
+
+async function uploadVideoToGemini(apiKey: string, videoUrl: string) {
+  const source = await fetch(videoUrl);
+  if (!source.ok) throw new Error(`The uploaded video could not be read (${source.status}).`);
+  const mime = source.headers.get("content-type")?.split(";")[0] || "video/mp4";
+  const bytes = Buffer.from(await source.arrayBuffer());
+  if (bytes.byteLength < 1000 || bytes.byteLength > 80_000_000) {
+    throw new Error("The video must be under 80 MB so it can be analyzed.");
+  }
+  const start = await fetch("https://generativelanguage.googleapis.com/upload/v1beta/files", {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": apiKey,
+      "Content-Type": "application/json",
+      "X-Goog-Upload-Protocol": "resumable",
+      "X-Goog-Upload-Command": "start",
+      "X-Goog-Upload-Header-Content-Length": String(bytes.byteLength),
+      "X-Goog-Upload-Header-Content-Type": mime,
+    },
+    body: JSON.stringify({ file: { display_name: "news-source" } }),
+  });
+  const uploadUrl = start.headers.get("x-goog-upload-url");
+  if (!start.ok || !uploadUrl) throw new Error(`Gemini could not accept the video (${start.status}).`);
+  const uploaded = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": apiKey,
+      "Content-Length": String(bytes.byteLength),
+      "X-Goog-Upload-Offset": "0",
+      "X-Goog-Upload-Command": "upload, finalize",
+    },
+    body: bytes,
+  });
+  const payload = (await uploaded.json().catch(() => null)) as { file?: { uri?: string } } | null;
+  const uri = payload?.file?.uri ?? "";
+  if (!uploaded.ok || !uri.startsWith("https://")) throw new Error("Gemini did not return a video file.");
+  return uri;
+}
+
+async function geminiScript(apiKey: string, model: string, system: string, news: string, fileUri: string) {
+  const parts: Array<{ text?: string; file_data?: { mime_type: string; file_uri: string } }> = [];
+  if (fileUri) parts.push({ file_data: { mime_type: "video/mp4", file_uri: fileUri } });
+  parts.push({ text: news || "Watch the video and write original host commentary about what happens. Do not transcribe it word for word." });
   const endpoint = new URL(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`);
-  endpoint.searchParams.set("key", apiKey);
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey,
+    },
     body: JSON.stringify({
       system_instruction: { parts: [{ text: system }] },
-      contents: [{ role: "user", parts: [{ text: news }] }],
+      contents: [{ role: "user", parts }],
       generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 4096,
         responseMimeType: "application/json",
       },
     }),
@@ -106,6 +167,9 @@ async function geminiScript(apiKey: string, model: string, system: string, news:
     const message = payload?.error?.message || `Gemini could not write the script (${response.status}).`;
     if (response.status === 429 || payload?.error?.status === "RESOURCE_EXHAUSTED" || /quota|rate.?limit|resource.?exhausted/i.test(message)) {
       throw new QuotaError(message);
+    }
+    if (response.status === 404 || /not found|is not supported|deprecated|shut down/i.test(message)) {
+      throw new UnavailableModelError(message);
     }
     throw new Error(message);
   }
@@ -177,7 +241,7 @@ function parseLines(raw: string, imageCount: number): Line[] | null {
       : null;
   if (!list || list.length < 4) return null;
   const maxIndex = Math.max(imageCount - 1, 0);
-  const lines = list.slice(0, 14).flatMap((item): Line[] => {
+  const lines = list.slice(0, 36).flatMap((item): Line[] => {
     if (!item || typeof item !== "object") return [];
     const record = item as { speaker?: unknown; text?: unknown; imageIndex?: unknown };
     const speaker = record.speaker === "A" || record.speaker === "B" ? record.speaker : null;
