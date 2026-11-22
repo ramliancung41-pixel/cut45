@@ -1,7 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Communicate } from "edge-tts-universal";
+import ffmpegPath from "ffmpeg-static";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -10,7 +12,7 @@ type Line = {
   speaker: "A" | "B";
   text: string;
   imageIndex: number;
-  voiceType: "male" | "female" | "child";
+  voiceType: "male" | "male_elder" | "female" | "female_elder" | "child_boy" | "child_girl";
   startSec?: number;
   endSec?: number;
   subtitleText?: string;
@@ -104,7 +106,7 @@ function parseLines(value: unknown): Line[] | null {
     const dubbed = typeof record.startSec === "number" && typeof record.endSec === "number";
     const speaker = record.speaker === "A" || record.speaker === "B" ? record.speaker : dubbed ? "A" : null;
     const text = (typeof record.voiceText === "string" ? record.voiceText : typeof record.text === "string" ? record.text : "").trim().slice(0, 400);
-    const named = record.speakerType === "female" || record.speakerType === "child" || record.speakerType === "male" ? record.speakerType : record.voiceType === "female" || record.voiceType === "child" || record.voiceType === "male" ? record.voiceType : null;
+    const named = normalizeRole(record.speakerType) || normalizeRole(record.voiceType);
     const voiceType = named || (speaker === "B" ? "female" : "male");
     const imageIndex = typeof record.imageIndex === "number" && record.imageIndex >= 0 ? Math.min(2, Math.floor(record.imageIndex)) : 0;
     const startSec = dubbed ? Math.max(0, record.startSec as number) : undefined;
@@ -124,12 +126,26 @@ async function speak(line: Line, language: "english" | "burmese", voiceType: Voi
     console.error("[news-podcast] edge tts failed", message);
   }
   try {
-    return await googleSpeak(line.text, language);
+    return await googleSpeak(line.text, language, voiceType);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Google TTS failed.";
     console.error("[news-podcast] google tts failed", message);
   }
-  return elevenSpeak(line, voiceType === "male" ? "male" : "female", language === "burmese" ? "eleven_v3" : "eleven_flash_v2_5");
+  const male = voiceType === "male" || voiceType === "male_elder" || voiceType === "child_boy";
+  return elevenSpeak(line, male ? "male" : "female", language === "burmese" ? "eleven_v3" : "eleven_flash_v2_5");
+}
+
+const ROLES = ["male", "male_elder", "female", "female_elder", "child_boy", "child_girl"] as const;
+
+function normalizeRole(value: unknown): VoiceType | null {
+  if (typeof value !== "string") return null;
+  const key = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if ((ROLES as readonly string[]).includes(key)) return key as VoiceType;
+  if (key === "child" || key === "boy") return "child_boy";
+  if (key === "girl") return "child_girl";
+  if (key === "elder_male" || key === "old_man") return "male_elder";
+  if (key === "elder_female" || key === "old_woman") return "female_elder";
+  return null;
 }
 
 function speechChunks(text: string) {
@@ -144,7 +160,7 @@ function speechChunks(text: string) {
   return pieces.length > 0 ? pieces : [text.slice(0, 180)];
 }
 
-async function googleSpeak(text: string, language: "english" | "burmese") {
+async function googleSpeak(text: string, language: "english" | "burmese", voiceType: VoiceType) {
   const buffers: Buffer[] = [];
   for (const chunk of speechChunks(text)) {
     const url = `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=${language === "burmese" ? "my" : "en"}&q=${encodeURIComponent(chunk)}`;
@@ -154,21 +170,64 @@ async function googleSpeak(text: string, language: "english" | "burmese") {
     if (bytes.length < 200) throw new Error("Google TTS returned empty audio.");
     buffers.push(bytes);
   }
-  return Buffer.concat(buffers);
+  return pitchShift(Buffer.concat(buffers), voiceType);
+}
+
+const PITCH_FACTOR: Record<VoiceType, number> = {
+  male: 0.8,
+  male_elder: 0.73,
+  female: 1,
+  female_elder: 0.92,
+  child_boy: 1.26,
+  child_girl: 1.26,
+};
+
+async function pitchShift(bytes: Buffer, voiceType: VoiceType) {
+  const factor = PITCH_FACTOR[voiceType];
+  if (Math.abs(factor - 1) < 0.02 || typeof ffmpegPath !== "string" || !ffmpegPath) return bytes;
+  const id = crypto.randomUUID();
+  const input = path.join(os.tmpdir(), `${id}.mp3`);
+  const output = path.join(os.tmpdir(), `${id}-pitched.mp3`);
+  await writeFile(input, bytes);
+  const filter = `asetrate=${Math.round(24000 * factor)},aresample=24000,atempo=${(1 / factor).toFixed(3)}`;
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(ffmpegPath, ["-y", "-i", input, "-af", filter, "-c:a", "libmp3lame", "-q:a", "5", output], { windowsHide: true });
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error("Pitch shift failed."))));
+  }).catch(() => null);
+  try {
+    return await readFile(output);
+  } catch {
+    return bytes;
+  }
 }
 
 function edgeVoice(language: "english" | "burmese", voiceType: VoiceType) {
-  if (voiceType === "child") return language === "burmese" ? "my-MM-NilarNeural" : "en-US-AnaNeural";
-  if (language === "burmese") return voiceType === "female" ? "my-MM-NilarNeural" : "my-MM-ThihaNeural";
-  return voiceType === "female" ? "en-US-AvaNeural" : "en-US-AndrewNeural";
+  if (language === "burmese") {
+    if (voiceType === "female" || voiceType === "female_elder" || voiceType === "child_girl") return "my-MM-NilarNeural";
+    return "my-MM-ThihaNeural";
+  }
+  if (voiceType === "male_elder") return "en-US-BrianNeural";
+  if (voiceType === "female") return "en-US-AvaNeural";
+  if (voiceType === "female_elder") return "en-US-EmmaNeural";
+  if (voiceType === "child_boy" || voiceType === "child_girl") return "en-US-AnaNeural";
+  return "en-US-AndrewNeural";
+}
+
+function prosody(voiceType: VoiceType) {
+  if (voiceType === "male_elder") return { pitch: "-18Hz", rate: "-6%" };
+  if (voiceType === "female_elder") return { pitch: "-14Hz", rate: "-5%" };
+  if (voiceType === "child_boy") return { pitch: "+42Hz", rate: "+8%" };
+  if (voiceType === "child_girl") return { pitch: "+40Hz", rate: "+8%" };
+  return null;
 }
 
 async function edgeSpeak(line: Line, language: "english" | "burmese", voiceType: VoiceType, timeoutMs: number, voiceOverride?: string) {
-  const child = voiceType === "child";
+  const shape = prosody(voiceType);
   const communicate = new Communicate(line.text, {
     voice: voiceOverride || edgeVoice(language, voiceType),
     connectionTimeout: timeoutMs,
-    ...(child ? { pitch: "+38Hz", rate: "+6%" } : {}),
+    ...(shape ?? {}),
   });
   const audio = (async () => {
     const chunks: Buffer[] = [];

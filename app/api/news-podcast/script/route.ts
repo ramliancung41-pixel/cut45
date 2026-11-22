@@ -3,7 +3,7 @@ export const maxDuration = 300;
 
 type Spoken = "burmese" | "english";
 type Caption = Spoken | "dual" | "none";
-type VoiceType = "male" | "female" | "child";
+type VoiceType = "male" | "male_elder" | "female" | "female_elder" | "child_boy" | "child_girl";
 type Line = { speaker: "A" | "B"; voiceType: VoiceType; voiceText: string; subtitleText: string; imageIndex: number };
 
 type Body = {
@@ -60,9 +60,9 @@ Listen to every spoken line and narration from 0 seconds through ${videoDuration
 Return 8 to 15 chronological cues that together cover that whole span. The first cue starts near 0. The last cue ends near the end of the video.
 voiceText is a natural ${voiceLanguage === "burmese" ? "spoken Burmese" : "spoken English"} translation of what that person says.
 ${subtitleInstruction(subtitleLanguage, voiceLanguage)}
-speakerType is "male", "female", or "child" for the person who is speaking.
+Listen to pitch and watch each face. Count the distinct people. speakerType must be one of "male", "male_elder", "female", "female_elder", "child_boy", or "child_girl". Do not mark every line female. Match the person who is speaking in that moment.
 Keep voiceText short enough to say inside endSec - startSec.
-Return JSON only, an array of {"startSec":number,"endSec":number,"speakerType":"male"|"female"|"child","voiceText":string,"subtitleText":string}.`
+Return JSON only, an array of {"startSec":number,"endSec":number,"speakerType":"male"|"male_elder"|"female"|"female_elder"|"child_boy"|"child_girl","voiceText":string,"subtitleText":string}.`
     : `You write an original news commentary. Do not copy dialogue, narration, or captions from the source. Describe what happens in the hosts' own words.
 ${PRESETS[preset]}
 "voiceText" is what is spoken. Write it as original commentary in ${voiceLanguage === "burmese" ? "natural spoken Burmese (စကားပြောဟန်), not formal written Burmese" : "natural spoken English"}. Do not transcribe the source.
@@ -217,7 +217,7 @@ async function groqDub(apiKey: string, videoUrl: string, voiceLanguage: Spoken, 
       messages: [
         {
           role: "system",
-          content: `Translate each spoken segment. voiceText is natural ${voiceLanguage === "burmese" ? "spoken Burmese" : "spoken English"}. ${subtitleInstruction(subtitleLanguage, voiceLanguage)} Guess speakerType as male, female, or child. Keep the same startSec and endSec. Return {"lines":[{"startSec":number,"endSec":number,"speakerType":"male"|"female"|"child","voiceText":string,"subtitleText":string}]}.`,
+          content: `Translate each spoken segment. voiceText is natural ${voiceLanguage === "burmese" ? "spoken Burmese" : "spoken English"}. ${subtitleInstruction(subtitleLanguage, voiceLanguage)} Guess speakerType as male, male_elder, female, female_elder, child_boy, or child_girl. Do not mark every line female. Keep the same startSec and endSec. Return {"lines":[{"startSec":number,"endSec":number,"speakerType":string,"voiceText":string,"subtitleText":string}]}.`,
         },
         { role: "user", content: JSON.stringify(segments.map((segment) => ({ startSec: segment.start, endSec: segment.end, text: segment.text }))) },
       ],
@@ -340,6 +340,18 @@ function captionFor(text: string, voice: Spoken, subtitle: Caption) {
   return "";
 }
 
+function normalizeRole(value: unknown): VoiceType | null {
+  if (typeof value !== "string") return null;
+  const key = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const roles: VoiceType[] = ["male", "male_elder", "female", "female_elder", "child_boy", "child_girl"];
+  if (roles.includes(key as VoiceType)) return key as VoiceType;
+  if (key === "child" || key === "boy") return "child_boy";
+  if (key === "girl") return "child_girl";
+  if (key === "elder_male" || key === "old_man") return "male_elder";
+  if (key === "elder_female" || key === "old_woman") return "female_elder";
+  return null;
+}
+
 function parseDubCues(raw: string, subtitleLanguage: Caption, voiceLanguage: Spoken) {
   const start = raw.indexOf("[");
   const end = raw.lastIndexOf("]");
@@ -362,7 +374,7 @@ function parseDubCues(raw: string, subtitleLanguage: Caption, voiceLanguage: Spo
     const record = item as { startSec?: unknown; endSec?: unknown; speakerType?: unknown; voiceType?: unknown; voiceText?: unknown; subtitleText?: unknown };
     const startSec = typeof record.startSec === "number" && record.startSec >= 0 ? Math.min(300, record.startSec) : -1;
     const endSec = typeof record.endSec === "number" ? Math.min(300, record.endSec) : -1;
-    const speakerType = record.speakerType === "male" || record.speakerType === "female" || record.speakerType === "child" ? record.speakerType : record.voiceType === "male" || record.voiceType === "female" || record.voiceType === "child" ? record.voiceType : null;
+    const speakerType = normalizeRole(record.speakerType) || normalizeRole(record.voiceType);
     const voiceText = typeof record.voiceText === "string" ? record.voiceText.trim().slice(0, 240) : "";
     const supplied = typeof record.subtitleText === "string" ? record.subtitleText.trim().slice(0, 400) : "";
     const subtitleText = subtitleLanguage === "none" ? "" : supplied || captionFor(voiceText, voiceLanguage, subtitleLanguage);

@@ -18,7 +18,7 @@ type Line = {
   imageIndex?: number;
   startSec?: number;
   endSec?: number;
-  speakerType?: "male" | "female" | "child";
+  speakerType?: "male" | "male_elder" | "female" | "female_elder" | "child_boy" | "child_girl";
 };
 type Clip = Line & { path: string; audioDataUrl?: string; durationSec: number; actualDurationSec?: number };
 type Language = "burmese" | "english";
@@ -519,15 +519,18 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                   <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
                     <span>{formatClock(line.startSec ?? 0)} – {formatClock(line.endSec ?? 0)}</span>
                     <select
-                      value={line.speakerType || "female"}
+                      value={line.speakerType || "male"}
                       onChange={(event) =>
                         setLines((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, speakerType: event.target.value as Line["speakerType"] } : item)))
                       }
                       className="rounded-full border border-white/10 bg-transparent px-2 py-1 text-zinc-200"
                     >
                       <option value="male" className="bg-[#07090e]">Male</option>
+                      <option value="male_elder" className="bg-[#07090e]">Elder Male</option>
                       <option value="female" className="bg-[#07090e]">Female</option>
-                      <option value="child" className="bg-[#07090e]">Child</option>
+                      <option value="female_elder" className="bg-[#07090e]">Elder Female</option>
+                      <option value="child_boy" className="bg-[#07090e]">Child (Boy)</option>
+                      <option value="child_girl" className="bg-[#07090e]">Child (Girl)</option>
                     </select>
                   </div>
                   <textarea
