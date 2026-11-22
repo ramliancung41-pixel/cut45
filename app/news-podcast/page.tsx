@@ -9,8 +9,18 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 const STEPS = ["Writing script", "Recording voices", "3D lip-sync", "Rendering"] as const;
 
-type Line = { speaker: "A" | "B"; voiceText?: string; text?: string; subtitleText?: string; subtitle?: string; imageIndex: number };
-type Clip = Line & { path: string; audioDataUrl?: string; durationSec: number };
+type Line = {
+  speaker?: "A" | "B";
+  voiceText?: string;
+  text?: string;
+  subtitleText?: string;
+  subtitle?: string;
+  imageIndex?: number;
+  startSec?: number;
+  endSec?: number;
+  speakerType?: "male" | "female" | "child";
+};
+type Clip = Line & { path: string; audioDataUrl?: string; durationSec: number; actualDurationSec?: number };
 type Language = "burmese" | "english";
 type SubtitleLanguage = Language | "dual" | "none";
 type Gender = "male" | "female";
@@ -109,9 +119,13 @@ export default function NewsPodcastPage() {
           hostBImage,
           videos: audio.clips.map((clip) => ({
             speaker: clip.speaker,
+            speakerType: clip.speakerType,
             audioDataUrl: clip.audioDataUrl,
-            durationSec: clip.durationSec,
-            imageIndex: clip.imageIndex,
+            durationSec: clip.actualDurationSec || clip.durationSec,
+            imageIndex: clip.imageIndex ?? 0,
+            startSec: clip.startSec,
+            endSec: clip.endSec,
+            subtitleText: clip.subtitleText ?? "",
           })),
         }),
       });

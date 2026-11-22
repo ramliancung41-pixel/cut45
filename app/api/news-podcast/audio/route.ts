@@ -6,7 +6,15 @@ import { Communicate } from "edge-tts-universal";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-type Line = { speaker: "A" | "B"; text: string; imageIndex: number; voiceType: "male" | "female" | "child" };
+type Line = {
+  speaker: "A" | "B";
+  text: string;
+  imageIndex: number;
+  voiceType: "male" | "female" | "child";
+  startSec?: number;
+  endSec?: number;
+  subtitleText?: string;
+};
 type Gender = "male" | "female";
 type VoiceType = Line["voiceType"];
 
@@ -45,8 +53,13 @@ export async function POST(request: Request) {
       await writeFile(filePath, bytes);
       clips.push({
         speaker: line.speaker,
+        speakerType: line.voiceType,
         text: line.text,
+        subtitleText: line.subtitleText ?? "",
         imageIndex: line.imageIndex,
+        startSec: line.startSec,
+        endSec: line.endSec,
+        actualDurationSec: mp3Duration(bytes),
         path: filePath,
         audioDataUrl: `data:audio/mpeg;base64,${bytes.toString("base64")}`,
         durationSec: mp3Duration(bytes),
@@ -62,17 +75,32 @@ export async function POST(request: Request) {
 }
 
 function parseLines(value: unknown): Line[] | null {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 36) return null;
+  if (!Array.isArray(value) || value.length === 0 || value.length > 60) return null;
   const lines: Line[] = [];
   for (const item of value) {
     if (!item || typeof item !== "object") return null;
-    const record = item as { speaker?: unknown; voiceType?: unknown; voiceText?: unknown; text?: unknown; imageIndex?: unknown };
-    const speaker = record.speaker === "A" || record.speaker === "B" ? record.speaker : null;
+    const record = item as {
+      speaker?: unknown;
+      speakerType?: unknown;
+      voiceType?: unknown;
+      voiceText?: unknown;
+      text?: unknown;
+      subtitleText?: unknown;
+      imageIndex?: unknown;
+      startSec?: unknown;
+      endSec?: unknown;
+    };
+    const dubbed = typeof record.startSec === "number" && typeof record.endSec === "number";
+    const speaker = record.speaker === "A" || record.speaker === "B" ? record.speaker : dubbed ? "A" : null;
     const text = (typeof record.voiceText === "string" ? record.voiceText : typeof record.text === "string" ? record.text : "").trim().slice(0, 400);
-    const voiceType = record.voiceType === "female" || record.voiceType === "child" || record.voiceType === "male" ? record.voiceType : speaker === "B" ? "female" : "male";
+    const named = record.speakerType === "female" || record.speakerType === "child" || record.speakerType === "male" ? record.speakerType : record.voiceType === "female" || record.voiceType === "child" || record.voiceType === "male" ? record.voiceType : null;
+    const voiceType = named || (speaker === "B" ? "female" : "male");
     const imageIndex = typeof record.imageIndex === "number" && record.imageIndex >= 0 ? Math.min(2, Math.floor(record.imageIndex)) : 0;
+    const startSec = dubbed ? Math.max(0, record.startSec as number) : undefined;
+    const endSec = dubbed ? Math.max(startSec ?? 0, record.endSec as number) : undefined;
+    const subtitleText = typeof record.subtitleText === "string" ? record.subtitleText.slice(0, 400) : "";
     if (!speaker || !text) return null;
-    lines.push({ speaker, text, imageIndex, voiceType });
+    lines.push({ speaker, text, imageIndex, voiceType, startSec, endSec, subtitleText });
   }
   return lines;
 }

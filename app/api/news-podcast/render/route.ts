@@ -51,8 +51,9 @@ export async function POST(request: Request) {
         return typeof record.text === "string" ? record.text : "";
       })
     : [];
-  const segments = parseSegments(body?.videos, texts);
-  if (!jobId || !segments) {
+  const dubs = parseDubClips(body?.videos);
+  const segments = dubs ? null : parseSegments(body?.videos, texts);
+  if (!jobId || (!segments && !dubs)) {
     return Response.json({ error: "Send the lip-sync clips for this podcast job." }, { status: 400 });
   }
   try {
@@ -84,6 +85,23 @@ export async function POST(request: Request) {
       return Response.json({ error: message }, { status: 502 });
     }
   }
+
+  if (dubs) {
+    if (!sourceVideo) return Response.json({ error: "A source video is required for dubbing." }, { status: 400 });
+    const finalPath = path.join(directory, "final.mp4");
+    try {
+      await renderDub(sourceVideo, dubs, directory, finalPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "ffmpeg";
+      return Response.json({ error: `Could not dub the video. ${message}`.slice(0, 500) }, { status: 502 });
+    }
+    const mp4 = await readFile(finalPath);
+    const videoUrl = await publishMp4(jobId, mp4);
+    const durationSec = dubs.reduce((end, cue) => Math.max(end, cue.endSec), 0);
+    return Response.json({ jobId, videoPath: finalPath, videoUrl, durationSec });
+  }
+
+  if (!segments) return Response.json({ error: "Send the lip-sync clips for this podcast job." }, { status: 400 });
 
   const parts: string[] = [];
   let cursor = 0;
@@ -125,7 +143,38 @@ export async function POST(request: Request) {
   }
 
   const mp4 = await readFile(finalPath);
-  let videoUrl = "";
+  const videoUrl = await publishMp4(jobId, mp4);
+
+  return Response.json({
+    jobId,
+    videoPath: finalPath,
+    videoUrl,
+    durationSec: Math.round(cursor * 100) / 100,
+  });
+}
+
+type DubCue = { audioDataUrl: string; durationSec: number; startSec: number; endSec: number; text: string };
+
+function parseDubClips(value: unknown): DubCue[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 60) return null;
+  const first = value[0] as { startSec?: unknown };
+  if (!first || typeof first !== "object" || typeof first.startSec !== "number") return null;
+  const cues: DubCue[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") return null;
+    const record = item as { audioDataUrl?: unknown; durationSec?: unknown; startSec?: unknown; endSec?: unknown; subtitleText?: unknown };
+    const audioDataUrl = typeof record.audioDataUrl === "string" && record.audioDataUrl.startsWith("data:audio/") ? record.audioDataUrl : "";
+    const durationSec = typeof record.durationSec === "number" && record.durationSec > 0 ? record.durationSec : 0;
+    const startSec = typeof record.startSec === "number" && record.startSec >= 0 ? record.startSec : -1;
+    const endSec = typeof record.endSec === "number" ? record.endSec : -1;
+    const text = typeof record.subtitleText === "string" ? record.subtitleText.slice(0, 400) : "";
+    if (!audioDataUrl || !durationSec || startSec < 0 || endSec <= startSec) return null;
+    cues.push({ audioDataUrl, durationSec, startSec, endSec, text });
+  }
+  return cues;
+}
+
+async function publishMp4(jobId: string, mp4: Buffer) {
   if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
     const stored = await uploadPublicObject({
       bucket: STORAGE_BUCKETS.userAssets,
@@ -134,16 +183,73 @@ export async function POST(request: Request) {
       contentType: "video/mp4",
       upsert: true,
     });
-    if ("publicUrl" in stored && stored.publicUrl) videoUrl = stored.publicUrl;
+    if ("publicUrl" in stored && stored.publicUrl) return stored.publicUrl;
   }
-  if (!videoUrl) videoUrl = `data:video/mp4;base64,${mp4.toString("base64")}`;
+  return `data:video/mp4;base64,${mp4.toString("base64")}`;
+}
 
-  return Response.json({
-    jobId,
-    videoPath: finalPath,
-    videoUrl,
-    durationSec: Math.round(cursor * 100) / 100,
-  });
+async function renderDub(source: string, cues: DubCue[], directory: string, output: string) {
+  const audioFilters: string[] = [];
+  const labels: string[] = [];
+  const inputs = ["-y", "-an", "-i", source];
+  for (let index = 0; index < cues.length; index += 1) {
+    const cue = cues[index];
+    const file = await writeAudio(cue.audioDataUrl, path.join(directory, `dub-${String(index).padStart(2, "0")}.mp3`));
+    inputs.push("-i", file);
+    const slot = Math.max(0.8, cue.endSec - cue.startSec);
+    const ratio = cue.durationSec > slot ? Math.min(1.35, cue.durationSec / slot) : 1;
+    const tempo = ratio > 1.02 ? `atempo=${ratio.toFixed(3)},` : "";
+    const delay = Math.round(cue.startSec * 1000);
+    audioFilters.push(`[${index + 1}:a]${tempo}atrim=0:${slot.toFixed(3)},asetpts=PTS-STARTPTS,adelay=${delay}|${delay}[a${index}]`);
+    labels.push(`[a${index}]`);
+  }
+  const mix = cues.length === 1 ? "" : `${labels.join("")}amix=inputs=${cues.length}:duration=longest:dropout_transition=0[aout]`;
+  const audioLabel = cues.length === 1 ? labels[0] : "[aout]";
+  const filter = [
+    "[0:v]split[bg][fg]",
+    "[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4,setsar=1[blur]",
+    "[fg]scale=1080:1920:force_original_aspect_ratio=decrease,setsar=1[fit]",
+    "[blur][fit]overlay=(W-w)/2:(H-h)/2[vout]",
+    ...audioFilters,
+    mix,
+  ]
+    .filter(Boolean)
+    .join(";");
+  const silentPath = path.join(directory, "dubbed.mp4");
+  const assPath = path.join(directory, "subtitles.ass");
+  await writeFile(assPath, assFile(cues.map((cue) => ({ start: cue.startSec, end: cue.endSec, text: cue.text })), true));
+  const duration = Math.max(...cues.map((cue) => cue.endSec)).toFixed(2);
+  await runFfmpeg([
+    ...inputs,
+    "-filter_complex",
+    filter,
+    "-map",
+    "[vout]",
+    "-map",
+    audioLabel,
+    "-t",
+    duration,
+    "-r",
+    "30",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-c:a",
+    "aac",
+    "-ar",
+    "44100",
+    "-b:a",
+    "160k",
+    silentPath,
+  ]);
+  try {
+    await burnSubtitles(silentPath, assPath, output);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (!/no such filter|ass/i.test(message)) throw error;
+    await runFfmpeg(["-y", "-i", silentPath, "-c", "copy", output]);
+  }
 }
 
 function parseSegments(value: unknown, texts: string[]): Segment[] | null {

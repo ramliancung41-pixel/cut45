@@ -51,18 +51,23 @@ export async function POST(request: Request) {
     return Response.json({ error: "Gemini is required to write commentary from a video." }, { status: 500 });
   }
 
-  const longform = Boolean(videoUrl);
-  const system = `You write an original news commentary. Do not copy dialogue, narration, or captions from the source. Describe what happens in the hosts' own words.
+  const dubbing = Boolean(videoUrl);
+  const system = dubbing
+    ? `You dub the spoken lines in this video. Do not invent a Host A and Host B interview.
+Listen in order. For each spoken line return when it starts and ends.
+voiceText is a natural ${voiceLanguage === "burmese" ? "spoken Burmese" : "spoken English"} translation of what that person says. During a silent gap you may add one short line of context. Otherwise translate only the speech.
+${subtitleInstruction(subtitleLanguage, voiceLanguage)}
+speakerType is "male", "female", or "child" for the person who is speaking.
+Keep voiceText short enough to say inside endSec - startSec.
+Return JSON only, an array of {"startSec":number,"endSec":number,"speakerType":"male"|"female"|"child","voiceText":string,"subtitleText":string}.
+Times are seconds from the start of the video. Cover up to 5 minutes. Return at most 60 cues.`
+    : `You write an original news commentary. Do not copy dialogue, narration, or captions from the source. Describe what happens in the hosts' own words.
 ${PRESETS[preset]}
 "voiceText" is what is spoken. Write it as original commentary in ${voiceLanguage === "burmese" ? "natural spoken Burmese (စကားပြောဟန်), not formal written Burmese" : "natural spoken English"}. Do not transcribe the source.
 ${subtitleInstruction(subtitleLanguage, voiceLanguage)}
 For every line set "voiceType" to "male", "female", or "child" from who is speaking or narrating that moment. A child character uses "child".
 Host A only asks questions. Host B only explains. Alternate speakers, starting with A.
-${
-  longform
-    ? "The source may be up to 5 minutes. Return 25 to 35 short lines that follow the events in order."
-    : "Return 8 to 14 short lines."
-}
+Return 8 to 14 short lines.
 Return JSON only, an array of {"speaker":"A"|"B","voiceType":"male"|"female"|"child","voiceText":string,"subtitleText":string,"imageIndex":number}.
 imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when there are no images.`;
 
@@ -70,7 +75,9 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
   try {
     raw = geminiKey ? await geminiChain(geminiKey, system, news, videoUrl) : await openaiScript(openaiKey, system, news);
   } catch (error) {
-    if (error instanceof QuotaError) return Response.json({ lines: localScript(news, voiceLanguage, subtitleLanguage) });
+    if (error instanceof QuotaError) {
+      return Response.json({ lines: dubbing ? dubFallback(voiceLanguage, subtitleLanguage) : localScript(news, voiceLanguage, subtitleLanguage) });
+    }
     const message = error instanceof Error ? error.message : "The script could not be written.";
     if (geminiKey && openaiKey) {
       try {
@@ -84,8 +91,10 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
     }
   }
 
-  const lines = parseLines(raw, imageCount, subtitleLanguage, voiceLanguage);
-  if (!lines) return Response.json({ lines: localScript(news, voiceLanguage, subtitleLanguage) });
+  const lines = dubbing ? parseDubCues(raw, subtitleLanguage, voiceLanguage) : parseLines(raw, imageCount, subtitleLanguage, voiceLanguage);
+  if (!lines) {
+    return Response.json({ lines: dubbing ? dubFallback(voiceLanguage, subtitleLanguage) : localScript(news, voiceLanguage, subtitleLanguage) });
+  }
   return Response.json({ lines });
 }
 
@@ -248,6 +257,43 @@ function captionFor(text: string, voice: Spoken, subtitle: Caption) {
   if (subtitle === "none") return "";
   if (subtitle === voice) return text;
   return "";
+}
+
+function dubFallback(language: Spoken, subtitle: Caption) {
+  const voiceText = language === "burmese" ? "ဒီဇာတ်ကားထဲက စကားကို အသံသစ်နဲ့ ပြန်ပြောထားပါတယ်။" : "The spoken lines in this clip are dubbed in a new voice.";
+  return [{ startSec: 0, endSec: 6, speakerType: "female" as const, voiceText, subtitleText: captionFor(voiceText, language, subtitle) }];
+}
+
+function parseDubCues(raw: string, subtitleLanguage: Caption, voiceLanguage: Spoken) {
+  const start = raw.indexOf("[");
+  const end = raw.lastIndexOf("]");
+  const objectStart = raw.indexOf("{");
+  const objectEnd = raw.lastIndexOf("}");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(start >= 0 && end > start ? raw.slice(start, end + 1) : raw.slice(objectStart, objectEnd + 1));
+  } catch {
+    return null;
+  }
+  const list = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && Array.isArray((parsed as { lines?: unknown }).lines)
+      ? (parsed as { lines: unknown[] }).lines
+      : null;
+  if (!list || list.length < 1) return null;
+  const cues = list.slice(0, 60).flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as { startSec?: unknown; endSec?: unknown; speakerType?: unknown; voiceType?: unknown; voiceText?: unknown; subtitleText?: unknown };
+    const startSec = typeof record.startSec === "number" && record.startSec >= 0 ? Math.min(300, record.startSec) : -1;
+    const endSec = typeof record.endSec === "number" ? Math.min(300, record.endSec) : -1;
+    const speakerType = record.speakerType === "male" || record.speakerType === "female" || record.speakerType === "child" ? record.speakerType : record.voiceType === "male" || record.voiceType === "female" || record.voiceType === "child" ? record.voiceType : null;
+    const voiceText = typeof record.voiceText === "string" ? record.voiceText.trim().slice(0, 240) : "";
+    const supplied = typeof record.subtitleText === "string" ? record.subtitleText.trim().slice(0, 400) : "";
+    const subtitleText = subtitleLanguage === "none" ? "" : supplied || captionFor(voiceText, voiceLanguage, subtitleLanguage);
+    if (!speakerType || !voiceText || startSec < 0 || endSec - startSec < 0.4) return [];
+    return [{ startSec, endSec, speakerType, voiceText, subtitleText }];
+  });
+  return cues.length > 0 ? cues : null;
 }
 
 function localScript(news: string, language: Spoken, subtitle: Caption): Line[] {
