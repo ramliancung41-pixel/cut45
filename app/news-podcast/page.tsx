@@ -50,6 +50,7 @@ export default function NewsPodcastPage() {
   const [captionIndex, setCaptionIndex] = useState(0);
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
+  const [scanningScript, setScanningScript] = useState(false);
   const [videoStep, setVideoStep] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
   const [showPlayer, setShowPlayer] = useState(true);
@@ -59,16 +60,10 @@ export default function NewsPodcastPage() {
   const newsImages = images.filter((item) => item.startsWith("data:image/"));
   const hosts = { hostAGender, hostBGender, hostAImage, hostBImage };
 
-  async function generateVideo() {
-    setRunning(true);
+  async function writeDubScript(videoUrl: string, durationSec: number) {
+    setScanningScript(true);
     setError("");
-    setVideoUrl("");
-    setShowPlayer(true);
-    setLines([]);
-    setClips([]);
-    setCaptionIndex(0);
     try {
-      setVideoStep(STEPS[0]);
       const scriptResponse = await fetch("/api/news-podcast/script", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -77,19 +72,57 @@ export default function NewsPodcastPage() {
           voiceLanguage,
           subtitleLanguage,
           preset,
-          imageCount: newsImages.length,
-          videoUrl: mediaMode === "video" ? sourceVideoUrl : "",
+          videoUrl,
+          videoDurationSec: durationSec,
         }),
       });
       const script = (await scriptResponse.json().catch(() => null)) as { lines?: Line[]; error?: string } | null;
-      if (!scriptResponse.ok || !script?.lines) throw new Error(script?.error ?? "The script could not be written.");
+      if (!scriptResponse.ok || !script?.lines?.length) throw new Error(script?.error ?? "The script could not be written.");
       setLines(script.lines);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The script could not be written.");
+    } finally {
+      setScanningScript(false);
+    }
+  }
+
+  async function generateVideo() {
+    setRunning(true);
+    setError("");
+    setVideoUrl("");
+    setShowPlayer(true);
+    setClips([]);
+    setCaptionIndex(0);
+    if (mediaMode !== "video") setLines([]);
+    try {
+      let scriptLines = lines;
+      if (mediaMode !== "video") {
+        setVideoStep(STEPS[0]);
+        const scriptResponse = await fetch("/api/news-podcast/script", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            news,
+            voiceLanguage,
+            subtitleLanguage,
+            preset,
+            imageCount: newsImages.length,
+            videoUrl: "",
+          }),
+        });
+        const script = (await scriptResponse.json().catch(() => null)) as { lines?: Line[]; error?: string } | null;
+        if (!scriptResponse.ok || !script?.lines) throw new Error(script?.error ?? "The script could not be written.");
+        scriptLines = script.lines;
+        setLines(script.lines);
+      } else if (scriptLines.length === 0) {
+        throw new Error("Wait for the script, or press Regenerate Script.");
+      }
 
       setVideoStep(STEPS[1]);
       const audioResponse = await fetch("/api/news-podcast/audio", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ language: voiceLanguage, lines: script.lines, mediaMode, ...hosts }),
+        body: JSON.stringify({ language: voiceLanguage, lines: scriptLines, mediaMode, ...hosts }),
       });
       const audioRaw = await audioResponse.text();
       let audio: { jobId?: string; clips?: Clip[]; error?: string } | null = null;
@@ -110,7 +143,7 @@ export default function NewsPodcastPage() {
         body: JSON.stringify({
           jobId: audio.jobId,
           title: news.trim().slice(0, 120),
-          lines: script.lines,
+          lines: scriptLines,
           imageUrls: mediaMode === "images" ? newsImages : [],
           sourceVideoUrl: mediaMode === "video" ? sourceVideoUrl : "",
           hostAGender,
@@ -223,6 +256,7 @@ export default function NewsPodcastPage() {
       });
       setSourceVideoUrl(ticket.publicUrl);
       setSourceDuration(duration);
+      void writeDubScript(ticket.publicUrl, duration);
     } catch (caught) {
       if (previewUrl !== localUrl) URL.revokeObjectURL(previewUrl);
       URL.revokeObjectURL(localUrl);
@@ -336,6 +370,27 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
             />
           </label>
 
+          {mediaMode === "video" ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
+                <span className="text-xs tracking-wide text-zinc-500 uppercase">Voice language</span>
+                <select value={voiceLanguage} onChange={(event) => setVoiceLanguage(event.target.value as Language)} className="bg-transparent text-sm outline-none">
+                  <option value="english" className="bg-[#07090e]">English</option>
+                  <option value="burmese" className="bg-[#07090e]">Burmese</option>
+                </select>
+              </label>
+              <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
+                <span className="text-xs tracking-wide text-zinc-500 uppercase">Subtitle language</span>
+                <select value={subtitleLanguage} onChange={(event) => setSubtitleLanguage(event.target.value as SubtitleLanguage)} className="bg-transparent text-sm outline-none">
+                  <option value="english" className="bg-[#07090e]">English</option>
+                  <option value="burmese" className="bg-[#07090e]">Burmese</option>
+                  <option value="dual" className="bg-[#07090e]">Dual (Burmese + English)</option>
+                  <option value="none" className="bg-[#07090e]">None (Off)</option>
+                </select>
+              </label>
+            </div>
+          ) : null}
+
           <section className={`${glass} p-4`}>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-sm font-medium">Media</h2>
@@ -424,7 +479,7 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                   }}
                 />
                 {sourcePreview ? (
-                  <video src={sourcePreview} controls className="max-h-64 w-full rounded-xl bg-black" />
+                  <video src={sourcePreview} autoPlay muted loop playsInline controls className="max-h-64 w-full rounded-xl bg-black" />
                 ) : (
                   <>
                     <UploadIcon />
@@ -445,6 +500,59 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
             )}
           </section>
 
+          {mediaMode === "video" ? (
+            <section className={`${glass} flex flex-col gap-3 p-4`}>
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-sm font-medium">Script timeline</h2>
+                <button
+                  type="button"
+                  disabled={!sourceVideoUrl || scanningScript || running}
+                  onClick={() => void writeDubScript(sourceVideoUrl, sourceDuration)}
+                  className="rounded-full border border-white/15 px-3 py-1.5 text-xs disabled:opacity-40"
+                >
+                  Regenerate Script
+                </button>
+              </div>
+              {scanningScript ? <p className="text-sm text-indigo-200">AI is scanning video & writing your script...</p> : null}
+              {lines.map((line, index) => (
+                <div key={`${line.startSec ?? index}-${index}`} className="grid gap-2 rounded-xl border border-white/10 p-3">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
+                    <span>{formatClock(line.startSec ?? 0)} – {formatClock(line.endSec ?? 0)}</span>
+                    <select
+                      value={line.speakerType || "female"}
+                      onChange={(event) =>
+                        setLines((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, speakerType: event.target.value as Line["speakerType"] } : item)))
+                      }
+                      className="rounded-full border border-white/10 bg-transparent px-2 py-1 text-zinc-200"
+                    >
+                      <option value="male" className="bg-[#07090e]">Male</option>
+                      <option value="female" className="bg-[#07090e]">Female</option>
+                      <option value="child" className="bg-[#07090e]">Child</option>
+                    </select>
+                  </div>
+                  <textarea
+                    value={line.voiceText || line.text || ""}
+                    rows={2}
+                    onChange={(event) =>
+                      setLines((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, voiceText: event.target.value } : item)))
+                    }
+                    className="resize-none bg-transparent text-sm outline-none"
+                  />
+                  {subtitleLanguage !== "none" ? (
+                    <textarea
+                      value={line.subtitleText || ""}
+                      rows={2}
+                      onChange={(event) =>
+                        setLines((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, subtitleText: event.target.value } : item)))
+                      }
+                      className="resize-none bg-transparent text-xs text-zinc-300 outline-none"
+                    />
+                  ) : null}
+                </div>
+              ))}
+            </section>
+          ) : null}
+
           {mediaMode === "images" ? (
             <div className="grid gap-4 sm:grid-cols-2">
               <HostCard title="Host A" detail="Questioner · Left" gender={hostAGender} image={hostAImage} onGender={setHostAGender} onImage={setHostAImage} />
@@ -452,6 +560,7 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
             </div>
           ) : null}
 
+          {mediaMode === "images" ? (
           <div className="grid gap-4 sm:grid-cols-2">
             <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
               <span className="text-xs tracking-wide text-zinc-500 uppercase">Voice language</span>
@@ -491,10 +600,11 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
             </label>
             ) : null}
           </div>
+          ) : null}
 
           <button
             type="button"
-            disabled={running || (mediaMode === "video" ? !sourceVideoUrl : news.trim().length < 8)}
+            disabled={running || scanningScript || (mediaMode === "video" ? !sourceVideoUrl || lines.length === 0 : news.trim().length < 8)}
             onClick={() => void generateVideo()}
             className="h-12 rounded-2xl bg-gradient-to-r from-indigo-500 via-blue-500 to-violet-500 text-sm font-semibold text-white shadow-[0_0_32px_rgba(99,102,241,0.45)] transition hover:brightness-110 disabled:opacity-40"
           >

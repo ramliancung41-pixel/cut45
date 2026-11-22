@@ -14,6 +14,7 @@ type Body = {
   preset?: unknown;
   imageCount?: unknown;
   videoUrl?: unknown;
+  videoDurationSec?: unknown;
 };
 
 const GEMINI_MODELS = ["gemini-4-hydrogen", "gemini-3.5-flash-lite", "gemini-3.8-flash"] as const;
@@ -38,6 +39,7 @@ export async function POST(request: Request) {
   const preset = body?.preset === "father-son" || body?.preset === "hosts" ? body.preset : "";
   const imageCount = typeof body?.imageCount === "number" ? Math.max(0, Math.min(3, Math.floor(body.imageCount))) : 0;
   const videoUrl = typeof body?.videoUrl === "string" && body.videoUrl.startsWith("https://") ? body.videoUrl : "";
+  const videoDurationSec = typeof body?.videoDurationSec === "number" && body.videoDurationSec > 0 ? Math.min(300, body.videoDurationSec) : 0;
   if ((news.length < 8 && !videoUrl) || !voiceLanguage || !preset) {
     return Response.json({ error: "Add a news topic or a video, plus a voice language and a character preset." }, { status: 400 });
   }
@@ -60,7 +62,7 @@ ${subtitleInstruction(subtitleLanguage, voiceLanguage)}
 speakerType is "male", "female", or "child" for the person who is speaking.
 Keep voiceText short enough to say inside endSec - startSec.
 Return JSON only, an array of {"startSec":number,"endSec":number,"speakerType":"male"|"female"|"child","voiceText":string,"subtitleText":string}.
-Times are seconds from the start of the video. Cover up to 5 minutes. Return at most 60 cues.`
+Times are seconds from the start of the video.${videoDurationSec ? ` The video is ${videoDurationSec.toFixed(1)} seconds long. Every endSec must stay inside that length.` : ""} Cover up to 5 minutes. Return at most 60 cues.`
     : `You write an original news commentary. Do not copy dialogue, narration, or captions from the source. Describe what happens in the hosts' own words.
 ${PRESETS[preset]}
 "voiceText" is what is spoken. Write it as original commentary in ${voiceLanguage === "burmese" ? "natural spoken Burmese (စကားပြောဟန်), not formal written Burmese" : "natural spoken English"}. Do not transcribe the source.
