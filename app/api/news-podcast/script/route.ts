@@ -99,9 +99,6 @@ async function geminiChain(apiKey: string, system: string, news: string, videoUr
   throw new QuotaError(last);
 }
 
-  throw new QuotaError(last);
-}
-
 async function uploadVideoToGemini(apiKey: string, videoUrl: string) {
   const source = await fetch(videoUrl);
   if (!source.ok) throw new Error(`The uploaded video could not be read (${source.status}).`);
