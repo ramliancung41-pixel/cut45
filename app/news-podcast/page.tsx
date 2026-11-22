@@ -516,7 +516,7 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                 <LiveStage
                   mode={mediaMode}
                   sourcePreview={sourcePreview}
-                  newsImage={newsImages[lines[captionIndex]?.imageIndex] || newsImages[0] || ""}
+                  newsImage={newsImages[lines[captionIndex]?.imageIndex ?? 0] || newsImages[0] || ""}
                   hostA={hostAImage}
                   hostB={hostBImage}
                   speaker={lines[captionIndex]?.speaker}
