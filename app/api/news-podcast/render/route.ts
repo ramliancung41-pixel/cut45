@@ -207,7 +207,7 @@ async function renderDub(source: string, cues: DubCue[], directory: string, outp
   const audioLabel = cues.length === 1 ? labels[0] : "[aout]";
   const duration = Math.max(...cues.map((cue) => cue.endSec), 1).toFixed(2);
   const filter = [
-    "[0:v]split[bg][fg]",
+    "[0:v]fps=30,setpts=PTS-STARTPTS,split=2[bg][fg]",
     "[bg]scale=36:64:force_original_aspect_ratio=increase,crop=36:64,scale=720:1280:flags=bilinear,eq=brightness=-0.12:saturation=1.1,setsar=1[blur]",
     `[fg]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1,drawbox=x=0:y=0:w=iw:h=ih:color=white@0.8:t=2,drawbox=x=2:y=ih-6:w='max(2\\,(iw-4)*t/${duration})':h=4:color=white@0.95:t=fill[fit]`,
     "[blur][fit]overlay=(W-w)/2:(H-h)/2[vout]",
@@ -229,8 +229,12 @@ async function renderDub(source: string, cues: DubCue[], directory: string, outp
     audioLabel,
     "-t",
     duration,
+    "-vsync",
+    "cfr",
     "-r",
     "30",
+    "-g",
+    "60",
     "-c:v",
     "libx264",
     "-preset",
@@ -435,7 +439,7 @@ WrapStyle: 0
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: News,Noto Sans Myanmar,46,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,70,70,${fullFrame ? 90 : 430},1
 Style: Dual,Noto Sans Myanmar,36,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,70,70,${fullFrame ? 70 : 400},1
-Style: Brand,Noto Sans Myanmar,22,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,2,0,1,0,0,8,40,40,64,1
+Style: Brand,Noto Sans Myanmar,34,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,1,0,1,1,1,8,40,40,55,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -526,7 +530,7 @@ function burnSubtitles(input: string, ass: string, output: string) {
     ffmpeg(input)
       .videoFilters(`ass='${filterPath(ass)}':fontsdir='${filterPath(path.dirname(FONT))}'`)
       .videoCodec("libx264")
-      .outputOptions(["-preset", "ultrafast", "-tune", "fastdecode", "-crf", "24", "-threads", "0", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-c:a", "copy"])
+      .outputOptions(["-vsync", "cfr", "-r", "30", "-g", "60", "-preset", "ultrafast", "-tune", "fastdecode", "-crf", "24", "-threads", "0", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-c:a", "copy"])
       .on("end", () => resolve())
       .on("error", (error: Error) => reject(error))
       .save(output);
