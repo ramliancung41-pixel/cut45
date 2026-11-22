@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "app/api/news-podcast/**/*.ts": {
+      "maxDuration": 60
+    }
+  }
+}

@@ -10,7 +10,7 @@ import { uploadPublicObject, STORAGE_BUCKETS } from "@/lib/storage";
 let binary = "";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 type Speaker = "A" | "B";
 type Segment = {
@@ -203,12 +203,12 @@ async function renderDub(source: string, cues: DubCue[], directory: string, outp
     audioFilters.push(`[${index + 1}:a]${tempo}atrim=0:${slot.toFixed(3)},asetpts=PTS-STARTPTS,adelay=${delay}|${delay}[a${index}]`);
     labels.push(`[a${index}]`);
   }
-  const mix = cues.length === 1 ? "" : `${labels.join("")}amix=inputs=${cues.length}:duration=longest:dropout_transition=0[aout]`;
+  const mix = cues.length === 1 ? "" : `${labels.join("")}amix=inputs=${cues.length}:duration=longest:dropout_transition=0:normalize=0[aout]`;
   const audioLabel = cues.length === 1 ? labels[0] : "[aout]";
   const filter = [
     "[0:v]split[bg][fg]",
-    "[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4,setsar=1[blur]",
-    "[fg]scale=1080:1920:force_original_aspect_ratio=decrease,setsar=1[fit]",
+    "[bg]scale=36:64:force_original_aspect_ratio=increase,crop=36:64,scale=720:1280:flags=bilinear,eq=brightness=-0.12:saturation=1.1,setsar=1[blur]",
+    "[fg]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1[fit]",
     "[blur][fit]overlay=(W-w)/2:(H-h)/2[vout]",
     ...audioFilters,
     mix,
@@ -233,14 +233,24 @@ async function renderDub(source: string, cues: DubCue[], directory: string, outp
     "30",
     "-c:v",
     "libx264",
+    "-preset",
+    "ultrafast",
+    "-tune",
+    "fastdecode",
+    "-crf",
+    "24",
+    "-threads",
+    "0",
     "-pix_fmt",
     "yuv420p",
+    "-movflags",
+    "+faststart",
     "-c:a",
     "aac",
     "-ar",
     "44100",
     "-b:a",
-    "160k",
+    "128k",
     silentPath,
   ]);
   try {
@@ -416,8 +426,8 @@ function assFile(cues: Array<{ start: number; end: number; text: string }>, full
     .join("\n");
   return `[Script Info]
 ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: ${fullFrame ? 720 : 1080}
+PlayResY: ${fullFrame ? 1280 : 1920}
 WrapStyle: 0
 
 [V4+ Styles]
@@ -514,7 +524,7 @@ function burnSubtitles(input: string, ass: string, output: string) {
     ffmpeg(input)
       .videoFilters(`ass='${filterPath(ass)}':fontsdir='${filterPath(path.dirname(FONT))}'`)
       .videoCodec("libx264")
-      .outputOptions(["-pix_fmt", "yuv420p", "-c:a", "copy"])
+      .outputOptions(["-preset", "ultrafast", "-tune", "fastdecode", "-crf", "24", "-threads", "0", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-c:a", "copy"])
       .on("end", () => resolve())
       .on("error", (error: Error) => reject(error))
       .save(output);
