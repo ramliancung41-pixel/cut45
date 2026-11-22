@@ -85,7 +85,7 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
   }
 
   const lines = parseLines(raw, imageCount, subtitleLanguage, voiceLanguage);
-  if (!lines) return Response.json({ error: "The script came back in an unexpected shape." }, { status: 502 });
+  if (!lines) return Response.json({ lines: localScript(news, voiceLanguage, subtitleLanguage) });
   return Response.json({ lines });
 }
 
@@ -102,11 +102,8 @@ async function geminiChain(apiKey: string, system: string, news: string, videoUr
     try {
       return await geminiScript(apiKey, model, system, news, fileUri, fileMime);
     } catch (error) {
-      if (error instanceof QuotaError || error instanceof UnavailableModelError) {
-        last = error.message;
-        continue;
-      }
-      throw error;
+      last = error instanceof Error ? error.message : "Gemini could not write the script.";
+      continue;
     }
   }
   throw new QuotaError(last);
@@ -175,6 +172,7 @@ async function geminiScript(apiKey: string, model: string, system: string, news:
   const endpoint = new URL(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`);
   const response = await fetch(endpoint, {
     method: "POST",
+    signal: AbortSignal.timeout(45000),
     headers: {
       "Content-Type": "application/json",
       "x-goog-api-key": apiKey,
@@ -193,7 +191,14 @@ async function geminiScript(apiKey: string, model: string, system: string, news:
   } | null;
   if (!response.ok) {
     const message = payload?.error?.message || `Gemini could not write the script (${response.status}).`;
-    if (response.status === 429 || payload?.error?.status === "RESOURCE_EXHAUSTED" || /quota|rate.?limit|resource.?exhausted/i.test(message)) {
+    if (
+      response.status === 429 ||
+      response.status === 500 ||
+      response.status === 503 ||
+      payload?.error?.status === "RESOURCE_EXHAUSTED" ||
+      payload?.error?.status === "UNAVAILABLE" ||
+      /quota|rate.?limit|resource.?exhausted|high demand|overloaded|unavailable|timeout/i.test(message)
+    ) {
       throw new QuotaError(message);
     }
     if (response.status === 404 || /not found|is not supported|deprecated|shut down/i.test(message)) {
@@ -251,7 +256,11 @@ function localScript(news: string, language: Spoken, subtitle: Caption): Line[] 
     .map((part) => part.replace(/\s+/g, " ").trim())
     .filter((part) => part.length > 12)
     .slice(0, 3);
-  const facts = parts.length > 0 ? parts : [news.replace(/\s+/g, " ").trim().slice(0, 220)];
+  const fallback =
+    language === "burmese"
+      ? "ဒီဇာတ်ကားထဲက အဖြစ်အပျက်ကို အိမ်ရှင်နှစ်ယောက်က ကိုယ်ပိုင်စကားလုံးနဲ့ ပြန်ပြောထားပါတယ်။"
+      : "The hosts walk through what happens in this clip, in their own words.";
+  const facts = parts.length > 0 ? parts : [news.replace(/\s+/g, " ").trim().slice(0, 220) || fallback];
   const questions =
     language === "burmese"
       ? ["ဒီသတင်းက ဘာဖြစ်တာလဲ။", "အဓိကအချက်က ဘာလဲ။", "နောက်ဆက်တွဲ ဘာသိထားသင့်လဲ။"]
