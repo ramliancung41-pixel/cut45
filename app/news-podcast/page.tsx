@@ -55,6 +55,9 @@ export default function NewsPodcastPage() {
   const [running, setRunning] = useState(false);
   const [mobileGallery, setMobileGallery] = useState(false);
   const [scanningScript, setScanningScript] = useState(false);
+  const [scriptProgress, setScriptProgress] = useState("");
+  const [subtitleTrackUrl, setSubtitleTrackUrl] = useState("");
+  const sourceFileRef = useRef<File | null>(null);
   const [videoStep, setVideoStep] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
   const [showPlayer, setShowPlayer] = useState(true);
@@ -64,29 +67,55 @@ export default function NewsPodcastPage() {
   const newsImages = images.filter((item) => item.startsWith("data:image/"));
   const hosts = { hostAGender, hostBGender, hostAImage, hostBImage };
 
-  async function writeDubScript(videoUrl: string, durationSec: number) {
+  useEffect(() => {
+    if (subtitleTrackUrl) URL.revokeObjectURL(subtitleTrackUrl);
+    if (lines.length === 0) {
+      setSubtitleTrackUrl("");
+      return;
+    }
+    const body = lines
+      .map((line, index) => `${index + 1}\n${vttClock(line.startSec ?? 0)} --> ${vttClock(line.endSec ?? 0)}\n${line.subtitleText || ""}`)
+      .join("\n\n");
+    setSubtitleTrackUrl(URL.createObjectURL(new Blob([`WEBVTT\n\n${body}\n`], { type: "text/vtt" })));
+    return () => undefined;
+  }, [lines]);
+
+  async function writeDubScript(file: File, durationSec: number) {
     setScanningScript(true);
     setError("");
+    setScriptProgress("Extracting audio...");
     try {
-      const scriptResponse = await fetch("/api/news-podcast/script", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          news,
-          voiceLanguage,
-          subtitleLanguage,
-          preset,
-          videoUrl,
-          videoDurationSec: durationSec,
-        }),
+      const chunks = await extractAudioChunks(file, durationSec);
+      let finished = 0;
+      setScriptProgress(`AI transcribing ${formatClock(durationSec)} across ${chunks.length} parallel streams...`);
+      const groups = await mapPool(chunks, 4, async (chunk) => {
+        const audioBase64 = await blobToBase64(chunk.blob);
+        const scriptResponse = await fetch("/api/news-podcast/script", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            news,
+            voiceLanguage,
+            subtitleLanguage,
+            preset,
+            audioBase64,
+            audioMimeType: chunk.mime,
+            chunkOffsetSec: chunk.offset,
+            chunkDurationSec: chunk.duration,
+          }),
+        });
+        const script = (await scriptResponse.json().catch(() => null)) as { lines?: Line[]; error?: string } | null;
+        finished += 1;
+        setScriptProgress(`AI transcribing ${formatClock(durationSec)} across ${chunks.length} parallel streams... ${finished}/${chunks.length}`);
+        if (!scriptResponse.ok || !script?.lines?.length) throw new Error(script?.error ?? "The subtitles could not be written.");
+        return script.lines;
       });
-      const script = (await scriptResponse.json().catch(() => null)) as { lines?: Line[]; error?: string } | null;
-      if (!scriptResponse.ok || !script?.lines?.length) throw new Error(script?.error ?? "The script could not be written.");
-      setLines(script.lines);
+      setLines(groups.flat().sort((left, right) => (left.startSec ?? 0) - (right.startSec ?? 0)));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The script could not be written.");
     } finally {
       setScanningScript(false);
+      setScriptProgress("");
     }
   }
 
@@ -261,13 +290,19 @@ export default function NewsPodcastPage() {
       probe.onerror = () => resolve(0);
       probe.src = localUrl;
     });
-    if (duration <= 0 || duration > 300) {
+    if (duration <= 0 || duration > 3600) {
       URL.revokeObjectURL(localUrl);
-      setError(duration > 300 ? "Keep the source video under 5 minutes." : "That video could not be read.");
+      setError(duration > 3600 ? "Keep the source video under 60 minutes." : "That video could not be read.");
       return;
     }
+    sourceFileRef.current = file;
     setSourceMeta(`${formatSize(file.size)} · ${formatClock(duration)}`);
     setSourceDuration(duration);
+    setSourcePreview((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return localUrl;
+    });
+    void writeDubScript(file, duration);
     setUploadingVideo(true);
     setOptimizeProgress(0);
     setError("");
@@ -294,16 +329,16 @@ export default function NewsPodcastPage() {
       }
       const uploaded = await createSupabaseBrowserClient().storage.from("user_assets").uploadToSignedUrl(ticket.path, ticket.token, uploadFile);
       if (uploaded.error) throw new Error(uploaded.error.message);
-      setSourcePreview((current) => {
-        if (current) URL.revokeObjectURL(current);
-        return previewUrl;
-      });
+      if (previewUrl !== localUrl) {
+        setSourcePreview((current) => {
+          if (current && current !== previewUrl) URL.revokeObjectURL(current);
+          return previewUrl;
+        });
+      }
       setSourceVideoUrl(ticket.publicUrl);
       setSourceDuration(duration);
-      void writeDubScript(ticket.publicUrl, duration);
     } catch (caught) {
       if (previewUrl !== localUrl) URL.revokeObjectURL(previewUrl);
-      URL.revokeObjectURL(localUrl);
       setError(caught instanceof Error ? caught.message : "The video could not be uploaded.");
     } finally {
       setUploadingVideo(false);
@@ -318,6 +353,222 @@ export default function NewsPodcastPage() {
 function formatClock(seconds: number) {
   const whole = Math.max(0, Math.round(seconds));
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+function vttClock(seconds: number) {
+  const whole = Math.max(0, seconds);
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const secs = whole % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${secs.toFixed(3).padStart(6, "0")}`;
+}
+
+async function extractAudioChunks(file: File, durationSec: number) {
+  const decoded = await new AudioContext().decodeAudioData(await file.arrayBuffer());
+  const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+  const source = offline.createBufferSource();
+  source.buffer = decoded;
+  source.connect(offline.destination);
+  source.start();
+  const rendered = await offline.startRendering();
+  const samples = rendered.getChannelData(0);
+  const pieces: Array<{ offset: number; duration: number; samples: Float32Array }> = [];
+  const span = typeof AudioEncoder === "undefined" ? 80 : 480;
+  for (let offset = 0; offset < durationSec; offset += span) {
+    const length = Math.min(span, durationSec - offset);
+    const start = Math.floor(offset * 16000);
+    const end = Math.min(samples.length, Math.floor((offset + length) * 16000));
+    pieces.push({ offset, duration: length, samples: samples.subarray(start, end) });
+  }
+  const chunks: Array<{ offset: number; duration: number; blob: Blob; mime: "audio/webm" | "audio/wav" }> = [];
+  for (const piece of pieces) {
+    const encoded = await encodeAudioPiece(piece.samples);
+    chunks.push({ offset: piece.offset, duration: piece.duration, blob: encoded.blob, mime: encoded.mime });
+  }
+  return chunks;
+}
+
+async function encodeAudioPiece(samples: Float32Array): Promise<{ blob: Blob; mime: "audio/webm" | "audio/wav" }> {
+  if (typeof AudioEncoder !== "undefined") {
+    try {
+      return { blob: await encodeOpusWebm(samples, 16000), mime: "audio/webm" };
+    } catch {
+      /* Fall through to a short WAV when Opus is unavailable. */
+    }
+  }
+  return { blob: encodeWav(samples, 16000), mime: "audio/wav" };
+}
+
+function encodeOpusWebm(samples: Float32Array, sampleRate: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    const packets: Array<{ data: Uint8Array; timestamp: number }> = [];
+    const encoder = new AudioEncoder({
+      output: (chunk) => {
+        const data = new Uint8Array(chunk.byteLength);
+        chunk.copyTo(data);
+        packets.push({ data, timestamp: chunk.timestamp });
+      },
+      error: () => reject(new Error("The audio track could not be compressed.")),
+    });
+    encoder.configure({ codec: "opus", sampleRate, numberOfChannels: 1, bitrate: 24_000 });
+    const frame = Math.floor(sampleRate / 50);
+    for (let index = 0; index < samples.length; index += frame) {
+      const data = new Float32Array(frame);
+      data.set(samples.subarray(index, Math.min(samples.length, index + frame)));
+      const audio = new AudioData({
+        format: "f32-planar",
+        sampleRate,
+        numberOfFrames: frame,
+        numberOfChannels: 1,
+        timestamp: Math.round((index / sampleRate) * 1_000_000),
+        data,
+      });
+      encoder.encode(audio);
+      audio.close();
+    }
+    void encoder.flush().then(() => resolve(new Blob([muxOpusWebm(packets, sampleRate)], { type: "audio/webm" }))).catch(reject);
+  });
+}
+
+function encodeWav(samples: Float32Array, sampleRate: number) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  writeText(view, 0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeText(view, 8, "WAVE");
+  writeText(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeText(view, 36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  for (let index = 0; index < samples.length; index += 1) {
+    const clamped = Math.max(-1, Math.min(1, samples[index] || 0));
+    view.setInt16(44 + index * 2, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function writeText(view: DataView, offset: number, value: string) {
+  for (let index = 0; index < value.length; index += 1) view.setUint8(offset + index, value.charCodeAt(index));
+}
+
+function muxOpusWebm(packets: Array<{ data: Uint8Array; timestamp: number }>, sampleRate: number) {
+  const clusters: Uint8Array[] = [];
+  for (let index = 0; index < packets.length; ) {
+    const origin = packets[index]?.timestamp ?? 0;
+    const group: Array<{ data: Uint8Array; timestamp: number }> = [];
+    while (index < packets.length && (packets[index]?.timestamp ?? 0) - origin < 30_000_000) {
+      const packet = packets[index];
+      if (packet) group.push(packet);
+      index += 1;
+    }
+    clusters.push(ebml(0x1f43b675, muxCluster(group, origin)));
+  }
+  const segment = concatBytes([ebml(0x1549a966, muxInfo()), ebml(0x1654ae6b, muxTracks(sampleRate)), ...clusters]);
+  return concatBytes([ebml(0x1a45dfa3, concatBytes([ebml(0x4286, bytes(1)), ebml(0x42f7, bytes(1)), ebml(0x42f2, bytes(4)), ebml(0x42f3, bytes(8)), ebml(0x4282, text("webm")), ebml(0x4287, bytes(4)), ebml(0x4285, bytes(2))])), ebml(0x18538067, segment)]);
+}
+
+function muxInfo() {
+  return concatBytes([ebml(0x2ad7b1, bytes(0x0f, 0x42, 0x40)), ebml(0x4d80, text("CUT45")), ebml(0x5741, text("CUT45"))]);
+}
+
+function muxTracks(sampleRate: number) {
+  const head = new Uint8Array(19);
+  writeTextBytes(head, 0, "OpusHead");
+  head[8] = 1;
+  head[9] = 1;
+  new DataView(head.buffer).setUint32(12, sampleRate, true);
+  const track = concatBytes([
+    ebml(0xd7, bytes(1)),
+    ebml(0x73c5, bytes(1)),
+    ebml(0x83, bytes(2)),
+    ebml(0x86, text("A_OPUS")),
+    ebml(0x63a2, head),
+  ]);
+  return ebml(0xae, track);
+}
+
+function muxCluster(packets: Array<{ data: Uint8Array; timestamp: number }>, origin: number) {
+  const blocks = packets.map((packet) => {
+    const timecode = Math.max(0, Math.min(32767, Math.round((packet.timestamp - origin) / 1000)));
+    const body = new Uint8Array(4 + packet.data.length);
+    body[0] = 0x81;
+    body[1] = (timecode >> 8) & 0xff;
+    body[2] = timecode & 0xff;
+    body[3] = 0x80;
+    body.set(packet.data, 4);
+    return ebml(0xa3, body);
+  });
+  return concatBytes([ebml(0xe7, uintBytes(Math.round(origin / 1000))), ...blocks]);
+}
+
+function uintBytes(value: number) {
+  if (value <= 0xff) return bytes(value);
+  if (value <= 0xffff) return bytes((value >> 8) & 0xff, value & 0xff);
+  return bytes((value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff);
+}
+
+function ebml(id: number, data: Uint8Array) {
+  const idBytes = id > 0xffffff ? bytes((id >> 24) & 0xff, (id >> 16) & 0xff, (id >> 8) & 0xff, id & 0xff) : id > 0xffff ? bytes((id >> 16) & 0xff, (id >> 8) & 0xff, id & 0xff) : bytes((id >> 8) & 0xff, id & 0xff);
+  return concatBytes([idBytes, vint(data.length), data]);
+}
+
+function vint(length: number) {
+  if (length < 0x7f) return bytes(0x80 | length);
+  if (length < 0x3fff) return bytes(0x40 | ((length >> 8) & 0x3f), length & 0xff);
+  if (length < 0x1fffff) return bytes(0x20 | ((length >> 16) & 0x1f), (length >> 8) & 0xff, length & 0xff);
+  return bytes(0x10 | ((length >> 24) & 0x07), (length >> 16) & 0xff, (length >> 8) & 0xff, length & 0xff);
+}
+
+function bytes(...values: number[]) {
+  return Uint8Array.from(values);
+}
+
+function text(value: string) {
+  return Uint8Array.from(value, (char) => char.charCodeAt(0));
+}
+
+function writeTextBytes(target: Uint8Array, offset: number, value: string) {
+  for (let index = 0; index < value.length; index += 1) target[offset + index] = value.charCodeAt(index);
+}
+
+function concatBytes(parts: Uint8Array[]) {
+  const size = parts.reduce((total, part) => total + part.length, 0);
+  const out = new Uint8Array(size);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+function blobToBase64(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function mapPool<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  async function run() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => run()));
+  return results;
 }
 
 function compressStudioVideo(file: File, duration: number, onProgress: (percent: number) => void) {
@@ -527,7 +778,9 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                   }}
                 />
                 {sourcePreview ? (
-                  <video src={sourcePreview} autoPlay muted loop playsInline controls className="max-h-64 w-full rounded-xl bg-black" />
+                  <video src={sourcePreview} autoPlay muted loop playsInline controls className="max-h-64 w-full rounded-xl bg-black">
+                    {subtitleTrackUrl ? <track kind="subtitles" src={subtitleTrackUrl} srcLang="en" label="Subtitles" default /> : null}
+                  </video>
                 ) : (
                   <>
                     <UploadIcon />
@@ -538,7 +791,7 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                           ? "Uploading..."
                           : "Drop a video or click to choose"}
                     </span>
-                    <span className="text-xs text-zinc-500">MP4, WebM, or MOV · 5 minutes maximum</span>
+                    <span className="text-xs text-zinc-500">MP4, WebM, or MOV · 60 minutes maximum</span>
                   </>
                 )}
                 {sourceMeta ? <span className="text-xs text-zinc-300">{sourceMeta}</span> : null}
@@ -554,14 +807,14 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                 <h2 className="text-sm font-medium">Subtitle timeline</h2>
                 <button
                   type="button"
-                  disabled={!sourceVideoUrl || scanningScript || running}
-                  onClick={() => void writeDubScript(sourceVideoUrl, sourceDuration)}
+                  disabled={!sourcePreview || scanningScript || running}
+                  onClick={() => sourceFileRef.current && void writeDubScript(sourceFileRef.current, sourceDuration)}
                   className="rounded-full border border-white/15 px-3 py-1.5 text-xs disabled:opacity-40"
                 >
                   Regenerate Subtitles
                 </button>
               </div>
-              {scanningScript ? <p className="text-sm text-indigo-200">AI is writing subtitles...</p> : null}
+              {scanningScript ? <p className="text-sm text-indigo-200">{scriptProgress || "AI is writing subtitles..."}</p> : null}
               {lines.map((line, index) => (
                 <div key={`${line.startSec ?? index}-${index}`} className="grid gap-2 rounded-xl border border-white/10 p-3">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
@@ -650,7 +903,9 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
           <div className={`mx-auto w-full ${mediaMode !== "video" ? "max-w-[320px]" : (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "16:9" ? "max-w-none" : (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "4:5" ? "max-w-[540px]" : "max-w-[320px]"}`}>
             <div className={`relative max-h-[700px] overflow-hidden rounded-[1.6rem] border border-white/[0.1] bg-black shadow-[0_16px_48px_rgba(0,0,0,0.55)] ${mediaMode !== "video" || (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "9:16" ? "aspect-[9/16]" : (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "4:5" ? "aspect-[4/5]" : "aspect-video"}`}>
               {videoUrl && showPlayer ? (
-                <video src={videoUrl} controls autoPlay playsInline className={`absolute inset-0 h-full w-full rounded-xl bg-black ${mediaMode === "video" && (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "16:9" ? "object-cover" : "object-contain"}`} />
+                <video src={videoUrl} controls autoPlay playsInline className={`absolute inset-0 h-full w-full rounded-xl bg-black ${mediaMode === "video" && (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "16:9" ? "object-cover" : "object-contain"}`}>
+                  {mediaMode === "video" && subtitleTrackUrl ? <track kind="subtitles" src={subtitleTrackUrl} srcLang="en" label="Subtitles" default /> : null}
+                </video>
               ) : (
                 <LiveStage
                   mode={mediaMode}

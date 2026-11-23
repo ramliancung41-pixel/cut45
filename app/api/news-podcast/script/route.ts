@@ -15,6 +15,10 @@ type Body = {
   imageCount?: unknown;
   videoUrl?: unknown;
   videoDurationSec?: unknown;
+  audioBase64?: unknown;
+  audioMimeType?: unknown;
+  chunkOffsetSec?: unknown;
+  chunkDurationSec?: unknown;
 };
 
 const PRIMARY_MODELS = ["gemini-3.5-flash-lite", "gemini-3.5-flash"];
@@ -40,8 +44,16 @@ export async function POST(request: Request) {
   const preset = body?.preset === "father-son" || body?.preset === "hosts" ? body.preset : "";
   const imageCount = typeof body?.imageCount === "number" ? Math.max(0, Math.min(3, Math.floor(body.imageCount))) : 0;
   const videoUrl = typeof body?.videoUrl === "string" && body.videoUrl.startsWith("https://") ? body.videoUrl : "";
-  const videoDurationSec = typeof body?.videoDurationSec === "number" && body.videoDurationSec > 0 ? Math.min(300, body.videoDurationSec) : 0;
-  if (videoUrl) {
+  const videoDurationSec = typeof body?.videoDurationSec === "number" && body.videoDurationSec > 0 ? Math.min(3600, body.videoDurationSec) : 0;
+  const audioBase64 = typeof body?.audioBase64 === "string" ? body.audioBase64.replace(/\s/g, "") : "";
+  const audioMimeType = body?.audioMimeType === "audio/wav" || body?.audioMimeType === "audio/webm" ? body.audioMimeType : "";
+  const chunkOffsetSec = typeof body?.chunkOffsetSec === "number" && body.chunkOffsetSec >= 0 ? Math.min(3600, body.chunkOffsetSec) : 0;
+  const chunkDurationSec = typeof body?.chunkDurationSec === "number" && body.chunkDurationSec > 0 ? Math.min(480, body.chunkDurationSec) : 0;
+  const audioChunk = Boolean(audioBase64 && audioMimeType && chunkDurationSec);
+  if (audioBase64.length > 6_000_000) {
+    return Response.json({ error: "That audio chunk is too large to transcribe." }, { status: 400 });
+  }
+  if (videoUrl || audioChunk) {
     if (subtitleLanguage !== "burmese" && subtitleLanguage !== "english" && subtitleLanguage !== "dual") {
       return Response.json({ error: "Choose Burmese, English, or dual subtitles." }, { status: 400 });
     }
@@ -54,17 +66,17 @@ export async function POST(request: Request) {
   if (!geminiKey && !openaiKey) {
     return Response.json({ error: "A language model key is not configured yet." }, { status: 500 });
   }
-  if (!geminiKey && videoUrl) {
+  if (!geminiKey && (videoUrl || audioChunk)) {
     return Response.json({ error: "Gemini is required to write commentary from a video." }, { status: 500 });
   }
 
-  const dubbing = Boolean(videoUrl);
+  const dubbing = Boolean(videoUrl || audioChunk);
   const spoken: Spoken = voiceLanguage === "burmese" ? "burmese" : "english";
   const presetKey = preset || "hosts";
   const system = dubbing
     ? `You write subtitles for the spoken dialogue in this video. Do not invent a host conversation and do not assign voices.
-Listen from 0 seconds through ${videoDurationSec ? `${videoDurationSec.toFixed(1)} seconds` : "the end"}.
-Return 8 to 15 chronological cues covering that span.
+Listen from 0 seconds through ${audioChunk ? `${chunkDurationSec.toFixed(1)} seconds of this audio chunk` : videoDurationSec ? `${videoDurationSec.toFixed(1)} seconds` : "the end"}.
+Return chronological subtitle cues covering that span. Times are relative to the start of this audio.
 ${subtitleInstruction(subtitleLanguage === "none" ? "english" : subtitleLanguage, spoken)}
 Return JSON only, an array of {"startSec":number,"endSec":number,"subtitleText":string}.`
     : `You write an original news commentary. Do not copy dialogue, narration, or captions from the source. Describe what happens in the hosts' own words.
@@ -79,7 +91,7 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
 
   let raw = "";
   try {
-    raw = geminiKey ? await geminiChain(geminiKey, system, news, videoUrl) : await openaiScript(openaiKey, system, news);
+    raw = geminiKey ? await geminiChain(geminiKey, system, news, videoUrl, audioChunk ? { mime: audioMimeType, inline: audioBase64 } : null) : await openaiScript(openaiKey, system, news);
   } catch (error) {
     if (error instanceof QuotaError) {
       const groqKey = process.env.GROQ_API_KEY?.trim() ?? "";
@@ -107,7 +119,8 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
     }
   }
 
-  const lines = dubbing ? parseDubCues(raw, subtitleLanguage, spoken) : parseLines(raw, imageCount, subtitleLanguage, spoken);
+  const parsed = dubbing ? parseDubCues(raw, subtitleLanguage, spoken) : parseLines(raw, imageCount, subtitleLanguage, spoken);
+  const lines = parsed && audioChunk ? parsed.map((line) => ("startSec" in line ? { ...line, startSec: line.startSec + chunkOffsetSec, endSec: Math.min(3600, line.endSec + chunkOffsetSec) } : line)) : parsed;
   if (!lines) {
     if (dubbing) return Response.json({ error: "Gemini did not return the spoken lines for this video." }, { status: 502 });
     return Response.json({ lines: localScript(news, spoken, subtitleLanguage) });
@@ -115,8 +128,8 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
   return Response.json({ lines });
 }
 
-async function geminiChain(apiKey: string, system: string, news: string, videoUrl: string) {
-  const video = videoUrl ? await prepareGeminiVideo(apiKey, videoUrl) : null;
+async function geminiChain(apiKey: string, system: string, news: string, videoUrl: string, audio: { mime: string; inline: string } | null = null) {
+  const video = audio ? audio : videoUrl ? await prepareGeminiVideo(apiKey, videoUrl) : null;
   const first = cachedGeminiModel && !PRIMARY_MODELS.includes(cachedGeminiModel) ? [cachedGeminiModel, ...PRIMARY_MODELS] : cachedGeminiModel ? [cachedGeminiModel, ...PRIMARY_MODELS.filter((model) => model !== cachedGeminiModel)] : [...PRIMARY_MODELS];
   let last = "Gemini quota exceeded.";
   let primaryFailures = 0;
@@ -426,8 +439,8 @@ function parseDubCues(raw: string, subtitleLanguage: Caption, spoken: Spoken) {
   const cues = list.slice(0, 60).flatMap((item) => {
     if (!item || typeof item !== "object") return [];
     const record = item as { startSec?: unknown; endSec?: unknown; speakerType?: unknown; voiceType?: unknown; voiceText?: unknown; subtitleText?: unknown };
-    const startSec = typeof record.startSec === "number" && record.startSec >= 0 ? Math.min(300, record.startSec) : -1;
-    const endSec = typeof record.endSec === "number" ? Math.min(300, record.endSec) : -1;
+    const startSec = typeof record.startSec === "number" && record.startSec >= 0 ? Math.min(3600, record.startSec) : -1;
+    const endSec = typeof record.endSec === "number" ? Math.min(3600, record.endSec) : -1;
     const speakerType = normalizeRole(record.speakerType) || normalizeRole(record.voiceType);
     const voiceText = typeof record.voiceText === "string" ? record.voiceText.trim().slice(0, 240) : "";
     const supplied = typeof record.subtitleText === "string" ? record.subtitleText.trim().slice(0, 400) : "";
