@@ -410,7 +410,8 @@ function assFile(cues: Array<{ start: number; end: number; text: string }>, full
     .filter((cue) => cue.text.trim())
     .map((cue) => {
       const style = cue.text.includes("\n") ? "Dual" : "News";
-      return `Dialogue: 0,${assTime(cue.start)},${assTime(cue.end)},${style},,0,0,0,,${escapeAss(cue.text)}`;
+      const font = /[\u1000-\u109F]/.test(cue.text) ? "" : "{\\fnNoto Sans}";
+      return `Dialogue: 0,${assTime(cue.start)},${assTime(cue.end)},${style},,0,0,0,,${font}${escapeAss(cue.text)}`;
     })
     .join("\n");
   return `[Script Info]

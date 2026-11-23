@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 type Spoken = "burmese" | "english";
-type Caption = Spoken | "dual" | "none";
+type Caption = Spoken | "dual" | "hakha_lai" | "dual_lai_en" | "none";
 type VoiceType = "male" | "male_elder" | "female" | "female_elder" | "child_boy" | "child_girl";
 type Line = { speaker: "A" | "B"; voiceType: VoiceType; voiceText: string; subtitleText: string; imageIndex: number };
 
@@ -21,7 +21,8 @@ type Body = {
   chunkDurationSec?: unknown;
 };
 
-const PRIMARY_MODELS = ["gemini-3.5-flash-lite", "gemini-3.5-flash"];
+const PRIMARY_MODELS = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.1-flash-lite"];
+const RETRY_WAITS = [1500, 3000, 5000, 8000, 12000];
 let cachedGeminiModel = "";
 
 class QuotaError extends Error {}
@@ -38,7 +39,7 @@ export async function POST(request: Request) {
   const legacy = body?.language === "burmese" ? "burmese" : body?.language === "english" ? "english" : "";
   const voiceLanguage: Spoken | "" = body?.voiceLanguage === "burmese" || body?.voiceLanguage === "english" ? body.voiceLanguage : legacy;
   const subtitleLanguage: Caption =
-    body?.subtitleLanguage === "burmese" || body?.subtitleLanguage === "english" || body?.subtitleLanguage === "dual" || body?.subtitleLanguage === "none"
+    body?.subtitleLanguage === "burmese" || body?.subtitleLanguage === "english" || body?.subtitleLanguage === "dual" || body?.subtitleLanguage === "hakha_lai" || body?.subtitleLanguage === "dual_lai_en" || body?.subtitleLanguage === "none"
       ? body.subtitleLanguage
       : voiceLanguage || "english";
   const preset = body?.preset === "father-son" || body?.preset === "hosts" ? body.preset : "";
@@ -54,7 +55,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "That audio chunk is too large to transcribe." }, { status: 400 });
   }
   if (videoUrl || audioChunk) {
-    if (subtitleLanguage !== "burmese" && subtitleLanguage !== "english" && subtitleLanguage !== "dual") {
+    if (!["burmese", "english", "dual", "hakha_lai", "dual_lai_en"].includes(subtitleLanguage)) {
       return Response.json({ error: "Choose Burmese, English, or dual subtitles." }, { status: 400 });
     }
   } else if (news.length < 8 || !voiceLanguage || !preset) {
@@ -166,9 +167,9 @@ async function rotateAudioModels(apiKey: string, system: string, news: string, v
     const rest = models.filter((model) => model !== cachedGeminiModel);
     models.splice(0, models.length, cachedGeminiModel, ...rest);
   }
-  const waits = [1500, 3000, 5000];
+  const waits = RETRY_WAITS;
   let last = "Gemini is currently experiencing high demand.";
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
     const model = models[attempt % models.length] || PRIMARY_MODELS[0];
     try {
       const text = await geminiScript(apiKey, model, system, news, video);
@@ -177,8 +178,8 @@ async function rotateAudioModels(apiKey: string, system: string, news: string, v
     } catch (error) {
       last = error instanceof Error ? error.message : last;
       const busy = error instanceof QuotaError || /high demand|overloaded|unavailable|503|429/i.test(last);
-      if (!busy || attempt === 2) break;
-      await new Promise((resolve) => setTimeout(resolve, waits[attempt] ?? 5000));
+      if (!busy || attempt === 4) break;
+      await new Promise((resolve) => setTimeout(resolve, waits[attempt] ?? 12000));
     }
   }
   throw new QuotaError(last);
@@ -186,14 +187,14 @@ async function rotateAudioModels(apiKey: string, system: string, news: string, v
 
 async function tryGeminiModel(apiKey: string, model: string, system: string, news: string, video: { mime: string; inline?: string; uri?: string } | null) {
   let message = "Gemini could not write the script.";
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
       return { ok: true as const, text: await geminiScript(apiKey, model, system, news, video) };
     } catch (error) {
       message = error instanceof Error ? error.message : message;
       const busy = error instanceof QuotaError || /high demand|overloaded|unavailable|503|429/i.test(message);
-      if (!busy || attempt === 2) break;
-      await new Promise((resolve) => setTimeout(resolve, 1200 + Math.floor(Math.random() * 400)));
+      if (!busy || attempt === 4) break;
+      await new Promise((resolve) => setTimeout(resolve, RETRY_WAITS[attempt] ?? 12000));
     }
   }
   return { ok: false as const, message };
@@ -461,9 +462,13 @@ async function openaiScript(apiKey: string, system: string, news: string) {
 
 function subtitleInstruction(subtitle: Caption, voice: Spoken) {
   if (subtitle === "none") return 'Set every "subtitleText" field to an empty string. Captions are off.';
+  if (subtitle === "hakha_lai" || subtitle === "dual_lai_en") {
+    return `Do this in two steps for every cue. First understand the spoken audio and its context in clear English. Then write authentic conversational Hakha Lai (Laiholh) with real Hakha vocabulary and the underdot letter ṭ, as in "a si", "zei tin", and "nan dam maw". Do not mix in Mizo, Falam, or Burmese. ${subtitle === "dual_lai_en" ? 'Set "subtitleText" to the Hakha Lai line, a newline, then the English line.' : 'Set "subtitleText" to the Hakha Lai line only.'}`;
+  }
   if (subtitle === "dual") return 'Set "subtitleText" to the same line in Burmese, then a newline, then the same line in English.';
   if (subtitle === voice) return 'Set "subtitleText" to the same words as "voiceText".';
-  return `Set "subtitleText" to a natural ${subtitle === "burmese" ? "spoken Burmese" : "spoken English"} caption of the same line. Keep "voiceText" in the voice language.`;
+  const captionName = subtitle === "burmese" ? "spoken Burmese" : "spoken English";
+  return `Set "subtitleText" to a natural ${captionName} caption of the same line. Keep "voiceText" in the voice language.`;
 }
 
 function captionFor(text: string, voice: Spoken, subtitle: Caption) {

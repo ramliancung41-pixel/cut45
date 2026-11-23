@@ -18,6 +18,7 @@ export async function renderLocalRecap(options: {
   await engine.writeFile(inputName, await fetchFile(options.file));
   await engine.writeFile("subs.ass", assFile(options.lines, frame));
   await engine.writeFile("NotoSansMyanmar-Regular.ttf", await fetchFile("/fonts/NotoSansMyanmar-Regular.ttf"));
+  await engine.writeFile("NotoSans-Regular.ttf", await fetchFile("/fonts/NotoSans-Regular.ttf"));
   const duration = Math.max(...options.lines.map((line) => line.endSec ?? 0), 1).toFixed(2);
   const blur = frame.cover ? "64:36" : "36:64";
   const fit = frame.cover
@@ -81,7 +82,9 @@ function assFile(lines: Cue[], frame: { w: number; h: number }) {
     .filter((line) => (line.subtitleText || "").trim())
     .map((line) => {
       const style = (line.subtitleText || "").includes("\n") ? "Dual" : "News";
-      return `Dialogue: 0,${assTime(line.startSec ?? 0)},${assTime(line.endSec ?? 0)},${style},,0,0,0,,${escapeAss(line.subtitleText || "")}`;
+      const text = line.subtitleText || "";
+      const font = /[\u1000-\u109F]/.test(text) ? "" : "{\\fnNoto Sans}";
+      return `Dialogue: 0,${assTime(line.startSec ?? 0)},${assTime(line.endSec ?? 0)},${style},,0,0,0,,${font}${escapeAss(text)}`;
     })
     .join("\n");
   const wide = frame.w > frame.h;

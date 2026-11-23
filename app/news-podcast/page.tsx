@@ -22,7 +22,7 @@ type Line = {
 };
 type Clip = Line & { path: string; audioDataUrl?: string; durationSec: number; actualDurationSec?: number };
 type Language = "burmese" | "english";
-type SubtitleLanguage = Language | "dual" | "none";
+type SubtitleLanguage = Language | "dual" | "hakha_lai" | "dual_lai_en" | "none";
 type Aspect = "9:16" | "4:5" | "16:9";
 type Gender = "male" | "female";
 type Preset = "father-son" | "hosts";
@@ -91,7 +91,7 @@ export default function NewsPodcastPage() {
       let wrote = 0;
       let lastError = "The subtitles could not be written.";
       setScriptProgress(`AI transcribing ${formatClock(durationSec)} across ${chunks.length} streams...`);
-      await mapPool(chunks, 2, async (chunk) => {
+      await mapPool(chunks, 1, async (chunk) => {
         try {
           const audioBase64 = await blobToBase64(chunk.blob);
           const scriptResponse = await fetch("/api/news-podcast/script", {
@@ -118,6 +118,7 @@ export default function NewsPodcastPage() {
         } finally {
           finished += 1;
           setScriptProgress(`AI transcribing ${formatClock(durationSec)} across ${chunks.length} streams... ${finished}/${chunks.length}`);
+          await new Promise((resolve) => setTimeout(resolve, 400));
         }
       });
       if (wrote === 0) throw new Error(lastError);
@@ -371,7 +372,7 @@ async function extractAudioChunks(file: File, durationSec: number) {
   const rendered = await offline.startRendering();
   const samples = rendered.getChannelData(0);
   const pieces: Array<{ offset: number; duration: number; samples: Float32Array }> = [];
-  const span = 120;
+  const span = 90;
   for (let offset = 0; offset < durationSec; offset += span) {
     const length = Math.min(span, durationSec - offset);
     const start = Math.floor(offset * 16000);
@@ -674,6 +675,8 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                   <option value="english" className="bg-[#07090e]">English</option>
                   <option value="burmese" className="bg-[#07090e]">Burmese</option>
                 <option value="dual" className="bg-[#07090e]">Dual (Burmese + English)</option>
+                  <option value="hakha_lai" className="bg-[#07090e]">Hakha Lai</option>
+                  <option value="dual_lai_en" className="bg-[#07090e]">Dual (Hakha Lai + English)</option>
               </select>
             </label>
               <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
@@ -863,6 +866,8 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                 <option value="english" className="bg-[#07090e]">English</option>
                 <option value="burmese" className="bg-[#07090e]">Burmese</option>
                 <option value="dual" className="bg-[#07090e]">Dual (Burmese + English)</option>
+                  <option value="hakha_lai" className="bg-[#07090e]">Hakha Lai</option>
+                  <option value="dual_lai_en" className="bg-[#07090e]">Dual (Hakha Lai + English)</option>
                 <option value="none" className="bg-[#07090e]">None (Off)</option>
               </select>
             </label>
