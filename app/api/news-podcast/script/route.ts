@@ -58,16 +58,18 @@ export async function POST(request: Request) {
   }
 
   const dubbing = Boolean(videoUrl);
+  const spoken: Spoken = voiceLanguage === "burmese" ? "burmese" : "english";
+  const presetKey = preset || "hosts";
   const system = dubbing
     ? `You write subtitles for the spoken dialogue in this video. Do not invent a host conversation and do not assign voices.
 Listen from 0 seconds through ${videoDurationSec ? `${videoDurationSec.toFixed(1)} seconds` : "the end"}.
 Return 8 to 15 chronological cues covering that span.
-${subtitleInstruction(subtitleLanguage, subtitleLanguage === "dual" ? "english" : subtitleLanguage)}
+${subtitleInstruction(subtitleLanguage === "none" ? "english" : subtitleLanguage, spoken)}
 Return JSON only, an array of {"startSec":number,"endSec":number,"subtitleText":string}.`
     : `You write an original news commentary. Do not copy dialogue, narration, or captions from the source. Describe what happens in the hosts' own words.
-${PRESETS[preset]}
-"voiceText" is what is spoken. Write it as original commentary in ${voiceLanguage === "burmese" ? "natural spoken Burmese (စကားပြောဟန်), not formal written Burmese" : "natural spoken English"}. Do not transcribe the source.
-${subtitleInstruction(subtitleLanguage, voiceLanguage)}
+${PRESETS[presetKey]}
+"voiceText" is what is spoken. Write it as original commentary in ${spoken === "burmese" ? "natural spoken Burmese (စကားပြောဟန်), not formal written Burmese" : "natural spoken English"}. Do not transcribe the source.
+${subtitleInstruction(subtitleLanguage, spoken)}
 For every line set "voiceType" to "male", "female", or "child" from who is speaking or narrating that moment. A child character uses "child".
 Host A only asks questions. Host B only explains. Alternate speakers, starting with A.
 Return 8 to 14 short lines.
@@ -82,14 +84,14 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
       const groqKey = process.env.GROQ_API_KEY?.trim() ?? "";
       if (dubbing && groqKey && videoUrl) {
         try {
-          return Response.json({ lines: await groqDub(groqKey, videoUrl, voiceLanguage, subtitleLanguage) });
+          return Response.json({ lines: await groqDub(groqKey, videoUrl, spoken, subtitleLanguage) });
         } catch (groqError) {
           const groqMessage = groqError instanceof Error ? groqError.message : error.message;
           return Response.json({ error: groqMessage }, { status: 502 });
         }
       }
       if (dubbing) return Response.json({ error: error.message }, { status: 502 });
-      return Response.json({ lines: localScript(news, voiceLanguage, subtitleLanguage) });
+      return Response.json({ lines: localScript(news, spoken, subtitleLanguage) });
     }
     const message = error instanceof Error ? error.message : "The script could not be written.";
     if (geminiKey && openaiKey) {
@@ -104,10 +106,10 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
     }
   }
 
-  const lines = dubbing ? parseDubCues(raw, subtitleLanguage, voiceLanguage) : parseLines(raw, imageCount, subtitleLanguage, voiceLanguage);
+  const lines = dubbing ? parseDubCues(raw, subtitleLanguage, spoken) : parseLines(raw, imageCount, subtitleLanguage, spoken);
   if (!lines) {
     if (dubbing) return Response.json({ error: "Gemini did not return the spoken lines for this video." }, { status: 502 });
-    return Response.json({ lines: localScript(news, voiceLanguage, subtitleLanguage) });
+    return Response.json({ lines: localScript(news, spoken, subtitleLanguage) });
   }
   return Response.json({ lines });
 }
@@ -190,7 +192,7 @@ async function uploadVideoToGemini(apiKey: string, bytes: Buffer, mime: string) 
   return { uri, name };
 }
 
-async function groqDub(apiKey: string, videoUrl: string, voiceLanguage: Spoken, subtitleLanguage: Caption) {
+async function groqDub(apiKey: string, videoUrl: string, spoken: Spoken, subtitleLanguage: Caption) {
   const source = await fetch(videoUrl);
   if (!source.ok) throw new Error(`The uploaded video could not be read (${source.status}).`);
   const bytes = Buffer.from(await source.arrayBuffer());
@@ -218,7 +220,7 @@ async function groqDub(apiKey: string, videoUrl: string, voiceLanguage: Spoken, 
       messages: [
         {
           role: "system",
-          content: `Translate each spoken segment. voiceText is natural ${voiceLanguage === "burmese" ? "spoken Burmese" : "spoken English"}. ${subtitleInstruction(subtitleLanguage, voiceLanguage)} Guess speakerType as male, male_elder, female, female_elder, child_boy, or child_girl. Do not mark every line female. Keep the same startSec and endSec. Return {"lines":[{"startSec":number,"endSec":number,"speakerType":string,"voiceText":string,"subtitleText":string}]}.`,
+          content: `Translate each spoken segment. voiceText is natural ${spoken === "burmese" ? "spoken Burmese" : "spoken English"}. ${subtitleInstruction(subtitleLanguage, spoken)} Guess speakerType as male, male_elder, female, female_elder, child_boy, or child_girl. Do not mark every line female. Keep the same startSec and endSec. Return {"lines":[{"startSec":number,"endSec":number,"speakerType":string,"voiceText":string,"subtitleText":string}]}.`,
         },
         { role: "user", content: JSON.stringify(segments.map((segment) => ({ startSec: segment.start, endSec: segment.end, text: segment.text }))) },
       ],
@@ -226,7 +228,7 @@ async function groqDub(apiKey: string, videoUrl: string, voiceLanguage: Spoken, 
   });
   const payload = (await translated.json().catch(() => null)) as { error?: { message?: string }; choices?: Array<{ message?: { content?: string } }> } | null;
   if (!translated.ok) throw new Error(payload?.error?.message || `Groq could not translate the video (${translated.status}).`);
-  const lines = parseDubCues(payload?.choices?.[0]?.message?.content ?? "", subtitleLanguage, voiceLanguage);
+  const lines = parseDubCues(payload?.choices?.[0]?.message?.content ?? "", subtitleLanguage, spoken);
   if (!lines) throw new Error("Groq did not return timed dialogue.");
   return lines;
 }
@@ -353,7 +355,7 @@ function normalizeRole(value: unknown): VoiceType | null {
   return null;
 }
 
-function parseDubCues(raw: string, subtitleLanguage: Caption, voiceLanguage: Spoken) {
+function parseDubCues(raw: string, subtitleLanguage: Caption, spoken: Spoken) {
   const start = raw.indexOf("[");
   const end = raw.lastIndexOf("]");
   const objectStart = raw.indexOf("{");
@@ -410,7 +412,7 @@ function localScript(news: string, language: Spoken, subtitle: Caption): Line[] 
   return lines.slice(0, 6);
 }
 
-function parseLines(raw: string, imageCount: number, subtitleLanguage: Caption, voiceLanguage: Spoken): Line[] | null {
+function parseLines(raw: string, imageCount: number, subtitleLanguage: Caption, spoken: Spoken): Line[] | null {
   const start = raw.indexOf("[");
   const end = raw.lastIndexOf("]");
   const objectStart = raw.indexOf("{");
@@ -435,7 +437,7 @@ function parseLines(raw: string, imageCount: number, subtitleLanguage: Caption, 
     const voiceType = normalizeRole(record.voiceType) || (speaker === "B" ? "female" : "male");
     const voiceText = (typeof record.voiceText === "string" ? record.voiceText : typeof record.text === "string" ? record.text : "").trim().slice(0, 400);
     const supplied = (typeof record.subtitleText === "string" ? record.subtitleText : typeof record.subtitle === "string" ? record.subtitle : "").trim().slice(0, 500);
-    const subtitleText = subtitleLanguage === "none" ? "" : supplied || captionFor(voiceText, voiceLanguage, subtitleLanguage);
+    const subtitleText = subtitleLanguage === "none" ? "" : supplied || captionFor(voiceText, spoken, subtitleLanguage);
     const imageIndex = typeof record.imageIndex === "number" && record.imageIndex >= 0 ? Math.min(maxIndex, Math.floor(record.imageIndex)) : 0;
     return speaker && voiceText ? [{ speaker, voiceType, voiceText, subtitleText, imageIndex }] : [];
   });
