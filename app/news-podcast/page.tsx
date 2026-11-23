@@ -5,7 +5,7 @@ import Link from "next/link";
 import { CreditBar } from "@/components/credit-provider";
 import { useStudioAccount } from "@/components/profile-credit-bar";
 
-import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { renderLocalRecap } from "@/lib/local-recap";
 
 const STEPS = ["Writing script", "Recording voices", "3D lip-sync", "Rendering"] as const;
 
@@ -164,11 +164,24 @@ export default function NewsPodcastPage() {
       let jobId = crypto.randomUUID();
       let videos: Array<Record<string, unknown>> = [];
       if (mediaMode === "video") {
-        videos = scriptLines.map((line) => ({
-          startSec: line.startSec,
-          endSec: line.endSec,
-          subtitleText: line.subtitleText || "",
-        }));
+        const sourceFile = sourceFileRef.current;
+        if (!sourceFile) throw new Error("Choose a video first.");
+        const aspect = aspectChoice === "auto" ? deviceAspect : aspectChoice;
+        setVideoStep("Rendering video locally... 0%");
+        const blob = await renderLocalRecap({
+          file: sourceFile,
+          lines: scriptLines,
+          aspect,
+          onProgress: (percent) => setVideoStep(`Rendering video locally... ${percent}%`),
+        });
+        const localVideo = URL.createObjectURL(blob);
+        setVideoUrl((current) => {
+          if (current.startsWith("blob:")) URL.revokeObjectURL(current);
+          return localVideo;
+        });
+        setShowPlayer(true);
+        setVideoStep("Complete");
+        return;
       } else {
       setVideoStep(STEPS[1]);
       const audioResponse = await fetch("/api/news-podcast/audio", {
@@ -208,9 +221,9 @@ export default function NewsPodcastPage() {
           jobId,
           title: news.trim().slice(0, 120),
           lines: scriptLines,
-          imageUrls: mediaMode === "images" ? newsImages : [],
-          sourceVideoUrl: mediaMode === "video" ? sourceVideoUrl : "",
-          aspectRatio: mediaMode === "video" ? (aspectChoice === "auto" ? deviceAspect : aspectChoice) : "9:16",
+          imageUrls: newsImages,
+          sourceVideoUrl: "",
+          aspectRatio: "9:16",
           hostAGender,
           hostBGender,
           hostAImage,
@@ -252,6 +265,17 @@ export default function NewsPodcastPage() {
     }, 2800);
     return () => window.clearInterval(timer);
   }, [running, lines]);
+
+  function downloadSrt() {
+    const body = lines
+      .map((line, index) => `${index + 1}\n${srtClock(line.startSec ?? 0)} --> ${srtClock(line.endSec ?? 0)}\n${line.subtitleText || ""}\n`)
+      .join("\n");
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([body], { type: "text/plain" }));
+    link.download = "cut45-recap.srt";
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  }
 
   async function downloadMp4(url: string) {
     const response = await fetch(url);
@@ -313,38 +337,7 @@ export default function NewsPodcastPage() {
       return localUrl;
     });
     void writeDubScript(file, duration);
-    setUploadingVideo(true);
-    setOptimizeProgress(0);
     setError("");
-    const uploadFile = file;
-    const previewUrl = localUrl;
-    try {
-      const ticketResponse = await fetch("/api/news-podcast/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contentType: uploadFile.type || "video/webm" }),
-      });
-      const ticket = (await ticketResponse.json().catch(() => null)) as { path?: string; token?: string; publicUrl?: string; error?: string } | null;
-      if (!ticketResponse.ok || !ticket?.path || !ticket.token || !ticket.publicUrl) {
-        throw new Error(ticket?.error ?? "The video upload could not be started.");
-      }
-      const uploaded = await createSupabaseBrowserClient().storage.from("user_assets").uploadToSignedUrl(ticket.path, ticket.token, uploadFile);
-      if (uploaded.error) throw new Error(uploaded.error.message);
-      if (previewUrl !== localUrl) {
-        setSourcePreview((current) => {
-          if (current && current !== previewUrl) URL.revokeObjectURL(current);
-          return previewUrl;
-        });
-      }
-      setSourceVideoUrl(ticket.publicUrl);
-      setSourceDuration(duration);
-    } catch (caught) {
-      if (previewUrl !== localUrl) URL.revokeObjectURL(previewUrl);
-      setError(caught instanceof Error ? caught.message : "The video could not be uploaded.");
-    } finally {
-      setUploadingVideo(false);
-      setOptimizeProgress(0);
-    }
   }
 
   function formatSize(bytes: number) {
@@ -354,6 +347,10 @@ export default function NewsPodcastPage() {
 function formatClock(seconds: number) {
   const whole = Math.max(0, Math.round(seconds));
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+function srtClock(seconds: number) {
+  return vttClock(seconds).replace(".", ",");
 }
 
 function vttClock(seconds: number) {
@@ -797,7 +794,7 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                 )}
                 {sourceMeta ? <span className="text-xs text-zinc-300">{sourceMeta}</span> : null}
                 {optimizeProgress > 0 ? <span className="text-xs text-indigo-200">Optimizing video for studio upload... {optimizeProgress}%</span> : null}
-                {sourceVideoUrl ? <span className="text-xs text-emerald-300">Uploaded · {formatClock(sourceDuration)}</span> : null}
+                {sourcePreview ? <span className="text-xs text-emerald-300">Ready · {formatClock(sourceDuration)}</span> : null}
               </label>
             )}
           </section>
@@ -887,7 +884,7 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
 
           <button
             type="button"
-            disabled={running || scanningScript || (mediaMode === "video" ? !sourceVideoUrl || lines.length === 0 : news.trim().length < 8)}
+            disabled={running || scanningScript || (mediaMode === "video" ? !sourcePreview || lines.length === 0 : news.trim().length < 8)}
             onClick={() => void generateVideo()}
             className="h-12 rounded-2xl bg-gradient-to-r from-indigo-500 via-blue-500 to-violet-500 text-sm font-semibold text-white shadow-[0_0_32px_rgba(99,102,241,0.45)] transition hover:brightness-110 disabled:opacity-40"
           >
@@ -906,6 +903,10 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
               {videoUrl && showPlayer ? (
                 <video src={videoUrl} controls autoPlay playsInline className={`absolute inset-0 h-full w-full rounded-xl bg-black ${mediaMode === "video" && (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "16:9" ? "object-cover" : "object-contain"}`}>
                   {mediaMode === "video" && subtitleTrackUrl ? <track kind="subtitles" src={subtitleTrackUrl} srcLang="en" label="Subtitles" default /> : null}
+                </video>
+              ) : mediaMode === "video" && sourcePreview ? (
+                <video src={sourcePreview} controls playsInline className="absolute inset-0 h-full w-full bg-black object-contain">
+                  {subtitleTrackUrl ? <track kind="subtitles" src={subtitleTrackUrl} srcLang="en" label="Subtitles" default /> : null}
                 </video>
               ) : (
                 <LiveStage
@@ -936,6 +937,11 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                   Play voices
                 </button>
               ) : null}
+              {mediaMode === "video" && lines.length > 0 && !videoUrl ? (
+                <button type="button" onClick={downloadSrt} className="h-11 rounded-2xl border border-white/15 text-sm font-semibold text-white">
+                  Download .SRT
+                </button>
+              ) : null}
               {videoUrl ? (
                 <>
                   <button
@@ -945,13 +951,23 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                   >
                     Play video
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void downloadMp4(videoUrl)}
-                    className="flex h-11 items-center justify-center rounded-2xl bg-gradient-to-r from-indigo-400 to-violet-400 text-sm font-semibold text-white"
-                  >
-                    Download MP4
-                  </button>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void downloadMp4(videoUrl)}
+                      className="flex h-11 items-center justify-center rounded-2xl bg-gradient-to-r from-indigo-400 to-violet-400 text-sm font-semibold text-white"
+                    >
+                      Download MP4
+                    </button>
+                    <button
+                      type="button"
+                      disabled={lines.length === 0}
+                      onClick={downloadSrt}
+                      className="h-11 rounded-2xl border border-white/15 text-sm font-semibold text-white disabled:opacity-40"
+                    >
+                      Download .SRT
+                    </button>
+                  </div>
                   {mobileGallery ? (
                     <button
                       type="button"

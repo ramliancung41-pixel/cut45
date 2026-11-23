@@ -10,6 +10,9 @@
   },
   "dependencies": {
     "@fal-ai/client": "^1.11.0",
+    "@ffmpeg/core": "^0.12.6",
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.117.2",
     "edge-tts-universal": "^1.4.0",
