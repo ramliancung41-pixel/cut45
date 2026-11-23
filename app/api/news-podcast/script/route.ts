@@ -17,7 +17,8 @@ type Body = {
   videoDurationSec?: unknown;
 };
 
-const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash-lite"] as const;
+const PRIMARY_MODELS = ["gemini-3.5-flash-lite", "gemini-3.5-flash"];
+let cachedGeminiModel = "";
 
 class QuotaError extends Error {}
 class UnavailableModelError extends Error {}
@@ -116,20 +117,70 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
 
 async function geminiChain(apiKey: string, system: string, news: string, videoUrl: string) {
   const video = videoUrl ? await prepareGeminiVideo(apiKey, videoUrl) : null;
+  const first = cachedGeminiModel && !PRIMARY_MODELS.includes(cachedGeminiModel) ? [cachedGeminiModel, ...PRIMARY_MODELS] : cachedGeminiModel ? [cachedGeminiModel, ...PRIMARY_MODELS.filter((model) => model !== cachedGeminiModel)] : [...PRIMARY_MODELS];
   let last = "Gemini quota exceeded.";
-  for (const model of GEMINI_MODELS) {
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      try {
-        return await geminiScript(apiKey, model, system, news, video);
-      } catch (error) {
-        last = error instanceof Error ? error.message : "Gemini could not write the script.";
-        const busy = error instanceof QuotaError || /high demand|overloaded|unavailable|503|429/i.test(last);
-        if (!busy || attempt === 2) break;
-        await new Promise((resolve) => setTimeout(resolve, 1200 + Math.floor(Math.random() * 400)));
-      }
+  let primaryFailures = 0;
+  for (const model of first) {
+    const result = await tryGeminiModel(apiKey, model, system, news, video);
+    if (result.ok) {
+      cachedGeminiModel = model;
+      return result.text;
     }
+    last = result.message;
+    if (PRIMARY_MODELS.includes(model)) primaryFailures += 1;
+  }
+  if (primaryFailures < PRIMARY_MODELS.length) throw new QuotaError(last);
+  const discovered = (await discoverFlashModels(apiKey)).filter((model) => !first.includes(model));
+  for (const model of discovered) {
+    const result = await tryGeminiModel(apiKey, model, system, news, video);
+    if (result.ok) {
+      cachedGeminiModel = model;
+      return result.text;
+    }
+    last = result.message;
   }
   throw new QuotaError(last);
+}
+
+async function tryGeminiModel(apiKey: string, model: string, system: string, news: string, video: { mime: string; inline?: string; uri?: string } | null) {
+  let message = "Gemini could not write the script.";
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return { ok: true as const, text: await geminiScript(apiKey, model, system, news, video) };
+    } catch (error) {
+      message = error instanceof Error ? error.message : message;
+      const busy = error instanceof QuotaError || /high demand|overloaded|unavailable|503|429/i.test(message);
+      if (!busy || attempt === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 1200 + Math.floor(Math.random() * 400)));
+    }
+  }
+  return { ok: false as const, message };
+}
+
+async function discoverFlashModels(apiKey: string) {
+  const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
+    headers: { "x-goog-api-key": apiKey },
+  });
+  const payload = (await response.json().catch(() => null)) as {
+    models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
+  } | null;
+  if (!response.ok || !payload?.models) return [];
+  return payload.models
+    .map((model) => ({
+      id: (model.name || "").replace(/^models\//, ""),
+      methods: model.supportedGenerationMethods || [],
+    }))
+    .filter((model) => model.methods.includes("generateContent"))
+    .filter((model) => /flash/i.test(model.id))
+    .filter((model) => !/2\.5|2\.0|1\.5|embedding|audio-only/i.test(model.id))
+    .sort((left, right) => flashRank(right.id) - flashRank(left.id))
+    .slice(0, 4)
+    .map((model) => model.id);
+}
+
+function flashRank(id: string) {
+  const match = id.match(/(\d+)(?:\.(\d+))?/);
+  return match ? Number(match[1]) * 1000 + Number(match[2] || 0) : 0;
 }
 
 async function prepareGeminiVideo(apiKey: string, videoUrl: string) {
