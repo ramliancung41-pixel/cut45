@@ -85,32 +85,42 @@ export default function NewsPodcastPage() {
     setError("");
     setScriptProgress("Extracting audio...");
     try {
+      setLines([]);
       const chunks = await extractAudioChunks(file, durationSec);
       let finished = 0;
-      setScriptProgress(`AI transcribing ${formatClock(durationSec)} across ${chunks.length} parallel streams...`);
-      const groups = await mapPool(chunks, 4, async (chunk) => {
-        const audioBase64 = await blobToBase64(chunk.blob);
-        const scriptResponse = await fetch("/api/news-podcast/script", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            news,
-            voiceLanguage,
-            subtitleLanguage,
-            preset,
-            audioBase64,
-            audioMimeType: chunk.mime,
-            chunkOffsetSec: chunk.offset,
-            chunkDurationSec: chunk.duration,
-          }),
-        });
-        const script = (await scriptResponse.json().catch(() => null)) as { lines?: Line[]; error?: string } | null;
-        finished += 1;
-        setScriptProgress(`AI transcribing ${formatClock(durationSec)} across ${chunks.length} parallel streams... ${finished}/${chunks.length}`);
-        if (!scriptResponse.ok || !script?.lines?.length) throw new Error(script?.error ?? "The subtitles could not be written.");
-        return script.lines;
+      let wrote = 0;
+      let lastError = "The subtitles could not be written.";
+      setScriptProgress(`AI transcribing ${formatClock(durationSec)} across ${chunks.length} streams...`);
+      await mapPool(chunks, 2, async (chunk) => {
+        try {
+          const audioBase64 = await blobToBase64(chunk.blob);
+          const scriptResponse = await fetch("/api/news-podcast/script", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              news,
+              voiceLanguage,
+              subtitleLanguage,
+              preset,
+              audioBase64,
+              audioMimeType: chunk.mime,
+              chunkOffsetSec: chunk.offset,
+              chunkDurationSec: chunk.duration,
+            }),
+          });
+          const script = (await scriptResponse.json().catch(() => null)) as { lines?: Line[]; error?: string } | null;
+          if (!scriptResponse.ok || !script?.lines) throw new Error(script?.error ?? "The subtitles could not be written.");
+          const cues = script.lines;
+          wrote += cues.length;
+          setLines((current) => [...current, ...cues].sort((left, right) => (left.startSec ?? 0) - (right.startSec ?? 0)));
+        } catch (caught) {
+          lastError = caught instanceof Error ? caught.message : lastError;
+        } finally {
+          finished += 1;
+          setScriptProgress(`AI transcribing ${formatClock(durationSec)} across ${chunks.length} streams... ${finished}/${chunks.length}`);
+        }
       });
-      setLines(groups.flat().sort((left, right) => (left.startSec ?? 0) - (right.startSec ?? 0)));
+      if (wrote === 0) throw new Error(lastError);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The script could not be written.");
     } finally {
@@ -306,18 +316,9 @@ export default function NewsPodcastPage() {
     setUploadingVideo(true);
     setOptimizeProgress(0);
     setError("");
-    let uploadFile = file;
-    let previewUrl = localUrl;
+    const uploadFile = file;
+    const previewUrl = localUrl;
     try {
-      if (file.size > 48 * 1024 * 1024) {
-        uploadFile = await compressStudioVideo(file, duration, setOptimizeProgress);
-        if (uploadFile.size > 48 * 1024 * 1024) {
-          throw new Error("This clip is still over 48 MB after optimizing. Use a shorter clip or a lower-resolution file.");
-        }
-        previewUrl = URL.createObjectURL(uploadFile);
-        URL.revokeObjectURL(localUrl);
-        setSourceMeta(`${formatSize(uploadFile.size)} · ${formatClock(duration)}`);
-      }
       const ticketResponse = await fetch("/api/news-podcast/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -373,7 +374,7 @@ async function extractAudioChunks(file: File, durationSec: number) {
   const rendered = await offline.startRendering();
   const samples = rendered.getChannelData(0);
   const pieces: Array<{ offset: number; duration: number; samples: Float32Array }> = [];
-  const span = typeof AudioEncoder === "undefined" ? 80 : 480;
+  const span = 120;
   for (let offset = 0; offset < durationSec; offset += span) {
     const length = Math.min(span, durationSec - offset);
     const start = Math.floor(offset * 16000);

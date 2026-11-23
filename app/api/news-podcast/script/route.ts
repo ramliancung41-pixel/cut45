@@ -95,9 +95,11 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
   } catch (error) {
     if (error instanceof QuotaError) {
       const groqKey = process.env.GROQ_API_KEY?.trim() ?? "";
-      if (dubbing && groqKey && videoUrl) {
+      if (dubbing && groqKey && (videoUrl || audioChunk)) {
         try {
-          return Response.json({ lines: await groqDub(groqKey, videoUrl, spoken, subtitleLanguage) });
+          const heard = videoUrl ? await groqDub(groqKey, videoUrl, spoken, subtitleLanguage) : await groqAudio(groqKey, audioBase64, audioMimeType, spoken, subtitleLanguage);
+          const shifted = audioChunk ? heard.map((line) => ({ ...line, startSec: line.startSec + chunkOffsetSec, endSec: Math.min(3600, line.endSec + chunkOffsetSec) })) : heard;
+          return Response.json({ lines: shifted });
         } catch (groqError) {
           const groqMessage = groqError instanceof Error ? groqError.message : error.message;
           return Response.json({ error: groqMessage }, { status: 502 });
@@ -130,6 +132,7 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
 
 async function geminiChain(apiKey: string, system: string, news: string, videoUrl: string, audio: { mime: string; inline: string } | null = null) {
   const video = audio ? audio : videoUrl ? await prepareGeminiVideo(apiKey, videoUrl) : null;
+  if (audio) return rotateAudioModels(apiKey, system, news, video);
   const first = cachedGeminiModel && !PRIMARY_MODELS.includes(cachedGeminiModel) ? [cachedGeminiModel, ...PRIMARY_MODELS] : cachedGeminiModel ? [cachedGeminiModel, ...PRIMARY_MODELS.filter((model) => model !== cachedGeminiModel)] : [...PRIMARY_MODELS];
   let last = "Gemini quota exceeded.";
   let primaryFailures = 0;
@@ -151,6 +154,32 @@ async function geminiChain(apiKey: string, system: string, news: string, videoUr
       return result.text;
     }
     last = result.message;
+  }
+  throw new QuotaError(last);
+}
+
+async function rotateAudioModels(apiKey: string, system: string, news: string, video: { mime: string; inline?: string; uri?: string } | null) {
+  const discovered = await discoverFlashModels(apiKey);
+  const models = [...PRIMARY_MODELS];
+  for (const model of discovered) if (!models.includes(model)) models.push(model);
+  if (cachedGeminiModel) {
+    const rest = models.filter((model) => model !== cachedGeminiModel);
+    models.splice(0, models.length, cachedGeminiModel, ...rest);
+  }
+  const waits = [1500, 3000, 5000];
+  let last = "Gemini is currently experiencing high demand.";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const model = models[attempt % models.length] || PRIMARY_MODELS[0];
+    try {
+      const text = await geminiScript(apiKey, model, system, news, video);
+      cachedGeminiModel = model;
+      return text;
+    } catch (error) {
+      last = error instanceof Error ? error.message : last;
+      const busy = error instanceof QuotaError || /high demand|overloaded|unavailable|503|429/i.test(last);
+      if (!busy || attempt === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, waits[attempt] ?? 5000));
+    }
   }
   throw new QuotaError(last);
 }
@@ -295,6 +324,42 @@ async function groqDub(apiKey: string, videoUrl: string, spoken: Spoken, subtitl
   const lines = parseDubCues(payload?.choices?.[0]?.message?.content ?? "", subtitleLanguage, spoken);
   if (!lines) throw new Error("Groq did not return timed dialogue.");
   return lines;
+}
+
+async function groqAudio(apiKey: string, audioBase64: string, mime: string, spoken: Spoken, subtitleLanguage: Caption) {
+  const bytes = Buffer.from(audioBase64, "base64");
+  const form = new FormData();
+  form.append("file", new Blob([new Uint8Array(bytes)], { type: mime }), mime === "audio/wav" ? "chunk.wav" : "chunk.webm");
+  form.append("model", "whisper-large-v3-turbo");
+  form.append("response_format", "verbose_json");
+  const heard = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form,
+  });
+  const transcript = (await heard.json().catch(() => null)) as { error?: { message?: string }; segments?: Array<{ start?: number; end?: number; text?: string }> } | null;
+  if (!heard.ok) throw new Error(transcript?.error?.message || `Groq could not transcribe the audio (${heard.status}).`);
+  const segments = (transcript?.segments ?? []).filter((segment) => (segment.text || "").trim()).slice(0, 40);
+  if (segments.length === 0) return [];
+  const translated = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: `Translate each spoken segment into subtitleText. ${subtitleInstruction(subtitleLanguage, spoken)} Keep the same startSec and endSec. Return {"lines":[{"startSec":number,"endSec":number,"subtitleText":string}]}.`,
+        },
+        { role: "user", content: JSON.stringify(segments.map((segment) => ({ startSec: segment.start, endSec: segment.end, text: segment.text }))) },
+      ],
+    }),
+  });
+  const payload = (await translated.json().catch(() => null)) as { error?: { message?: string }; choices?: Array<{ message?: { content?: string } }> } | null;
+  if (!translated.ok) throw new Error(payload?.error?.message || `Groq could not translate the audio (${translated.status}).`);
+  return parseDubCues(payload?.choices?.[0]?.message?.content ?? "", subtitleLanguage, spoken) ?? [];
 }
 
 function sniffVideoMime(bytes: Buffer) {
