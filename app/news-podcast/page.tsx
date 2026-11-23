@@ -115,9 +115,18 @@ export default function NewsPodcastPage() {
         scriptLines = script.lines;
         setLines(script.lines);
       } else if (scriptLines.length === 0) {
-        throw new Error("Wait for the script, or press Regenerate Script.");
+        throw new Error("Wait for the subtitles, or press Regenerate Subtitles.");
       }
 
+      let jobId = crypto.randomUUID();
+      let videos: Array<Record<string, unknown>> = [];
+      if (mediaMode === "video") {
+        videos = scriptLines.map((line) => ({
+          startSec: line.startSec,
+          endSec: line.endSec,
+          subtitleText: line.subtitleText || "",
+        }));
+      } else {
       setVideoStep(STEPS[1]);
       const audioResponse = await fetch("/api/news-podcast/audio", {
         method: "POST",
@@ -135,13 +144,25 @@ export default function NewsPodcastPage() {
         throw new Error(audio?.error || audioRaw.slice(0, 500) || "The voices could not be generated.");
       }
       setClips(audio.clips);
+      jobId = audio.jobId;
+      videos = audio.clips.map((clip) => ({
+        speaker: clip.speaker,
+        speakerType: clip.speakerType,
+        audioDataUrl: clip.audioDataUrl,
+        durationSec: clip.actualDurationSec || clip.durationSec,
+        imageIndex: clip.imageIndex ?? 0,
+        startSec: clip.startSec,
+        endSec: clip.endSec,
+        subtitleText: clip.subtitleText ?? "",
+      }));
+      }
 
       setVideoStep("Rendering");
       const renderResponse = await fetch("/api/news-podcast/render", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          jobId: audio.jobId,
+          jobId,
           title: news.trim().slice(0, 120),
           lines: scriptLines,
           imageUrls: mediaMode === "images" ? newsImages : [],
@@ -150,16 +171,7 @@ export default function NewsPodcastPage() {
           hostBGender,
           hostAImage,
           hostBImage,
-          videos: audio.clips.map((clip) => ({
-            speaker: clip.speaker,
-            speakerType: clip.speakerType,
-            audioDataUrl: clip.audioDataUrl,
-            durationSec: clip.actualDurationSec || clip.durationSec,
-            imageIndex: clip.imageIndex ?? 0,
-            startSec: clip.startSec,
-            endSec: clip.endSec,
-            subtitleText: clip.subtitleText ?? "",
-          })),
+          videos,
         }),
       });
       const raw = await renderResponse.text();
@@ -250,7 +262,7 @@ export default function NewsPodcastPage() {
     let uploadFile = file;
     let previewUrl = localUrl;
     try {
-      if (file.size > 42 * 1024 * 1024) {
+      if (file.size > 48 * 1024 * 1024) {
         uploadFile = await compressStudioVideo(file, duration, setOptimizeProgress);
         if (uploadFile.size > 48 * 1024 * 1024) {
           throw new Error("This clip is still over 48 MB after optimizing. Use a shorter clip or a lower-resolution file.");
@@ -300,7 +312,7 @@ function compressStudioVideo(file: File, duration: number, onProgress: (percent:
   return new Promise<File>((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const video = document.createElement("video");
-    video.muted = true;
+    video.muted = false;
     video.playsInline = true;
     video.preload = "auto";
     video.src = url;
@@ -322,13 +334,16 @@ function compressStudioVideo(file: File, duration: number, onProgress: (percent:
         reject(new Error("This browser cannot optimize the video."));
         return;
       }
-      const mime = ["video/webm;codecs=vp8", "video/webm", "video/mp4"].find((item) => MediaRecorder.isTypeSupported(item)) ?? "";
+      const mime = ["video/webm;codecs=vp8,opus", "video/webm;codecs=vp8", "video/webm", "video/mp4"].find((item) => MediaRecorder.isTypeSupported(item)) ?? "";
       if (!mime) {
         URL.revokeObjectURL(url);
         reject(new Error("This browser cannot optimize the video."));
         return;
       }
-      const recorder = new MediaRecorder(canvas.captureStream(24), { mimeType: mime, videoBitsPerSecond: 1_200_000 });
+      const stream = canvas.captureStream(24);
+      const withSound = (video as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream?.();
+      withSound?.getAudioTracks().forEach((track) => stream.addTrack(track));
+      const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 1_200_000 });
       const chunks: Blob[] = [];
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) chunks.push(event.data);
@@ -393,21 +408,13 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
           {mediaMode === "video" ? (
             <div className="grid gap-4 sm:grid-cols-2">
               <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
-                <span className="text-xs tracking-wide text-zinc-500 uppercase">Voice language</span>
-                <select value={voiceLanguage} onChange={(event) => setVoiceLanguage(event.target.value as Language)} className="bg-transparent text-sm outline-none">
-                  <option value="english" className="bg-[#07090e]">English</option>
-                  <option value="burmese" className="bg-[#07090e]">Burmese</option>
-                </select>
-              </label>
-              <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
                 <span className="text-xs tracking-wide text-zinc-500 uppercase">Subtitle language</span>
                 <select value={subtitleLanguage} onChange={(event) => setSubtitleLanguage(event.target.value as SubtitleLanguage)} className="bg-transparent text-sm outline-none">
                   <option value="english" className="bg-[#07090e]">English</option>
                   <option value="burmese" className="bg-[#07090e]">Burmese</option>
-                  <option value="dual" className="bg-[#07090e]">Dual (Burmese + English)</option>
-                  <option value="none" className="bg-[#07090e]">None (Off)</option>
-                </select>
-              </label>
+                <option value="dual" className="bg-[#07090e]">Dual (Burmese + English)</option>
+              </select>
+            </label>
             </div>
           ) : null}
 
@@ -523,44 +530,22 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
           {mediaMode === "video" ? (
             <section className={`${glass} flex flex-col gap-3 p-4`}>
               <div className="flex items-center justify-between gap-3">
-                <h2 className="text-sm font-medium">Script timeline</h2>
+                <h2 className="text-sm font-medium">Subtitle timeline</h2>
                 <button
                   type="button"
                   disabled={!sourceVideoUrl || scanningScript || running}
                   onClick={() => void writeDubScript(sourceVideoUrl, sourceDuration)}
                   className="rounded-full border border-white/15 px-3 py-1.5 text-xs disabled:opacity-40"
                 >
-                  Regenerate Script
+                  Regenerate Subtitles
                 </button>
               </div>
-              {scanningScript ? <p className="text-sm text-indigo-200">AI is scanning video & writing your script...</p> : null}
+              {scanningScript ? <p className="text-sm text-indigo-200">AI is writing subtitles...</p> : null}
               {lines.map((line, index) => (
                 <div key={`${line.startSec ?? index}-${index}`} className="grid gap-2 rounded-xl border border-white/10 p-3">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
                     <span>{formatClock(line.startSec ?? 0)} – {formatClock(line.endSec ?? 0)}</span>
-                    <select
-                      value={line.speakerType || "male"}
-                      onChange={(event) =>
-                        setLines((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, speakerType: event.target.value as Line["speakerType"] } : item)))
-                      }
-                      className="rounded-full border border-white/10 bg-transparent px-2 py-1 text-zinc-200"
-                    >
-                      <option value="male" className="bg-[#07090e]">Male</option>
-                      <option value="male_elder" className="bg-[#07090e]">Elder Male</option>
-                      <option value="female" className="bg-[#07090e]">Female</option>
-                      <option value="female_elder" className="bg-[#07090e]">Elder Female</option>
-                      <option value="child_boy" className="bg-[#07090e]">Child (Boy)</option>
-                      <option value="child_girl" className="bg-[#07090e]">Child (Girl)</option>
-                    </select>
                   </div>
-                  <textarea
-                    value={line.voiceText || line.text || ""}
-                    rows={2}
-                    onChange={(event) =>
-                      setLines((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, voiceText: event.target.value } : item)))
-                    }
-                    className="resize-none bg-transparent text-sm outline-none"
-                  />
                   {subtitleLanguage !== "none" ? (
                     <textarea
                       value={line.subtitleText || ""}
@@ -665,7 +650,7 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
             </div>
             {error && !(videoUrl && showPlayer) ? <p className="mt-3 text-sm text-red-300">{error}</p> : null}
             <div className="mt-3 flex flex-col gap-2">
-              {clips.length > 0 ? (
+              {mediaMode !== "video" && clips.length > 0 ? (
                 <button
                   type="button"
                   onClick={() => void playVoices()}

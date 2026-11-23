@@ -40,8 +40,12 @@ export async function POST(request: Request) {
   const imageCount = typeof body?.imageCount === "number" ? Math.max(0, Math.min(3, Math.floor(body.imageCount))) : 0;
   const videoUrl = typeof body?.videoUrl === "string" && body.videoUrl.startsWith("https://") ? body.videoUrl : "";
   const videoDurationSec = typeof body?.videoDurationSec === "number" && body.videoDurationSec > 0 ? Math.min(300, body.videoDurationSec) : 0;
-  if ((news.length < 8 && !videoUrl) || !voiceLanguage || !preset) {
-    return Response.json({ error: "Add a news topic or a video, plus a voice language and a character preset." }, { status: 400 });
+  if (videoUrl) {
+    if (subtitleLanguage !== "burmese" && subtitleLanguage !== "english" && subtitleLanguage !== "dual") {
+      return Response.json({ error: "Choose Burmese, English, or dual subtitles." }, { status: 400 });
+    }
+  } else if (news.length < 8 || !voiceLanguage || !preset) {
+    return Response.json({ error: "Add a news topic, a voice language, and a character preset." }, { status: 400 });
   }
 
   const geminiKey = process.env.GEMINI_API_KEY?.trim() ?? "";
@@ -55,14 +59,11 @@ export async function POST(request: Request) {
 
   const dubbing = Boolean(videoUrl);
   const system = dubbing
-    ? `You translate the spoken dialogue in this video. Do not invent a Host A and Host B interview.
-Listen to every spoken line and narration from 0 seconds through ${videoDurationSec ? `${videoDurationSec.toFixed(1)} seconds` : "the end of the video"}.
-Return 8 to 15 chronological cues that together cover that whole span. The first cue starts near 0. The last cue ends near the end of the video.
-voiceText is a natural ${voiceLanguage === "burmese" ? "spoken Burmese" : "spoken English"} translation of what that person says.
-${subtitleInstruction(subtitleLanguage, voiceLanguage)}
-Listen to pitch and watch each face. Count the distinct people. speakerType must be one of "male", "male_elder", "female", "female_elder", "child_boy", or "child_girl". Do not mark every line female. Match the person who is speaking in that moment.
-Keep voiceText short enough to say inside endSec - startSec.
-Return JSON only, an array of {"startSec":number,"endSec":number,"speakerType":"male"|"male_elder"|"female"|"female_elder"|"child_boy"|"child_girl","voiceText":string,"subtitleText":string}.`
+    ? `You write subtitles for the spoken dialogue in this video. Do not invent a host conversation and do not assign voices.
+Listen from 0 seconds through ${videoDurationSec ? `${videoDurationSec.toFixed(1)} seconds` : "the end"}.
+Return 8 to 15 chronological cues covering that span.
+${subtitleInstruction(subtitleLanguage, subtitleLanguage === "dual" ? "english" : subtitleLanguage)}
+Return JSON only, an array of {"startSec":number,"endSec":number,"subtitleText":string}.`
     : `You write an original news commentary. Do not copy dialogue, narration, or captions from the source. Describe what happens in the hosts' own words.
 ${PRESETS[preset]}
 "voiceText" is what is spoken. Write it as original commentary in ${voiceLanguage === "burmese" ? "natural spoken Burmese (စကားပြောဟန်), not formal written Burmese" : "natural spoken English"}. Do not transcribe the source.
@@ -377,9 +378,9 @@ function parseDubCues(raw: string, subtitleLanguage: Caption, voiceLanguage: Spo
     const speakerType = normalizeRole(record.speakerType) || normalizeRole(record.voiceType);
     const voiceText = typeof record.voiceText === "string" ? record.voiceText.trim().slice(0, 240) : "";
     const supplied = typeof record.subtitleText === "string" ? record.subtitleText.trim().slice(0, 400) : "";
-    const subtitleText = subtitleLanguage === "none" ? "" : supplied || captionFor(voiceText, voiceLanguage, subtitleLanguage);
-    if (!speakerType || !voiceText || startSec < 0 || endSec - startSec < 0.4) return [];
-    return [{ startSec, endSec, speakerType, voiceText, subtitleText }];
+    const subtitleText = supplied || voiceText;
+    if (!subtitleText || startSec < 0 || endSec - startSec < 0.4) return [];
+    return [{ startSec, endSec, subtitleText, voiceText: voiceText || subtitleText, speakerType }];
   });
   return cues.length > 0 ? cues : null;
 }

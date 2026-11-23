@@ -163,13 +163,11 @@ function parseDubClips(value: unknown): DubCue[] | null {
   for (const item of value) {
     if (!item || typeof item !== "object") return null;
     const record = item as { audioDataUrl?: unknown; durationSec?: unknown; startSec?: unknown; endSec?: unknown; subtitleText?: unknown };
-    const audioDataUrl = typeof record.audioDataUrl === "string" && record.audioDataUrl.startsWith("data:audio/") ? record.audioDataUrl : "";
-    const durationSec = typeof record.durationSec === "number" && record.durationSec > 0 ? record.durationSec : 0;
     const startSec = typeof record.startSec === "number" && record.startSec >= 0 ? record.startSec : -1;
     const endSec = typeof record.endSec === "number" ? record.endSec : -1;
     const text = typeof record.subtitleText === "string" ? record.subtitleText.slice(0, 400) : "";
-    if (!audioDataUrl || !durationSec || startSec < 0 || endSec <= startSec) return null;
-    cues.push({ audioDataUrl, durationSec, startSec, endSec, text });
+    if (startSec < 0 || endSec <= startSec) return null;
+    cues.push({ audioDataUrl: "", durationSec: endSec - startSec, startSec, endSec, text });
   }
   return cues;
 }
@@ -189,46 +187,26 @@ async function publishMp4(jobId: string, mp4: Buffer) {
 }
 
 async function renderDub(source: string, cues: DubCue[], directory: string, output: string) {
-  const audioFilters: string[] = [];
-  const labels: string[] = [];
-  const inputs = ["-y", "-an", "-i", source];
-  for (let index = 0; index < cues.length; index += 1) {
-    const cue = cues[index];
-    const file = await writeAudio(cue.audioDataUrl, path.join(directory, `dub-${String(index).padStart(2, "0")}.mp3`));
-    inputs.push("-i", file);
-    const slot = Math.max(0.8, cue.endSec - cue.startSec);
-    const ratio = cue.durationSec > slot ? Math.min(1.35, cue.durationSec / slot) : 1;
-    const tempo = ratio > 1.02 ? `atempo=${ratio.toFixed(3)},` : "";
-    const delay = Math.round(cue.startSec * 1000);
-    audioFilters.push(`[${index + 1}:a]${tempo}atrim=0:${slot.toFixed(3)},asetpts=PTS-STARTPTS,adelay=${delay}|${delay}[a${index}]`);
-    labels.push(`[a${index}]`);
-  }
-  const mix = cues.length === 1 ? "" : `${labels.join("")}amix=inputs=${cues.length}:duration=longest:dropout_transition=0:normalize=0[aout]`;
-  const audioLabel = cues.length === 1 ? labels[0] : "[aout]";
   const duration = Math.max(...cues.map((cue) => cue.endSec), 1).toFixed(2);
   const filter = [
     "[0:v]fps=30,setpts=PTS-STARTPTS,split=2[bg][fg]",
     "[bg]scale=36:64:force_original_aspect_ratio=increase,crop=36:64,scale=720:1280:flags=bilinear,eq=brightness=-0.12:saturation=1.1,setsar=1[blur]",
     `[fg]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1,drawbox=x=0:y=0:w=iw:h=ih:color=white@0.8:t=2,drawbox=x=2:y=ih-6:w='max(2\\,(iw-4)*t/${duration})':h=4:color=white@0.95:t=fill[fit]`,
     "[blur][fit]overlay=(W-w)/2:(H-h)/2[vout]",
-    ...audioFilters,
-    mix,
-  ]
-    .filter(Boolean)
-    .join(";");
+  ].join(";");
   const silentPath = path.join(directory, "dubbed.mp4");
   const assPath = path.join(directory, "subtitles.ass");
   await writeFile(assPath, assFile(cues.map((cue) => ({ start: cue.startSec, end: cue.endSec, text: cue.text })), true, Number(duration)));
   await runFfmpeg([
-    ...inputs,
+    "-y",
+    "-i",
+    source,
     "-filter_complex",
     filter,
     "-map",
     "[vout]",
     "-map",
-    audioLabel,
-    "-t",
-    duration,
+    "0:a?",
     "-vsync",
     "cfr",
     "-r",
@@ -254,7 +232,7 @@ async function renderDub(source: string, cues: DubCue[], directory: string, outp
     "-ar",
     "44100",
     "-b:a",
-    "128k",
+    "192k",
     silentPath,
   ]);
   try {
