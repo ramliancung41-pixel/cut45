@@ -34,6 +34,7 @@ export async function POST(request: Request) {
     hostBImage?: unknown;
     videos?: unknown;
     sourceVideoUrl?: unknown;
+    aspectRatio?: unknown;
   } | null;
   const jobId = typeof body?.jobId === "string" && /^[a-zA-Z0-9-]{8,80}$/.test(body.jobId) ? body.jobId : "";
   const title = typeof body?.title === "string" ? body.title.trim().slice(0, 120) : "News";
@@ -90,7 +91,8 @@ export async function POST(request: Request) {
     if (!sourceVideo) return Response.json({ error: "A source video is required for dubbing." }, { status: 400 });
     const finalPath = path.join(directory, "final.mp4");
     try {
-      await renderDub(sourceVideo, dubs, directory, finalPath);
+      const aspectRatio = body?.aspectRatio === "16:9" || body?.aspectRatio === "4:5" || body?.aspectRatio === "9:16" ? body.aspectRatio : "9:16";
+      await renderDub(sourceVideo, dubs, directory, finalPath, aspectRatio);
     } catch (error) {
       const message = error instanceof Error ? error.message : "ffmpeg";
       return Response.json({ error: `Could not dub the video. ${message}`.slice(0, 500) }, { status: 502 });
@@ -186,17 +188,22 @@ async function publishMp4(jobId: string, mp4: Buffer) {
   return `data:video/mp4;base64,${mp4.toString("base64")}`;
 }
 
-async function renderDub(source: string, cues: DubCue[], directory: string, output: string) {
+async function renderDub(source: string, cues: DubCue[], directory: string, output: string, aspectRatio: "9:16" | "4:5" | "16:9") {
+  const frame = aspectRatio === "16:9" ? { w: 1280, h: 720, cover: true } : aspectRatio === "4:5" ? { w: 864, h: 1080, cover: false } : { w: 720, h: 1280, cover: false };
   const duration = Math.max(...cues.map((cue) => cue.endSec), 1).toFixed(2);
+  const blur = frame.cover ? "64:36" : "36:64";
+  const fit = frame.cover
+    ? `scale=${frame.w}:${frame.h}:force_original_aspect_ratio=increase,crop=${frame.w}:${frame.h}`
+    : `scale=${frame.w}:${frame.h}:force_original_aspect_ratio=decrease`;
   const filter = [
     "[0:v]fps=30,setpts=PTS-STARTPTS,split=2[bg][fg]",
-    "[bg]scale=36:64:force_original_aspect_ratio=increase,crop=36:64,scale=720:1280:flags=bilinear,eq=brightness=-0.12:saturation=1.1,setsar=1[blur]",
-    `[fg]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1,drawbox=x=0:y=0:w=iw:h=ih:color=white@0.8:t=2,drawbox=x=2:y=ih-6:w='max(2\\,(iw-4)*t/${duration})':h=4:color=white@0.95:t=fill[fit]`,
+    `[bg]scale=${blur}:force_original_aspect_ratio=increase,crop=${blur},scale=${frame.w}:${frame.h}:flags=bilinear,eq=brightness=-0.12:saturation=1.1,setsar=1[blur]`,
+    `[fg]${fit},setsar=1,drawbox=x=0:y=0:w=iw:h=ih:color=white@0.8:t=2,drawbox=x=2:y=ih-6:w='max(2\\,(iw-4)*t/${duration})':h=4:color=white@0.95:t=fill[fit]`,
     "[blur][fit]overlay=(W-w)/2:(H-h)/2[vout]",
   ].join(";");
   const silentPath = path.join(directory, "dubbed.mp4");
   const assPath = path.join(directory, "subtitles.ass");
-  await writeFile(assPath, assFile(cues.map((cue) => ({ start: cue.startSec, end: cue.endSec, text: cue.text })), true, Number(duration)));
+  await writeFile(assPath, assFile(cues.map((cue) => ({ start: cue.startSec, end: cue.endSec, text: cue.text })), true, frame));
   await runFfmpeg([
     "-y",
     "-i",
@@ -398,8 +405,7 @@ async function renderSegment(input: {
   await runFfmpeg(args);
 }
 
-function assFile(cues: Array<{ start: number; end: number; text: string }>, fullFrame = false, durationSec = 0) {
-  const brand = fullFrame ? `Dialogue: 0,${assTime(0)},${assTime(Math.max(durationSec, 1))},Brand,,0,0,0,,CUT45 STUDIO\n` : "";
+function assFile(cues: Array<{ start: number; end: number; text: string }>, fullFrame = false, frame = { w: 720, h: 1280 }) {
   const events = cues
     .filter((cue) => cue.text.trim())
     .map((cue) => {
@@ -409,19 +415,18 @@ function assFile(cues: Array<{ start: number; end: number; text: string }>, full
     .join("\n");
   return `[Script Info]
 ScriptType: v4.00+
-PlayResX: ${fullFrame ? 720 : 1080}
-PlayResY: ${fullFrame ? 1280 : 1920}
+PlayResX: ${fullFrame ? frame.w : 1080}
+PlayResY: ${fullFrame ? frame.h : 1920}
 WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: News,Noto Sans Myanmar,46,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,70,70,${fullFrame ? 90 : 430},1
-Style: Dual,Noto Sans Myanmar,36,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,70,70,${fullFrame ? 70 : 400},1
-Style: Brand,Noto Sans Myanmar,34,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,1,0,1,1,1,8,40,40,55,1
+Style: News,Noto Sans Myanmar,${fullFrame && frame.w > frame.h ? 42 : 46},&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,70,70,${fullFrame ? (frame.w > frame.h ? 56 : frame.h >= 1200 ? 90 : 72) : 430},1
+Style: Dual,Noto Sans Myanmar,${fullFrame && frame.w > frame.h ? 34 : 36},&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,70,70,${fullFrame ? (frame.w > frame.h ? 48 : frame.h >= 1200 ? 70 : 60) : 400},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-${brand}${events}
+${events}
 `;
 }
 

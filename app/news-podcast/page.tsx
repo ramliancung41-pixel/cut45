@@ -23,6 +23,7 @@ type Line = {
 type Clip = Line & { path: string; audioDataUrl?: string; durationSec: number; actualDurationSec?: number };
 type Language = "burmese" | "english";
 type SubtitleLanguage = Language | "dual" | "none";
+type Aspect = "9:16" | "4:5" | "16:9";
 type Gender = "male" | "female";
 type Preset = "father-son" | "hosts";
 
@@ -40,6 +41,8 @@ export default function NewsPodcastPage() {
   const [sourceMeta, setSourceMeta] = useState("");
   const [voiceLanguage, setVoiceLanguage] = useState<Language>("english");
   const [subtitleLanguage, setSubtitleLanguage] = useState<SubtitleLanguage>("english");
+  const [aspectChoice, setAspectChoice] = useState<"auto" | Aspect>("auto");
+  const [deviceAspect, setDeviceAspect] = useState<Aspect>("9:16");
   const [preset, setPreset] = useState<Preset>("hosts");
   const [hostAGender, setHostAGender] = useState<Gender>("male");
   const [hostBGender, setHostBGender] = useState<Gender>("female");
@@ -50,6 +53,7 @@ export default function NewsPodcastPage() {
   const [captionIndex, setCaptionIndex] = useState(0);
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
+  const [mobileGallery, setMobileGallery] = useState(false);
   const [scanningScript, setScanningScript] = useState(false);
   const [videoStep, setVideoStep] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
@@ -167,6 +171,7 @@ export default function NewsPodcastPage() {
           lines: scriptLines,
           imageUrls: mediaMode === "images" ? newsImages : [],
           sourceVideoUrl: mediaMode === "video" ? sourceVideoUrl : "",
+          aspectRatio: mediaMode === "video" ? (aspectChoice === "auto" ? deviceAspect : aspectChoice) : "9:16",
           hostAGender,
           hostBGender,
           hostAImage,
@@ -196,6 +201,12 @@ export default function NewsPodcastPage() {
   }
 
   useEffect(() => {
+    setMobileGallery(/iPhone|iPad|iPod|Android/i.test(navigator.userAgent));
+    const width = window.innerWidth;
+    setDeviceAspect(width >= 1024 ? "16:9" : width >= 768 ? "4:5" : "9:16");
+  }, []);
+
+  useEffect(() => {
     if (!running || lines.length < 2) return;
     const timer = window.setInterval(() => {
       setCaptionIndex((current) => (current + 1) % lines.length);
@@ -203,24 +214,25 @@ export default function NewsPodcastPage() {
     return () => window.clearInterval(timer);
   }, [running, lines]);
 
-  async function saveVideo(url: string) {
+  async function downloadMp4(url: string) {
     const response = await fetch(url);
     const blob = await response.blob();
-    const file = new File([blob], "cut45-recap.mp4", { type: "video/mp4" });
-    const nav = navigator as Navigator & { canShare?: (data: ShareData) => boolean };
-    if (nav.canShare?.({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file], title: "CUT45 Video" });
-        return;
-      } catch {
-        return;
-      }
-    }
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = "cut45-recap.mp4";
     link.click();
-    URL.revokeObjectURL(link.href);
+    window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  }
+
+  async function saveToGallery(url: string) {
+    const response = await fetch(url);
+    const blob = await response.blob();
+    const file = new File([blob], "cut45-recap.mp4", { type: "video/mp4" });
+    try {
+      await navigator.share({ files: [file], title: "CUT45 Video" });
+    } catch {
+      /* The share sheet was dismissed. */
+    }
   }
 
   async function playVoices() {
@@ -415,6 +427,15 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                 <option value="dual" className="bg-[#07090e]">Dual (Burmese + English)</option>
               </select>
             </label>
+              <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
+                <span className="text-xs tracking-wide text-zinc-500 uppercase">Screen format</span>
+                <select value={aspectChoice} onChange={(event) => setAspectChoice(event.target.value as "auto" | Aspect)} className="bg-transparent text-sm outline-none">
+                  <option value="auto" className="bg-[#07090e]">Auto (Device Fit)</option>
+                  <option value="9:16" className="bg-[#07090e]">Phone (9:16)</option>
+                  <option value="4:5" className="bg-[#07090e]">Tablet (4:5)</option>
+                  <option value="16:9" className="bg-[#07090e]">PC / Widescreen (16:9)</option>
+                </select>
+              </label>
             </div>
           ) : null}
 
@@ -626,10 +647,10 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
             <h2 className="text-sm font-medium text-zinc-300">Studio preview</h2>
             {videoStep ? <span className="text-xs text-indigo-200">{videoStep}</span> : null}
           </div>
-          <div className="mx-auto w-full max-w-[320px]">
-            <div className="relative aspect-[9/16] max-h-[700px] overflow-hidden rounded-[1.6rem] border border-white/[0.1] bg-black shadow-[0_16px_48px_rgba(0,0,0,0.55)]">
+          <div className={`mx-auto w-full ${mediaMode !== "video" ? "max-w-[320px]" : (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "16:9" ? "max-w-none" : (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "4:5" ? "max-w-[540px]" : "max-w-[320px]"}`}>
+            <div className={`relative max-h-[700px] overflow-hidden rounded-[1.6rem] border border-white/[0.1] bg-black shadow-[0_16px_48px_rgba(0,0,0,0.55)] ${mediaMode !== "video" || (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "9:16" ? "aspect-[9/16]" : (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "4:5" ? "aspect-[4/5]" : "aspect-video"}`}>
               {videoUrl && showPlayer ? (
-                <video src={videoUrl} controls autoPlay playsInline className="absolute inset-0 h-full w-full rounded-xl bg-black object-contain" />
+                <video src={videoUrl} controls autoPlay playsInline className={`absolute inset-0 h-full w-full rounded-xl bg-black ${mediaMode === "video" && (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "16:9" ? "object-cover" : "object-contain"}`} />
               ) : (
                 <LiveStage
                   mode={mediaMode}
@@ -670,11 +691,20 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => void saveVideo(videoUrl)}
+                    onClick={() => void downloadMp4(videoUrl)}
                     className="flex h-11 items-center justify-center rounded-2xl bg-gradient-to-r from-indigo-400 to-violet-400 text-sm font-semibold text-white"
                   >
-                    Save to Gallery / Download MP4
+                    Download MP4
                   </button>
+                  {mobileGallery ? (
+                    <button
+                      type="button"
+                      onClick={() => void saveToGallery(videoUrl)}
+                      className="h-11 rounded-2xl border border-white/15 text-sm font-semibold text-white"
+                    >
+                      Save to Gallery
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => setShowPlayer(false)}
