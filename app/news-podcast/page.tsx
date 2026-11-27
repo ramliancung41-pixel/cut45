@@ -1,13 +1,34 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
+import { Inter } from "next/font/google";
 import { CreditBar } from "@/components/credit-provider";
 import { useStudioAccount } from "@/components/profile-credit-bar";
 
-import { renderLocalRecap } from "@/lib/local-recap";
+import {
+  DEFAULT_SUBTITLE_MASK,
+  renderLocalRecap,
+  type SubtitleMaskMode,
+  type SubtitleMaskRegion,
+} from "@/lib/local-recap";
+import {
+  SUBTITLE_ANCHORS,
+  activeCueAt,
+  mergeOverlappingCues,
+  type SubtitleAnchor,
+} from "@/lib/subtitle-cues";
+import { SUBTITLE_LANGUAGE_OPTIONS, type SubtitleLanguageCode } from "@/lib/subtitle-languages";
+
+const subtitleFont = Inter({
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
+  variable: "--font-subtitle",
+  display: "swap",
+});
 
 const STEPS = ["Writing script", "Recording voices", "3D lip-sync", "Rendering"] as const;
+const VIDEO_PIPELINE_STEPS = ["Uploading", "Detecting Voice", "Transcribing", "Translating", "Rendering"] as const;
 
 type Line = {
   speaker?: "A" | "B";
@@ -22,10 +43,11 @@ type Line = {
 };
 type Clip = Line & { path: string; audioDataUrl?: string; durationSec: number; actualDurationSec?: number };
 type Language = "burmese" | "english";
-type SubtitleLanguage = Language | "dual" | "hakha_lai" | "dual_lai_en" | "none";
+type SubtitleLanguage = SubtitleLanguageCode;
 type Aspect = "9:16" | "4:5" | "16:9";
 type Gender = "male" | "female";
 type Preset = "father-son" | "hosts";
+type PipelineStep = (typeof VIDEO_PIPELINE_STEPS)[number] | "";
 
 const glass = "bg-white/[0.04] backdrop-blur-2xl border border-white/[0.12] shadow-[0_8px_40px_rgba(0,0,0,0.6)] ring-1 ring-inset ring-white/10 rounded-2xl";
 
@@ -56,74 +78,109 @@ export default function NewsPodcastPage() {
   const [mobileGallery, setMobileGallery] = useState(false);
   const [scanningScript, setScanningScript] = useState(false);
   const [scriptProgress, setScriptProgress] = useState("");
-  const [subtitleTrackUrl, setSubtitleTrackUrl] = useState("");
   const sourceFileRef = useRef<File | null>(null);
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const [videoStep, setVideoStep] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
   const [showPlayer, setShowPlayer] = useState(true);
+  const [detectedLanguageLabel, setDetectedLanguageLabel] = useState("");
+  const [pipelineStep, setPipelineStep] = useState<PipelineStep>("");
+  const [coverOriginalSubs, setCoverOriginalSubs] = useState(true);
+  const [maskMode, setMaskMode] = useState<SubtitleMaskMode>("banner");
+  const [maskRegion, setMaskRegion] = useState<SubtitleMaskRegion>(DEFAULT_SUBTITLE_MASK);
+  const [subtitleAnchor, setSubtitleAnchor] = useState<SubtitleAnchor>("bottom");
   const newsPicker = useRef<HTMLInputElement>(null);
   const slotRef = useRef(0);
 
   const newsImages = images.filter((item) => item.startsWith("data:image/"));
   const hosts = { hostAGender, hostBGender, hostAImage, hostBImage };
-
-  useEffect(() => {
-    if (subtitleTrackUrl) URL.revokeObjectURL(subtitleTrackUrl);
-    if (lines.length === 0) {
-      setSubtitleTrackUrl("");
-      return;
-    }
-    const body = lines
-      .map((line, index) => `${index + 1}\n${vttClock(line.startSec ?? 0)} --> ${vttClock(line.endSec ?? 0)}\n${line.subtitleText || ""}`)
-      .join("\n\n");
-    setSubtitleTrackUrl(URL.createObjectURL(new Blob([`WEBVTT\n\n${body}\n`], { type: "text/vtt" })));
-    return () => undefined;
-  }, [lines]);
+  const previewCues = mergeOverlappingCues(lines);
 
   async function writeDubScript(file: File, durationSec: number) {
     setScanningScript(true);
     setError("");
-    setScriptProgress("Extracting audio...");
+    setDetectedLanguageLabel("");
+    setPipelineStep("Uploading");
+    setScriptProgress("Uploading · preparing 16 kHz mono PCM audio...");
     try {
       setLines([]);
-      const chunks = await extractAudioChunks(file, durationSec);
+      setPipelineStep("Detecting Voice");
+      setScriptProgress("Detecting Voice · extracting audio + reading on-screen subtitles...");
+      const [chunks, ocrFrames] = await Promise.all([extractAudioChunks(file, durationSec), extractSubtitleFrames(file, durationSec)]);
       let finished = 0;
       let wrote = 0;
       let lastError = "The subtitles could not be written.";
-      setScriptProgress(`AI transcribing ${formatClock(durationSec)} across ${chunks.length} streams...`);
+      let detected = "";
+      setPipelineStep("Transcribing");
+      setScriptProgress(`Transcribing full ${formatClock(durationSec)} · overlapping 60s streams · ${chunks.length} chunk${chunks.length === 1 ? "" : "s"}...`);
       await mapPool(chunks, 1, async (chunk) => {
         try {
+          if (finished === 0) {
+            setPipelineStep("Detecting Voice");
+            setScriptProgress("Detecting Voice · Whisper auto-detect (temperature 0)...");
+          } else {
+            setPipelineStep("Translating");
+            setScriptProgress(`Translating · chunk ${finished + 1}/${chunks.length} (audio + OCR merge)...`);
+          }
           const audioBase64 = await blobToBase64(chunk.blob);
+          const chunkFrames = ocrFrames.filter(
+            (frame) => frame.timeSec >= chunk.offset - 0.05 && frame.timeSec < chunk.offset + chunk.duration + 0.05,
+          );
           const scriptResponse = await fetch("/api/news-podcast/script", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              news,
-              voiceLanguage,
+              // Never send news-topic text into video transcription — it causes fake fallback dialogue.
+              news: "",
               subtitleLanguage,
-              preset,
               audioBase64,
               audioMimeType: chunk.mime,
               chunkOffsetSec: chunk.offset,
               chunkDurationSec: chunk.duration,
+              ocrFrames: chunkFrames.map((frame) => ({
+                timeSec: Math.max(0, frame.timeSec - chunk.offset),
+                imageBase64: frame.imageBase64,
+                mime: frame.mime,
+              })),
             }),
           });
-          const script = (await scriptResponse.json().catch(() => null)) as { lines?: Line[]; error?: string } | null;
-          if (!scriptResponse.ok || !script?.lines) throw new Error(script?.error ?? "The subtitles could not be written.");
+          const script = (await scriptResponse.json().catch(() => null)) as {
+            lines?: Line[];
+            error?: string;
+            detectedLanguageLabel?: string;
+            detectedLanguage?: string;
+            keys?: { groq?: boolean; openai?: boolean; gemini?: boolean };
+            detail?: { hasAudioChunk?: boolean; audioMimeType?: string | null; ocrFrameCount?: number };
+          } | null;
+          if (!scriptResponse.ok || !script?.lines) {
+            const keyHint = script?.keys
+              ? ` Keys: Groq=${script.keys.groq ? "yes" : "no"}, OpenAI=${script.keys.openai ? "yes" : "no"}, Gemini=${script.keys.gemini ? "yes" : "no"}.`
+              : "";
+            throw new Error(`${script?.error ?? "The subtitles could not be written."}${keyHint}`);
+          }
+          if (!detected && (script.detectedLanguageLabel || script.detectedLanguage)) {
+            detected = script.detectedLanguageLabel || script.detectedLanguage || "";
+            setDetectedLanguageLabel(detected);
+          }
           const cues = script.lines;
           wrote += cues.length;
-          setLines((current) => [...current, ...cues].sort((left, right) => (left.startSec ?? 0) - (right.startSec ?? 0)));
+          setPipelineStep("Translating");
+          setLines((current) => mergeOverlappingCues([...current, ...cues]));
         } catch (caught) {
           lastError = caught instanceof Error ? caught.message : lastError;
         } finally {
           finished += 1;
-          setScriptProgress(`AI transcribing ${formatClock(durationSec)} across ${chunks.length} streams... ${finished}/${chunks.length}`);
+          setScriptProgress(
+            `Transcribing → Translating · ${formatClock(durationSec)} · ${finished}/${chunks.length}${detected ? ` · Detected: ${detected}` : ""}`,
+          );
           await new Promise((resolve) => setTimeout(resolve, 400));
         }
       });
       if (wrote === 0) throw new Error(lastError);
+      setPipelineStep("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The script could not be written.");
+      setPipelineStep("");
     } finally {
       setScanningScript(false);
       setScriptProgress("");
@@ -168,12 +225,18 @@ export default function NewsPodcastPage() {
         const sourceFile = sourceFileRef.current;
         if (!sourceFile) throw new Error("Choose a video first.");
         const aspect = aspectChoice === "auto" ? deviceAspect : aspectChoice;
-        setVideoStep("Rendering video locally... 0%");
+        setPipelineStep("Rendering");
+        setVideoStep("Rendering · burning clean subtitles... 0%");
+        const activeMask: SubtitleMaskMode = coverOriginalSubs ? maskMode : "none";
         const blob = await renderLocalRecap({
           file: sourceFile,
-          lines: scriptLines,
+          lines: mergeOverlappingCues(scriptLines),
           aspect,
-          onProgress: (percent) => setVideoStep(`Rendering video locally... ${percent}%`),
+          maskMode: activeMask,
+          maskRegion,
+          subtitleStyle: "pill",
+          subtitleAnchor,
+          onProgress: (percent) => setVideoStep(`Rendering · burning clean subtitles... ${percent}%`),
         });
         const localVideo = URL.createObjectURL(blob);
         setVideoUrl((current) => {
@@ -182,6 +245,7 @@ export default function NewsPodcastPage() {
         });
         setShowPlayer(true);
         setVideoStep("Complete");
+        setPipelineStep("");
         return;
       } else {
       setVideoStep(STEPS[1]);
@@ -268,7 +332,7 @@ export default function NewsPodcastPage() {
   }, [running, lines]);
 
   function downloadSrt() {
-    const body = lines
+    const body = previewCues
       .map((line, index) => `${index + 1}\n${srtClock(line.startSec ?? 0)} --> ${srtClock(line.endSec ?? 0)}\n${line.subtitleText || ""}\n`)
       .join("\n");
     const link = document.createElement("a");
@@ -363,8 +427,11 @@ function vttClock(seconds: number) {
 }
 
 async function extractAudioChunks(file: File, durationSec: number) {
+  // Equivalent to FFmpeg: -vn -acodec pcm_s16le -ar 16000 -ac 1
+  // Overlapping 60s windows keep quiet speech near chunk boundaries from being dropped.
   const decoded = await new AudioContext().decodeAudioData(await file.arrayBuffer());
-  const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+  const totalSamples = Math.max(1, Math.ceil(Math.max(decoded.duration, durationSec) * 16000));
+  const offline = new OfflineAudioContext(1, totalSamples, 16000);
   const source = offline.createBufferSource();
   source.buffer = decoded;
   source.connect(offline.destination);
@@ -372,30 +439,97 @@ async function extractAudioChunks(file: File, durationSec: number) {
   const rendered = await offline.startRendering();
   const samples = rendered.getChannelData(0);
   const pieces: Array<{ offset: number; duration: number; samples: Float32Array }> = [];
-  const span = 90;
-  for (let offset = 0; offset < durationSec; offset += span) {
+  const span = 60;
+  const overlap = 2;
+  const step = Math.max(1, span - overlap);
+  for (let offset = 0; offset < durationSec; offset += step) {
     const length = Math.min(span, durationSec - offset);
+    if (length < 0.25) break;
     const start = Math.floor(offset * 16000);
     const end = Math.min(samples.length, Math.floor((offset + length) * 16000));
-    pieces.push({ offset, duration: length, samples: samples.subarray(start, end) });
+    // Copy the slice — subarray views can be invalidated across chunks.
+    pieces.push({ offset, duration: length, samples: samples.slice(start, end) });
+    if (offset + length >= durationSec - 0.01) break;
   }
-  const chunks: Array<{ offset: number; duration: number; blob: Blob; mime: "audio/webm" | "audio/wav" }> = [];
+  if (pieces.length === 0) {
+    pieces.push({ offset: 0, duration: durationSec, samples: samples.slice() });
+  }
+  const chunks: Array<{ offset: number; duration: number; blob: Blob; mime: "audio/wav" }> = [];
   for (const piece of pieces) {
-    const encoded = await encodeAudioPiece(piece.samples);
-    chunks.push({ offset: piece.offset, duration: piece.duration, blob: encoded.blob, mime: encoded.mime });
+    // Always send PCM WAV — Opus/WebM increases Whisper hallucination risk.
+    chunks.push({ offset: piece.offset, duration: piece.duration, blob: encodeWav(piece.samples, 16000), mime: "audio/wav" });
   }
   return chunks;
 }
 
-async function encodeAudioPiece(samples: Float32Array): Promise<{ blob: Blob; mime: "audio/webm" | "audio/wav" }> {
-  if (typeof AudioEncoder !== "undefined") {
-    try {
-      return { blob: await encodeOpusWebm(samples, 16000), mime: "audio/webm" };
-    } catch {
-      /* Fall through to a short WAV when Opus is unavailable. */
+/** Sample lower-third keyframes so Gemini Vision can OCR burned-in captions. */
+async function extractSubtitleFrames(file: File, durationSec: number) {
+  const url = URL.createObjectURL(file);
+  try {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    video.src = url;
+    await new Promise<void>((resolve, reject) => {
+      video.onloadeddata = () => resolve();
+      video.onerror = () => reject(new Error("Could not read video frames for subtitle OCR."));
+    });
+    const width = video.videoWidth || 720;
+    const height = video.videoHeight || 1280;
+    const canvas = document.createElement("canvas");
+    const cropY = Math.floor(height * 0.68);
+    const cropH = Math.max(32, Math.floor(height * 0.28));
+    canvas.width = Math.min(960, width);
+    canvas.height = Math.round((canvas.width / width) * cropH);
+    const context = canvas.getContext("2d");
+    if (!context) return [];
+
+    const step = durationSec <= 45 ? 2 : durationSec <= 180 ? 3.5 : 5;
+    const times: number[] = [];
+    for (let time = 0.2; time < durationSec; time += step) times.push(Math.min(durationSec - 0.05, time));
+    if (times.length === 0) times.push(Math.min(durationSec / 2, durationSec - 0.05));
+    // Always include the final second so ending captions are OCR'd.
+    const last = Math.max(0.1, durationSec - 0.15);
+    if (!times.some((time) => Math.abs(time - last) < 0.4)) times.push(last);
+
+    const frames: Array<{ timeSec: number; imageBase64: string; mime: "image/jpeg" }> = [];
+    for (const time of times.slice(0, 36)) {
+      await seekVideo(video, time);
+      context.drawImage(video, 0, cropY, width, cropH, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.72);
+      const imageBase64 = dataUrl.split(",")[1] || "";
+      if (imageBase64) frames.push({ timeSec: time, imageBase64, mime: "image/jpeg" });
     }
+    return frames;
+  } finally {
+    URL.revokeObjectURL(url);
   }
-  return { blob: encodeWav(samples, 16000), mime: "audio/wav" };
+}
+
+function seekVideo(video: HTMLVideoElement, time: number) {
+  return new Promise<void>((resolve, reject) => {
+    const onSeeked = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("Could not seek the video for OCR."));
+    };
+    const cleanup = () => {
+      video.removeEventListener("seeked", onSeeked);
+      video.removeEventListener("error", onError);
+    };
+    video.addEventListener("seeked", onSeeked);
+    video.addEventListener("error", onError);
+    try {
+      video.currentTime = Math.max(0, time);
+    } catch (error) {
+      cleanup();
+      reject(error instanceof Error ? error : new Error("Could not seek the video for OCR."));
+    }
+  });
 }
 
 function encodeOpusWebm(samples: Float32Array, sampleRate: number) {
@@ -641,7 +775,7 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
   }
 
   return (
-    <main className="relative min-h-[100dvh] overflow-hidden bg-[#070914] text-zinc-100">
+    <main className={`relative min-h-[100dvh] overflow-hidden bg-[#070914] text-zinc-100 ${subtitleFont.variable}`}>
       <NewsHeader />
       <div className="pointer-events-none absolute -top-48 left-1/3 h-[36rem] w-[36rem] rounded-full bg-indigo-500/25 blur-[140px]" />
       <div className="pointer-events-none absolute top-24 right-0 h-[28rem] w-[28rem] rounded-full bg-blue-500/15 blur-[130px]" />
@@ -668,26 +802,153 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
           </label>
 
           {mediaMode === "video" ? (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
-                <span className="text-xs tracking-wide text-zinc-500 uppercase">Subtitle language</span>
-                <select value={subtitleLanguage} onChange={(event) => setSubtitleLanguage(event.target.value as SubtitleLanguage)} className="bg-transparent text-sm outline-none">
-                  <option value="english" className="bg-[#07090e]">English</option>
-                  <option value="burmese" className="bg-[#07090e]">Burmese</option>
-                <option value="dual" className="bg-[#07090e]">Dual (Burmese + English)</option>
-                  <option value="hakha_lai" className="bg-[#07090e]">Hakha Lai</option>
-                  <option value="dual_lai_en" className="bg-[#07090e]">Dual (Hakha Lai + English)</option>
-              </select>
-            </label>
-              <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
-                <span className="text-xs tracking-wide text-zinc-500 uppercase">Screen format</span>
-                <select value={aspectChoice} onChange={(event) => setAspectChoice(event.target.value as "auto" | Aspect)} className="bg-transparent text-sm outline-none">
-                  <option value="auto" className="bg-[#07090e]">Auto (Device Fit)</option>
-                  <option value="9:16" className="bg-[#07090e]">Phone (9:16)</option>
-                  <option value="4:5" className="bg-[#07090e]">Tablet (4:5)</option>
-                  <option value="16:9" className="bg-[#07090e]">PC / Widescreen (16:9)</option>
-                </select>
-              </label>
+            <div className="grid gap-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
+                  <span className="text-xs tracking-wide text-zinc-500 uppercase">Target subtitle language</span>
+                  <select value={subtitleLanguage} onChange={(event) => setSubtitleLanguage(event.target.value as SubtitleLanguage)} className="bg-transparent text-sm outline-none">
+                    {SUBTITLE_LANGUAGE_OPTIONS.filter((option) => option.code !== "none").map((option) => (
+                      <option key={option.code} value={option.code} className="bg-[#07090e]">
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className={`${glass} flex flex-col gap-2 px-4 py-3 text-sm`}>
+                  <span className="text-xs tracking-wide text-zinc-500 uppercase">Screen format</span>
+                  <select value={aspectChoice} onChange={(event) => setAspectChoice(event.target.value as "auto" | Aspect)} className="bg-transparent text-sm outline-none">
+                    <option value="auto" className="bg-[#07090e]">Auto (Device Fit)</option>
+                    <option value="9:16" className="bg-[#07090e]">Phone (9:16)</option>
+                    <option value="4:5" className="bg-[#07090e]">Tablet (4:5)</option>
+                    <option value="16:9" className="bg-[#07090e]">PC / Widescreen (16:9)</option>
+                  </select>
+                </label>
+              </div>
+              {detectedLanguageLabel ? (
+                <div className={`${glass} flex flex-wrap items-center gap-3 px-4 py-3`}>
+                  <span className="text-xs tracking-wide text-zinc-500 uppercase">Detected Audio</span>
+                  <span className="inline-flex items-center rounded-full border border-emerald-400/40 bg-emerald-500/15 px-3 py-1 text-sm font-medium text-emerald-200">
+                    {detectedLanguageLabel}
+                  </span>
+                </div>
+              ) : null}
+              <div className={`${glass} flex flex-col gap-3 p-4`}>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-medium">Remove / Cover Original Subtitles</h3>
+                    <p className="mt-1 text-xs text-zinc-500">Mask hardcoded lower-third captions before burning new ones.</p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={coverOriginalSubs}
+                    onClick={() => setCoverOriginalSubs((current) => !current)}
+                    className={`relative h-7 w-12 rounded-full border transition ${coverOriginalSubs ? "border-indigo-300/50 bg-indigo-500/80" : "border-white/15 bg-white/10"}`}
+                  >
+                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition ${coverOriginalSubs ? "left-6" : "left-0.5"}`} />
+                  </button>
+                </div>
+                {coverOriginalSubs ? (
+                  <>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="flex flex-col gap-1.5 text-sm">
+                        <span className="text-xs tracking-wide text-zinc-500 uppercase">Cover method</span>
+                        <select
+                          value={maskMode}
+                          onChange={(event) => setMaskMode(event.target.value as SubtitleMaskMode)}
+                          className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 outline-none"
+                        >
+                          <option value="banner" className="bg-[#07090e]">Clean Background Pill / Banner</option>
+                          <option value="blur" className="bg-[#07090e]">Smart Blur / Inpaint Mask</option>
+                          <option value="none" className="bg-[#07090e]">Pill only (no region mask)</option>
+                        </select>
+                      </label>
+                      <div className="flex flex-col justify-end text-xs text-zinc-500">
+                        {maskMode === "blur"
+                          ? "Blurs the subtitle band so old text is unreadable."
+                          : maskMode === "banner"
+                            ? "Draws a frosted box over the lower third, then burns new ASS captions with BorderStyle=3."
+                            : "Keeps the frame clean and relies on the opaque subtitle pill."}
+                      </div>
+                    </div>
+                    {maskMode !== "none" ? (
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {(
+                          [
+                            ["yPercent", "Top %", maskRegion.yPercent],
+                            ["hPercent", "Height %", maskRegion.hPercent],
+                            ["xPercent", "Left %", maskRegion.xPercent],
+                            ["wPercent", "Width %", maskRegion.wPercent],
+                          ] as const
+                        ).map(([key, label, value]) => (
+                          <label key={key} className="flex flex-col gap-1 text-xs text-zinc-400">
+                            <span className="flex justify-between">
+                              <span>{label}</span>
+                              <span>{Math.round(value)}</span>
+                            </span>
+                            <input
+                              type="range"
+                              min={key === "yPercent" || key === "xPercent" ? 0 : 4}
+                              max={key === "hPercent" || key === "wPercent" ? 60 : 95}
+                              value={value}
+                              onChange={(event) =>
+                                setMaskRegion((current) => ({ ...current, [key]: Number(event.target.value) }))
+                              }
+                              className="accent-indigo-400"
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
+                <div className="flex flex-col gap-2">
+                  <span className="text-xs tracking-wide text-zinc-500 uppercase">Subtitle placement</span>
+                  <div className="grid grid-cols-3 gap-2">
+                    {SUBTITLE_ANCHORS.map((option) => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => setSubtitleAnchor(option.id)}
+                        className={`rounded-xl border px-2 py-2 text-xs transition ${
+                          subtitleAnchor === option.id
+                            ? "border-indigo-300/50 bg-indigo-500/25 text-indigo-100"
+                            : "border-white/10 text-zinc-400 hover:text-white"
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="text-[11px] text-zinc-500">
+                    {SUBTITLE_ANCHORS.find((option) => option.id === subtitleAnchor)?.hint} · single dark pill · never stacks duplicates
+                  </span>
+                </div>
+              </div>
+              {(scanningScript || running || pipelineStep) && mediaMode === "video" ? (
+                <div className={`${glass} flex flex-wrap gap-2 px-4 py-3`}>
+                  {VIDEO_PIPELINE_STEPS.map((step) => {
+                    const active = pipelineStep === step || (running && step === "Rendering" && !pipelineStep);
+                    const done =
+                      VIDEO_PIPELINE_STEPS.indexOf(step) < VIDEO_PIPELINE_STEPS.indexOf((pipelineStep || "Rendering") as (typeof VIDEO_PIPELINE_STEPS)[number]) ||
+                      (videoStep === "Complete" && Boolean(videoUrl));
+                    return (
+                      <span
+                        key={step}
+                        className={`rounded-full border px-2.5 py-1 text-[11px] ${
+                          active
+                            ? "border-indigo-300/50 bg-indigo-500/25 text-indigo-100"
+                            : done
+                              ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
+                              : "border-white/10 text-zinc-500"
+                        }`}
+                      >
+                        {step}
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -779,9 +1040,7 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                   }}
                 />
                 {sourcePreview ? (
-                  <video src={sourcePreview} autoPlay muted loop playsInline controls className="max-h-64 w-full rounded-xl bg-black">
-                    {subtitleTrackUrl ? <track kind="subtitles" src={subtitleTrackUrl} srcLang="en" label="Subtitles" default /> : null}
-                  </video>
+                  <video src={sourcePreview} autoPlay muted loop playsInline controls className="max-h-64 w-full rounded-xl bg-black" />
                 ) : (
                   <>
                     <UploadIcon />
@@ -792,10 +1051,15 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                           ? "Uploading..."
                           : "Drop a video or click to choose"}
                     </span>
-                    <span className="text-xs text-zinc-500">MP4, WebM, or MOV · 60 minutes maximum</span>
+                    <span className="text-xs text-zinc-500">MP4, WebM, or MOV · 60 minutes maximum · auto language detect</span>
                   </>
                 )}
                 {sourceMeta ? <span className="text-xs text-zinc-300">{sourceMeta}</span> : null}
+                {detectedLanguageLabel ? (
+                  <span className="inline-flex items-center rounded-full border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-0.5 text-xs font-medium text-emerald-200">
+                    Detected Audio: {detectedLanguageLabel}
+                  </span>
+                ) : null}
                 {optimizeProgress > 0 ? <span className="text-xs text-indigo-200">Optimizing video for studio upload... {optimizeProgress}%</span> : null}
                 {sourcePreview ? <span className="text-xs text-emerald-300">Ready · {formatClock(sourceDuration)}</span> : null}
               </label>
@@ -816,7 +1080,7 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                 </button>
               </div>
               {scanningScript ? <p className="text-sm text-indigo-200">{scriptProgress || "AI is writing subtitles..."}</p> : null}
-              {lines.map((line, index) => (
+              {previewCues.map((line, index) => (
                 <div key={`${line.startSec ?? index}-${index}`} className="grid gap-2 rounded-xl border border-white/10 p-3">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
                     <span>{formatClock(line.startSec ?? 0)} – {formatClock(line.endSec ?? 0)}</span>
@@ -825,10 +1089,20 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                     <textarea
                       value={line.subtitleText || ""}
                       rows={2}
-                      onChange={(event) =>
-                        setLines((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, subtitleText: event.target.value } : item)))
-                      }
-                      className="resize-none bg-transparent text-xs text-zinc-300 outline-none"
+                      onChange={(event) => {
+                        const start = line.startSec;
+                        const end = line.endSec;
+                        const next = event.target.value;
+                        setLines((current) =>
+                          mergeOverlappingCues(
+                            current.map((item) =>
+                              item.startSec === start && item.endSec === end ? { ...item, subtitleText: next } : item,
+                            ),
+                          ),
+                        );
+                      }}
+                      className="resize-none bg-transparent text-xs leading-[1.4] text-zinc-300 outline-none"
+                      style={{ fontFamily: "var(--font-subtitle), 'Noto Sans', 'Noto Sans Myanmar', system-ui, sans-serif" }}
                     />
                   ) : null}
                 </div>
@@ -863,12 +1137,11 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                 onChange={(event) => setSubtitleLanguage(event.target.value as SubtitleLanguage)}
                 className="bg-transparent text-sm outline-none"
               >
-                <option value="english" className="bg-[#07090e]">English</option>
-                <option value="burmese" className="bg-[#07090e]">Burmese</option>
-                <option value="dual" className="bg-[#07090e]">Dual (Burmese + English)</option>
-                  <option value="hakha_lai" className="bg-[#07090e]">Hakha Lai</option>
-                  <option value="dual_lai_en" className="bg-[#07090e]">Dual (Hakha Lai + English)</option>
-                <option value="none" className="bg-[#07090e]">None (Off)</option>
+                {SUBTITLE_LANGUAGE_OPTIONS.map((option) => (
+                  <option key={option.code} value={option.code} className="bg-[#07090e]">
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </label>
             {mediaMode === "images" ? (
@@ -906,13 +1179,27 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
           <div className={`mx-auto w-full ${mediaMode !== "video" ? "max-w-[320px]" : (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "16:9" ? "max-w-none" : (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "4:5" ? "max-w-[540px]" : "max-w-[320px]"}`}>
             <div className={`relative max-h-[700px] overflow-hidden rounded-[1.6rem] border border-white/[0.1] bg-black shadow-[0_16px_48px_rgba(0,0,0,0.55)] ${mediaMode !== "video" || (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "9:16" ? "aspect-[9/16]" : (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "4:5" ? "aspect-[4/5]" : "aspect-video"}`}>
               {videoUrl && showPlayer ? (
-                <video src={videoUrl} controls autoPlay playsInline className={`absolute inset-0 h-full w-full rounded-xl bg-black ${mediaMode === "video" && (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "16:9" ? "object-cover" : "object-contain"}`}>
-                  {mediaMode === "video" && subtitleTrackUrl ? <track kind="subtitles" src={subtitleTrackUrl} srcLang="en" label="Subtitles" default /> : null}
-                </video>
+                // Final export already has burned-in ASS — never attach a second <track> layer.
+                <video
+                  src={videoUrl}
+                  controls
+                  autoPlay
+                  playsInline
+                  className={`absolute inset-0 h-full w-full rounded-xl bg-black ${mediaMode === "video" && (aspectChoice === "auto" ? deviceAspect : aspectChoice) === "16:9" ? "object-cover" : "object-contain"}`}
+                />
               ) : mediaMode === "video" && sourcePreview ? (
-                <video src={sourcePreview} controls playsInline className="absolute inset-0 h-full w-full bg-black object-contain">
-                  {subtitleTrackUrl ? <track kind="subtitles" src={subtitleTrackUrl} srcLang="en" label="Subtitles" default /> : null}
-                </video>
+                <>
+                  <video
+                    ref={previewVideoRef}
+                    src={sourcePreview}
+                    controls
+                    playsInline
+                    className="absolute inset-0 h-full w-full bg-black object-contain"
+                  />
+                  {subtitleLanguage !== "none" ? (
+                    <SubtitleOverlay videoRef={previewVideoRef} cues={previewCues} anchor={subtitleAnchor} />
+                  ) : null}
+                </>
               ) : (
                 <LiveStage
                   mode={mediaMode}
@@ -928,6 +1215,7 @@ function readImage(file: File | undefined, onReady: (value: string) => void) {
                       : lines[captionIndex]?.subtitleText || lines[captionIndex]?.subtitle || lines[captionIndex]?.voiceText || lines[captionIndex]?.text || "")
                   }
                   running={running}
+                  anchor={subtitleAnchor}
                 />
               )}
             </div>
@@ -1079,6 +1367,63 @@ function HostCard({
   );
 }
 
+function SubtitleOverlay({
+  videoRef,
+  cues,
+  anchor,
+}: {
+  videoRef: RefObject<HTMLVideoElement | null>;
+  cues: Line[];
+  anchor: SubtitleAnchor;
+}) {
+  const [text, setText] = useState("");
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const sync = () => {
+      const cue = activeCueAt(cues, video.currentTime || 0);
+      setText((cue?.subtitleText || "").trim());
+    };
+    sync();
+    video.addEventListener("timeupdate", sync);
+    video.addEventListener("seeked", sync);
+    video.addEventListener("play", sync);
+    return () => {
+      video.removeEventListener("timeupdate", sync);
+      video.removeEventListener("seeked", sync);
+      video.removeEventListener("play", sync);
+    };
+  }, [videoRef, cues]);
+  if (!text) return null;
+  const placement =
+    anchor === "top" ? "top-[7%] bottom-auto" : anchor === "lower-mid" ? "bottom-[14%]" : "bottom-[7%]";
+  return (
+    <div className={`pointer-events-none absolute inset-x-0 z-20 flex justify-center px-3 ${placement}`}>
+      <p
+        className="max-w-[85%] rounded-lg px-[14px] py-[6px] text-center font-semibold text-white shadow-[0_2px_10px_rgba(0,0,0,0.35)]"
+        style={{
+          fontFamily: "var(--font-subtitle), 'Noto Sans', 'Noto Sans Myanmar', system-ui, -apple-system, sans-serif",
+          fontSize: "clamp(13px, 2.2vw, 20px)",
+          lineHeight: 1.4,
+          fontWeight: 600,
+          background: "rgba(10, 12, 16, 0.78)",
+          backdropFilter: "blur(6px)",
+          WebkitBackdropFilter: "blur(6px)",
+          textShadow: "0 1px 2px rgba(0,0,0,0.55)",
+          textWrap: "balance",
+          whiteSpace: "pre-line",
+          display: "-webkit-box",
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+        }}
+      >
+        {text}
+      </p>
+    </div>
+  );
+}
+
 function LiveStage({
   mode,
   sourcePreview,
@@ -1088,6 +1433,7 @@ function LiveStage({
   speaker,
   caption,
   running,
+  anchor = "bottom",
 }: {
   mode: "images" | "video";
   sourcePreview: string;
@@ -1097,20 +1443,37 @@ function LiveStage({
   speaker?: "A" | "B";
   caption: string;
   running: boolean;
+  anchor?: SubtitleAnchor;
 }) {
   if (mode === "video") {
+    const placement =
+      anchor === "top" ? "top-[7%] bottom-auto" : anchor === "lower-mid" ? "bottom-[14%]" : "bottom-[7%]";
     return (
       <div className="absolute inset-0 bg-black">
         {sourcePreview ? (
-          <>
-            <video src={sourcePreview} muted className="absolute inset-0 h-full w-full scale-110 object-cover blur-2xl" />
-            <video src={sourcePreview} muted playsInline className="absolute inset-0 h-full w-full object-contain" />
-          </>
+          <video src={sourcePreview} muted playsInline className="absolute inset-0 h-full w-full object-contain" />
         ) : (
           <div className="grid h-full place-items-center px-6 text-center text-[11px] tracking-[0.16em] text-zinc-500 uppercase">Full-screen video recap</div>
         )}
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-4 pt-10 pb-6">
-          <p className="line-clamp-4 text-center text-[11px] leading-4 text-zinc-100">{caption || (running ? "Writing subtitles..." : "Subtitles appear here...")}</p>
+        <div className={`pointer-events-none absolute inset-x-0 z-10 flex justify-center px-3 ${placement}`}>
+          <p
+            className="max-w-[85%] rounded-lg px-[14px] py-[6px] text-center font-semibold text-white"
+            style={{
+              fontFamily: "var(--font-subtitle), 'Noto Sans', 'Noto Sans Myanmar', system-ui, -apple-system, sans-serif",
+              fontSize: "clamp(13px, 2.2vw, 20px)",
+              lineHeight: 1.4,
+              background: "rgba(10, 12, 16, 0.78)",
+              backdropFilter: "blur(6px)",
+              textShadow: "0 1px 2px rgba(0,0,0,0.55)",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+              whiteSpace: "pre-line",
+            }}
+          >
+            {caption || (running ? "Writing subtitles..." : "Subtitles appear here...")}
+          </p>
         </div>
       </div>
     );
@@ -1133,7 +1496,19 @@ function LiveStage({
         <div className="absolute inset-x-0 bottom-0 h-7 border-t border-white/10 bg-[#16141c]/90" />
       </div>
       <div className="grid h-[20%] place-items-center px-3">
-        <p className="line-clamp-3 text-center text-[11px] leading-4 text-zinc-200">
+        <p
+          className="max-w-[85%] rounded-lg px-[14px] py-[6px] text-center font-semibold text-zinc-100"
+          style={{
+            fontFamily: "var(--font-subtitle), 'Noto Sans', 'Noto Sans Myanmar', system-ui, sans-serif",
+            fontSize: "clamp(13px, 2.2vw, 20px)",
+            lineHeight: 1.4,
+            background: "rgba(10, 12, 16, 0.78)",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+          }}
+        >
           {caption || (running ? "Writing subtitles..." : "Subtitles appear here...")}
         </p>
       </div>

@@ -1,8 +1,13 @@
+import { hybridTranscribeAndTranslate, parseSubtitleLanguage, translationInstruction } from "@/lib/whisper-translate";
+import type { SubtitleLanguageCode } from "@/lib/subtitle-languages";
+import type { OcrFrame } from "@/lib/ocr-subtitles";
+import { assertNoHallucinatedCues } from "@/lib/subtitle-hallucinations";
+
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 type Spoken = "burmese" | "english";
-type Caption = Spoken | "dual" | "hakha_lai" | "dual_lai_en" | "none";
+type Caption = SubtitleLanguageCode;
 type VoiceType = "male" | "male_elder" | "female" | "female_elder" | "child_boy" | "child_girl";
 type Line = { speaker: "A" | "B"; voiceType: VoiceType; voiceText: string; subtitleText: string; imageIndex: number };
 
@@ -19,6 +24,7 @@ type Body = {
   audioMimeType?: unknown;
   chunkOffsetSec?: unknown;
   chunkDurationSec?: unknown;
+  ocrFrames?: unknown;
 };
 
 const PRIMARY_MODELS = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.1-flash-lite"];
@@ -38,10 +44,7 @@ export async function POST(request: Request) {
   const news = typeof body?.news === "string" ? body.news.trim().slice(0, 8000) : "";
   const legacy = body?.language === "burmese" ? "burmese" : body?.language === "english" ? "english" : "";
   const voiceLanguage: Spoken | "" = body?.voiceLanguage === "burmese" || body?.voiceLanguage === "english" ? body.voiceLanguage : legacy;
-  const subtitleLanguage: Caption =
-    body?.subtitleLanguage === "burmese" || body?.subtitleLanguage === "english" || body?.subtitleLanguage === "dual" || body?.subtitleLanguage === "hakha_lai" || body?.subtitleLanguage === "dual_lai_en" || body?.subtitleLanguage === "none"
-      ? body.subtitleLanguage
-      : voiceLanguage || "english";
+  const subtitleLanguage: Caption = parseSubtitleLanguage(body?.subtitleLanguage, (voiceLanguage || "english") as Caption);
   const preset = body?.preset === "father-son" || body?.preset === "hosts" ? body.preset : "";
   const imageCount = typeof body?.imageCount === "number" ? Math.max(0, Math.min(3, Math.floor(body.imageCount))) : 0;
   const videoUrl = typeof body?.videoUrl === "string" && body.videoUrl.startsWith("https://") ? body.videoUrl : "";
@@ -51,39 +54,80 @@ export async function POST(request: Request) {
   const chunkOffsetSec = typeof body?.chunkOffsetSec === "number" && body.chunkOffsetSec >= 0 ? Math.min(3600, body.chunkOffsetSec) : 0;
   const chunkDurationSec = typeof body?.chunkDurationSec === "number" && body.chunkDurationSec > 0 ? Math.min(480, body.chunkDurationSec) : 0;
   const audioChunk = Boolean(audioBase64 && audioMimeType && chunkDurationSec);
+  const ocrFrames = parseOcrFrames(body?.ocrFrames);
   if (audioBase64.length > 6_000_000) {
     return Response.json({ error: "That audio chunk is too large to transcribe." }, { status: 400 });
   }
-  if (videoUrl || audioChunk) {
-    if (!["burmese", "english", "dual", "hakha_lai", "dual_lai_en"].includes(subtitleLanguage)) {
-      return Response.json({ error: "Choose Burmese, English, or dual subtitles." }, { status: 400 });
-    }
-  } else if (news.length < 8 || !voiceLanguage || !preset) {
+  if (!(videoUrl || audioChunk) && (news.length < 8 || !voiceLanguage || !preset)) {
     return Response.json({ error: "Add a news topic, a voice language, and a character preset." }, { status: 400 });
   }
 
   const geminiKey = process.env.GEMINI_API_KEY?.trim() ?? "";
   const openaiKey = process.env.OPENAI_API_KEY?.trim() ?? "";
-  if (!geminiKey && !openaiKey) {
+  const groqKey = process.env.GROQ_API_KEY?.trim() ?? "";
+  if (!geminiKey && !openaiKey && !groqKey) {
     return Response.json({ error: "A language model key is not configured yet." }, { status: 500 });
-  }
-  if (!geminiKey && (videoUrl || audioChunk)) {
-    return Response.json({ error: "Gemini is required to write commentary from a video." }, { status: 500 });
   }
 
   const dubbing = Boolean(videoUrl || audioChunk);
   const spoken: Spoken = voiceLanguage === "burmese" ? "burmese" : "english";
+
+  // Video Recap: browser-extracted audio → Whisper and/or Gemini multimodal (no server FFmpeg).
+  if (dubbing) {
+    const keyStatus = {
+      groq: Boolean(groqKey),
+      openai: Boolean(openaiKey),
+      gemini: Boolean(geminiKey),
+    };
+    try {
+      const result = await hybridTranscribeAndTranslate({
+        audioBase64: audioChunk ? audioBase64 : undefined,
+        audioMimeType: audioChunk ? audioMimeType : undefined,
+        videoUrl: audioChunk ? undefined : videoUrl,
+        ocrFrames,
+        target: subtitleLanguage,
+        groqKey,
+        openaiKey,
+        geminiKey,
+      });
+      const shifted = audioChunk
+        ? result.lines.map((line) => ({
+            ...line,
+            startSec: line.startSec + chunkOffsetSec,
+            endSec: Math.min(3600, line.endSec + chunkOffsetSec),
+          }))
+        : result.lines;
+      assertNoHallucinatedCues(shifted);
+      return Response.json({
+        lines: shifted,
+        detectedLanguage: result.detectedLanguage,
+        detectedLanguageLabel: result.detectedLanguageLabel,
+        pipeline: result.pipeline,
+        keys: keyStatus,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Transcription failed.";
+      console.error("[news-podcast/script] transcription failed", { message, keys: keyStatus, hasAudio: audioChunk, ocrFrames: ocrFrames.length });
+      return Response.json(
+        {
+          error: message,
+          keys: keyStatus,
+          detail: {
+            hasAudioChunk: audioChunk,
+            audioMimeType: audioChunk ? audioMimeType : null,
+            ocrFrameCount: ocrFrames.length,
+          },
+        },
+        { status: 502 },
+      );
+    }
+  }
+
   const presetKey = preset || "hosts";
-  const system = dubbing
-    ? `You write subtitles for the spoken dialogue in this video. Do not invent a host conversation and do not assign voices.
-Listen from 0 seconds through ${audioChunk ? `${chunkDurationSec.toFixed(1)} seconds of this audio chunk` : videoDurationSec ? `${videoDurationSec.toFixed(1)} seconds` : "the end"}.
-Return chronological subtitle cues covering that span. Times are relative to the start of this audio.
-${subtitleInstruction(subtitleLanguage === "none" ? "english" : subtitleLanguage, spoken)}
-Return JSON only, an array of {"startSec":number,"endSec":number,"subtitleText":string}.`
-    : `You write an original news commentary. Do not copy dialogue, narration, or captions from the source. Describe what happens in the hosts' own words.
+  const system = `You write an original news commentary. Do not copy dialogue, narration, or captions from the source. Describe what happens in the hosts' own words.
 ${PRESETS[presetKey]}
 "voiceText" is what is spoken. Write it as original commentary in ${spoken === "burmese" ? "natural spoken Burmese (စကားပြောဟန်), not formal written Burmese" : "natural spoken English"}. Do not transcribe the source.
-${subtitleInstruction(subtitleLanguage, spoken)}
+${translationInstruction(subtitleLanguage)}
 For every line set "voiceType" to "male", "female", or "child" from who is speaking or narrating that moment. A child character uses "child".
 Host A only asks questions. Host B only explains. Alternate speakers, starting with A.
 Return 8 to 14 short lines.
@@ -92,22 +136,10 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
 
   let raw = "";
   try {
-    raw = geminiKey ? await geminiChain(geminiKey, system, news, videoUrl, audioChunk ? { mime: audioMimeType, inline: audioBase64 } : null) : await openaiScript(openaiKey, system, news);
+    raw = geminiKey ? await geminiChain(geminiKey, system, news, "", null) : await openaiScript(openaiKey, system, news);
   } catch (error) {
     if (error instanceof QuotaError) {
-      const groqKey = process.env.GROQ_API_KEY?.trim() ?? "";
-      if (dubbing && groqKey && (videoUrl || audioChunk)) {
-        try {
-          const heard = videoUrl ? await groqDub(groqKey, videoUrl, spoken, subtitleLanguage) : await groqAudio(groqKey, audioBase64, audioMimeType, spoken, subtitleLanguage);
-          const shifted = audioChunk ? heard.map((line) => ({ ...line, startSec: line.startSec + chunkOffsetSec, endSec: Math.min(3600, line.endSec + chunkOffsetSec) })) : heard;
-          return Response.json({ lines: shifted });
-        } catch (groqError) {
-          const groqMessage = groqError instanceof Error ? groqError.message : error.message;
-          return Response.json({ error: groqMessage }, { status: 502 });
-        }
-      }
-      if (dubbing) return Response.json({ error: error.message }, { status: 502 });
-      return Response.json({ lines: localScript(news, spoken, subtitleLanguage) });
+      return Response.json({ error: error.message || "The news script could not be written right now. Please retry." }, { status: 502 });
     }
     const message = error instanceof Error ? error.message : "The script could not be written.";
     if (geminiKey && openaiKey) {
@@ -122,13 +154,29 @@ imageIndex is an integer from 0 to ${Math.max(imageCount - 1, 0)}. Use 0 when th
     }
   }
 
-  const parsed = dubbing ? parseDubCues(raw, subtitleLanguage, spoken) : parseLines(raw, imageCount, subtitleLanguage, spoken);
-  const lines = parsed && audioChunk ? parsed.map((line) => ("startSec" in line ? { ...line, startSec: line.startSec + chunkOffsetSec, endSec: Math.min(3600, line.endSec + chunkOffsetSec) } : line)) : parsed;
+  const lines = parseLines(raw, imageCount, subtitleLanguage, spoken);
   if (!lines) {
-    if (dubbing) return Response.json({ error: "Gemini did not return the spoken lines for this video." }, { status: 502 });
-    return Response.json({ lines: localScript(news, spoken, subtitleLanguage) });
+    return Response.json({ error: "The model did not return a usable news script. Please retry." }, { status: 502 });
   }
-  return Response.json({ lines });
+  return Response.json({
+    lines,
+    pipeline: "podcast",
+  });
+}
+
+function parseOcrFrames(value: unknown): OcrFrame[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const record = item as { timeSec?: unknown; imageBase64?: unknown; mime?: unknown };
+      const timeSec = typeof record.timeSec === "number" ? Math.max(0, Math.min(3600, record.timeSec)) : -1;
+      const imageBase64 = typeof record.imageBase64 === "string" ? record.imageBase64.replace(/\s/g, "") : "";
+      const mime = record.mime === "image/png" || record.mime === "image/webp" || record.mime === "image/jpeg" ? record.mime : "image/jpeg";
+      if (timeSec < 0 || imageBase64.length < 100 || imageBase64.length > 900_000) return [];
+      return [{ timeSec, imageBase64, mime }];
+    })
+    .slice(0, 36);
 }
 
 async function geminiChain(apiKey: string, system: string, news: string, videoUrl: string, audio: { mime: string; inline: string } | null = null) {
@@ -286,83 +334,6 @@ async function uploadVideoToGemini(apiKey: string, bytes: Buffer, mime: string) 
   return { uri, name };
 }
 
-async function groqDub(apiKey: string, videoUrl: string, spoken: Spoken, subtitleLanguage: Caption) {
-  const source = await fetch(videoUrl);
-  if (!source.ok) throw new Error(`The uploaded video could not be read (${source.status}).`);
-  const bytes = Buffer.from(await source.arrayBuffer());
-  const mime = sniffVideoMime(bytes) || fallbackVideoMime(source.headers.get("content-type") || "", videoUrl);
-  const form = new FormData();
-  form.append("file", new Blob([new Uint8Array(bytes)], { type: mime }), mime === "video/webm" ? "clip.webm" : "clip.mp4");
-  form.append("model", "whisper-large-v3-turbo");
-  form.append("response_format", "verbose_json");
-  const heard = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: form,
-  });
-  const transcript = (await heard.json().catch(() => null)) as { error?: { message?: string }; segments?: Array<{ start?: number; end?: number; text?: string }> } | null;
-  if (!heard.ok) throw new Error(transcript?.error?.message || `Groq could not transcribe the video (${heard.status}).`);
-  const segments = (transcript?.segments ?? []).filter((segment) => (segment.text || "").trim()).slice(0, 15);
-  if (segments.length === 0) throw new Error("Groq did not hear any speech in the video.");
-  const translated = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.3,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: `Translate each spoken segment. voiceText is natural ${spoken === "burmese" ? "spoken Burmese" : "spoken English"}. ${subtitleInstruction(subtitleLanguage, spoken)} Guess speakerType as male, male_elder, female, female_elder, child_boy, or child_girl. Do not mark every line female. Keep the same startSec and endSec. Return {"lines":[{"startSec":number,"endSec":number,"speakerType":string,"voiceText":string,"subtitleText":string}]}.`,
-        },
-        { role: "user", content: JSON.stringify(segments.map((segment) => ({ startSec: segment.start, endSec: segment.end, text: segment.text }))) },
-      ],
-    }),
-  });
-  const payload = (await translated.json().catch(() => null)) as { error?: { message?: string }; choices?: Array<{ message?: { content?: string } }> } | null;
-  if (!translated.ok) throw new Error(payload?.error?.message || `Groq could not translate the video (${translated.status}).`);
-  const lines = parseDubCues(payload?.choices?.[0]?.message?.content ?? "", subtitleLanguage, spoken);
-  if (!lines) throw new Error("Groq did not return timed dialogue.");
-  return lines;
-}
-
-async function groqAudio(apiKey: string, audioBase64: string, mime: string, spoken: Spoken, subtitleLanguage: Caption) {
-  const bytes = Buffer.from(audioBase64, "base64");
-  const form = new FormData();
-  form.append("file", new Blob([new Uint8Array(bytes)], { type: mime }), mime === "audio/wav" ? "chunk.wav" : "chunk.webm");
-  form.append("model", "whisper-large-v3-turbo");
-  form.append("response_format", "verbose_json");
-  const heard = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: form,
-  });
-  const transcript = (await heard.json().catch(() => null)) as { error?: { message?: string }; segments?: Array<{ start?: number; end?: number; text?: string }> } | null;
-  if (!heard.ok) throw new Error(transcript?.error?.message || `Groq could not transcribe the audio (${heard.status}).`);
-  const segments = (transcript?.segments ?? []).filter((segment) => (segment.text || "").trim()).slice(0, 40);
-  if (segments.length === 0) return [];
-  const translated = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: `Translate each spoken segment into subtitleText. ${subtitleInstruction(subtitleLanguage, spoken)} Keep the same startSec and endSec. Return {"lines":[{"startSec":number,"endSec":number,"subtitleText":string}]}.`,
-        },
-        { role: "user", content: JSON.stringify(segments.map((segment) => ({ startSec: segment.start, endSec: segment.end, text: segment.text }))) },
-      ],
-    }),
-  });
-  const payload = (await translated.json().catch(() => null)) as { error?: { message?: string }; choices?: Array<{ message?: { content?: string } }> } | null;
-  if (!translated.ok) throw new Error(payload?.error?.message || `Groq could not translate the audio (${translated.status}).`);
-  return parseDubCues(payload?.choices?.[0]?.message?.content ?? "", subtitleLanguage, spoken) ?? [];
-}
-
 function sniffVideoMime(bytes: Buffer) {
   if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return "video/webm";
   if (bytes.length >= 12 && bytes.subarray(4, 8).toString("ascii") === "ftyp") {
@@ -391,7 +362,8 @@ async function geminiScript(
   const parts: Array<{ text?: string; file_data?: { mime_type: string; file_uri: string }; inline_data?: { mime_type: string; data: string } }> = [];
   if (video?.inline) parts.push({ inline_data: { mime_type: video.mime, data: video.inline } });
   else if (video?.uri) parts.push({ file_data: { mime_type: video.mime, file_uri: video.uri } });
-  parts.push({ text: news || "Listen to every spoken line in this video and translate each one in time order." });
+  if (!news.trim()) throw new Error("Add a news topic so the hosts have something to discuss.");
+  parts.push({ text: news });
   const endpoint = new URL(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`);
   const response = await fetch(endpoint, {
     method: "POST",
@@ -460,17 +432,6 @@ async function openaiScript(apiKey: string, system: string, news: string) {
   return payload?.choices?.[0]?.message?.content ?? "";
 }
 
-function subtitleInstruction(subtitle: Caption, voice: Spoken) {
-  if (subtitle === "none") return 'Set every "subtitleText" field to an empty string. Captions are off.';
-  if (subtitle === "hakha_lai" || subtitle === "dual_lai_en") {
-    return `Do this in two steps for every cue. First understand the spoken audio and its context in clear English. Then write authentic conversational Hakha Lai (Laiholh) with real Hakha vocabulary and the underdot letter ṭ, as in "a si", "zei tin", and "nan dam maw". Do not mix in Mizo, Falam, or Burmese. ${subtitle === "dual_lai_en" ? 'Set "subtitleText" to the Hakha Lai line, a newline, then the English line.' : 'Set "subtitleText" to the Hakha Lai line only.'}`;
-  }
-  if (subtitle === "dual") return 'Set "subtitleText" to the same line in Burmese, then a newline, then the same line in English.';
-  if (subtitle === voice) return 'Set "subtitleText" to the same words as "voiceText".';
-  const captionName = subtitle === "burmese" ? "spoken Burmese" : "spoken English";
-  return `Set "subtitleText" to a natural ${captionName} caption of the same line. Keep "voiceText" in the voice language.`;
-}
-
 function captionFor(text: string, voice: Spoken, subtitle: Caption) {
   if (subtitle === "none") return "";
   if (subtitle === voice) return text;
@@ -487,63 +448,6 @@ function normalizeRole(value: unknown): VoiceType | null {
   if (key === "elder_male" || key === "old_man") return "male_elder";
   if (key === "elder_female" || key === "old_woman") return "female_elder";
   return null;
-}
-
-function parseDubCues(raw: string, subtitleLanguage: Caption, spoken: Spoken) {
-  const start = raw.indexOf("[");
-  const end = raw.lastIndexOf("]");
-  const objectStart = raw.indexOf("{");
-  const objectEnd = raw.lastIndexOf("}");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(start >= 0 && end > start ? raw.slice(start, end + 1) : raw.slice(objectStart, objectEnd + 1));
-  } catch {
-    return null;
-  }
-  const list = Array.isArray(parsed)
-    ? parsed
-    : parsed && typeof parsed === "object" && Array.isArray((parsed as { lines?: unknown }).lines)
-      ? (parsed as { lines: unknown[] }).lines
-      : null;
-  if (!list || list.length < 1) return null;
-  const cues = list.slice(0, 60).flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const record = item as { startSec?: unknown; endSec?: unknown; speakerType?: unknown; voiceType?: unknown; voiceText?: unknown; subtitleText?: unknown };
-    const startSec = typeof record.startSec === "number" && record.startSec >= 0 ? Math.min(3600, record.startSec) : -1;
-    const endSec = typeof record.endSec === "number" ? Math.min(3600, record.endSec) : -1;
-    const speakerType = normalizeRole(record.speakerType) || normalizeRole(record.voiceType);
-    const voiceText = typeof record.voiceText === "string" ? record.voiceText.trim().slice(0, 240) : "";
-    const supplied = typeof record.subtitleText === "string" ? record.subtitleText.trim().slice(0, 400) : "";
-    const subtitleText = supplied || voiceText;
-    if (!subtitleText || startSec < 0 || endSec - startSec < 0.4) return [];
-    return [{ startSec, endSec, subtitleText, voiceText: voiceText || subtitleText, speakerType }];
-  });
-  return cues.length > 0 ? cues : null;
-}
-
-function localScript(news: string, language: Spoken, subtitle: Caption): Line[] {
-  const parts = news
-    .split(language === "burmese" ? /[။!?\n]+/ : /[\n.!?]+/)
-    .map((part) => part.replace(/\s+/g, " ").trim())
-    .filter((part) => part.length > 12)
-    .slice(0, 3);
-  const fallback =
-    language === "burmese"
-      ? "ဒီဇာတ်ကားထဲက အဖြစ်အပျက်ကို အိမ်ရှင်နှစ်ယောက်က ကိုယ်ပိုင်စကားလုံးနဲ့ ပြန်ပြောထားပါတယ်။"
-      : "The hosts walk through what happens in this clip, in their own words.";
-  const facts = parts.length > 0 ? parts : [news.replace(/\s+/g, " ").trim().slice(0, 220) || fallback];
-  const questions =
-    language === "burmese"
-      ? ["ဒီသတင်းက ဘာဖြစ်တာလဲ။", "အဓိကအချက်က ဘာလဲ။", "နောက်ဆက်တွဲ ဘာသိထားသင့်လဲ။"]
-      : ["What happened in this story?", "What is the main point?", "What should people know next?"];
-  const lines: Line[] = [];
-  facts.forEach((fact, index) => {
-    const question = questions[index] ?? questions[0];
-    const answer = fact.slice(0, 240);
-    lines.push({ speaker: "A", voiceType: "male", voiceText: question, subtitleText: captionFor(question, language, subtitle), imageIndex: 0 });
-    lines.push({ speaker: "B", voiceType: "female", voiceText: answer, subtitleText: captionFor(answer, language, subtitle), imageIndex: 0 });
-  });
-  return lines.slice(0, 6);
 }
 
 function parseLines(raw: string, imageCount: number, subtitleLanguage: Caption, spoken: Spoken): Line[] | null {
